@@ -1,0 +1,41 @@
+{
+  "name": "yegoom-3",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n web,api \"vite --host 0.0.0.0\" \"wrangler dev --local --port 8787\"",
+    "build": "tsc --noEmit && vite build && node scripts/build-sw.mjs",
+    "build:worker": "esbuild worker/index.ts --bundle --format=esm --platform=browser --outfile=.test-build/worker.js",
+    "preview": "wrangler dev --local --port 8787 --ip 0.0.0.0",
+    "db:migrate": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "user:create": "node scripts/provision-user.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build",
+    "deploy:check": "npm run build && wrangler deploy --dry-run",
+    "deploy": "npm run build && wrangler deploy",
+    "predev": "npm run build"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261030.1",
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.2.1",
+    "esbuild": "^0.27.0",
+    "miniflare": "^4.20260730.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.45.0"
+  }
+}
