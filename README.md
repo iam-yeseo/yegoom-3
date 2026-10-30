@@ -55,16 +55,12 @@ npm run user:create -- --username siwon --deactivate
 
 ## Cloudflare 연결 후 배포
 
-현재 원격 Worker·D1은 만들거나 배포하지 않았습니다. `wrangler.jsonc`의 DB ID는 로컬 실행을 위한 자리표시자입니다.
+원격 D1은 `yegoom-db`(`088d5d45-6dea-43c1-b9b2-a972aa5a01d0`)이며 `wrangler.jsonc`에 연결되어 있습니다. 기존 yegoom의 DB와 기록은 연결하지 않습니다. Cloudflare 대시보드의 Git 연결 빌드는 main에 푸시될 때 이 설정으로 배포합니다. 다른 DB로 바꿀 때는 `database_name`과 `database_id`를 함께 바꿉니다. 존재하지 않는 ID면 배포가 `D1 binding 'DB' references database … which was not found [code: 10181]` 오류로 실패합니다.
+
+배포는 테이블을 만들지 않습니다. 처음 한 번, 그리고 `migrations/`가 바뀔 때마다 원격 마이그레이션을 실행하고 계정을 만듭니다.
 
 ```sh
 npx wrangler login
-npx wrangler d1 create yegoom-3
-```
-
-반환된 `database_id`를 `wrangler.jsonc`의 `d1_databases[0].database_id`에 넣습니다. Cloudflare 대시보드의 Git 연결 빌드도 이 파일을 사용하므로, 자리표시자(`00000000-…`)인 채로 푸시하면 배포가 `D1 binding 'DB' references database … which was not found [code: 10181]` 오류로 실패합니다. 새 예굼방3 DB를 사용하며 기존 yegoom의 DB와 기록을 연결하지 않습니다.
-
-```sh
 npm run db:migrate:remote
 npm run user:create -- --username min --display-name min --remote
 npm run user:create -- --username siwon --display-name siwon --remote
