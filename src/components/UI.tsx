@@ -1,25 +1,77 @@
-import type { ReactNode } from "react";
-export const characters: Record<
-  string,
-  { image: string; tint: string; color: string }
-> = {
-  min: { image: "axolotl", tint: "#E3F6EE", color: "#2E8C6E" },
-  siwon: { image: "cat", tint: "#FFF4CC", color: "#94700A" },
-  yeseo: { image: "bunny", tint: "#EEE8FC", color: "#7556C4" },
+import { useSyncExternalStore, type ReactNode } from "react";
+
+export const art = {
+  axolotl: { tint: "#E3F6EE", name: "우파" },
+  drop: { tint: "#FFE6DF", name: "방울" },
+  cat: { tint: "#FFF4CC", name: "냥냥" },
+  bunny: { tint: "#EEE8FC", name: "토끼" },
+  bread: { tint: "#FFF4CC", name: "빵빵" },
+  manta: { tint: "#E3F1FC", name: "만타" },
+  moon: { tint: "#EEE8FC", name: "달빛" },
+  monkey: { tint: "#FFF4CC", name: "별숭이" },
+} as const;
+export type ArtKey = keyof typeof art;
+export const artKeys = Object.keys(art) as ArtKey[];
+export const artSrc = (key: ArtKey) => `/characters/${key}.png`;
+
+const defaults: Record<string, ArtKey> = {
+  min: "axolotl",
+  siwon: "cat",
+  yeseo: "bunny",
 };
+export const playerColor: Record<string, string> = {
+  min: "#2E8C6E",
+  siwon: "#94700A",
+  yeseo: "#7556C4",
+};
+
+// "My character" is chosen per device until the server stores it.
+const storageKey = (username: string) => `yegoom3:character:${username}`;
+const listeners = new Set<() => void>();
+function readChoice(username: string): ArtKey | null {
+  try {
+    const value = localStorage.getItem(storageKey(username));
+    return value && value in art ? (value as ArtKey) : null;
+  } catch {
+    return null;
+  }
+}
+export function characterOf(username: string): ArtKey {
+  return readChoice(username) ?? defaults[username] ?? "monkey";
+}
+export function chooseCharacter(username: string, key: ArtKey) {
+  try {
+    localStorage.setItem(storageKey(username), key);
+  } catch {
+    // Private mode: the choice lasts for this page only.
+  }
+  listeners.forEach((listener) => listener());
+}
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+export function useCharacter(username: string): ArtKey {
+  return useSyncExternalStore(subscribe, () => characterOf(username));
+}
+
 export function Character({
   username,
+  artKey,
   className = "",
   alt = "",
 }: {
-  username: string;
+  username?: string;
+  artKey?: ArtKey;
   className?: string;
   alt?: string;
 }) {
+  const chosen = useCharacter(username ?? "");
+  const key = artKey ?? chosen;
   return (
     <img
       className={`character ${className}`}
-      src={`/characters/${characters[username]?.image ?? "sprite"}.png`}
+      src={artSrc(key)}
       alt={alt}
       draggable={false}
     />
@@ -27,30 +79,46 @@ export function Character({
 }
 export function Avatar({
   username,
+  artKey,
   size = 40,
+  radius = "50%",
 }: {
-  username: string;
+  username?: string;
+  artKey?: ArtKey;
   size?: number;
+  radius?: string;
 }) {
+  const chosen = useCharacter(username ?? "");
+  const key = artKey ?? chosen;
   return (
     <span
       className="avatar"
       style={{
         width: size,
         height: size,
-        background: characters[username]?.tint ?? "#FFF4CC",
+        borderRadius: radius,
+        background: art[key].tint,
       }}
     >
-      <Character username={username} />
+      <Character artKey={key} />
+    </span>
+  );
+}
+export function Coin({ size = 21 }: { size?: number }) {
+  return (
+    <span
+      className="coin"
+      aria-hidden="true"
+      style={{ width: size, height: size, fontSize: size / 2 }}
+    >
+      G
     </span>
   );
 }
 export function Gold({ value }: { value: number }) {
   return (
     <span className="gold">
-      <span className="coin" aria-hidden="true">
-        G
-      </span>
+      <Coin />
       <span>
         {value.toLocaleString("ko-KR")}
         <span className="sr-only"> 골드</span>
@@ -58,20 +126,30 @@ export function Gold({ value }: { value: number }) {
     </span>
   );
 }
-export function BackIcon() {
+export function Chevron({
+  direction = "left",
+  size = 24,
+  color = "currentColor",
+  width = 2.4,
+}: {
+  direction?: "left" | "right";
+  size?: number;
+  color?: string;
+  width?: number;
+}) {
   return (
     <svg
-      width="24"
-      height="24"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
-      stroke="currentColor"
-      strokeWidth="2.4"
+      stroke={color}
+      strokeWidth={width}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d="M15 5l-7 7 7 7" />
+      <path d={direction === "left" ? "M15 5l-7 7 7 7" : "M9 5l7 7-7 7"} />
     </svg>
   );
 }
@@ -91,74 +169,135 @@ export function Toolbar({
       <button
         className="icon-button"
         onClick={onBack}
-        aria-label="홈으로 돌아가기"
+        aria-label="뒤로 가기"
       >
-        <BackIcon />
+        <Chevron />
       </button>
       <h1>{title}</h1>
       {right ?? (gold !== undefined ? <Gold value={gold} /> : <span />)}
     </header>
   );
 }
-export function GameIcon({ type }: { type: string }) {
-  const paths: Record<string, ReactNode> = {
-    wake: (
-      <>
-        <circle cx="24" cy="25" r="10" />
-        <path d="M24 19v7l4 2M11 12l5-4M32 8l5 4M16 35l-3 5M32 35l3 5" />
-      </>
-    ),
-    offwork: (
-      <>
-        <rect x="9" y="17" width="30" height="22" rx="6" />
-        <path d="M18 17v-5h12v5M9 25c8 5 22 5 30 0M21 26v5h6v-5" />
-      </>
-    ),
-    luck: (
-      <>
-        <path d="m24 5 5.9 12 13.1 1.9-9.5 9.3 2.2 13.1L24 35.1l-11.7 6.2 2.2-13.1L5 18.9 18.1 17Z" />
-        <path d="M20 24h.1M28 24h.1M21 29q3 3 6 0" />
-      </>
-    ),
-    catchmind: (
-      <>
-        <path d="m12 34 3-10L32 7l9 9-17 17-12 3ZM28 11l9 9M16 25l8 8M10 42h29" />
-      </>
-    ),
-    kuji: (
-      <>
-        <path d="M8 13h32v9a5 5 0 0 0 0 10v9H8v-9a5 5 0 0 0 0-10Z" />
-        <path d="M28 17v3m0 5v3m0 5v3M15 20l5 5-5 5" />
-      </>
-    ),
-    claw: (
-      <>
-        <path d="M24 5v15M15 21h18M15 21l-6 12 6 8M33 21l6 12-6 8M17 28l7 8 7-8" />
-        <circle cx="24" cy="18" r="4" />
-      </>
-    ),
-    stock: (
-      <>
-        <path d="M9 8v32h31M15 31l8-10 7 5 9-14M30 12h9v9" />
-      </>
-    ),
-    shop: (
-      <>
-        <path d="m11 9-4 12q4 6 9 0 4 6 8 0 4 6 8 0 5 6 9 0l-4-12ZM11 26v14h26V26M20 40V29h8v11" />
-      </>
-    ),
-  };
+
+export const tabs = [
+  {
+    path: "/",
+    label: "홈",
+    d: "M4 11l8-7 8 7v8a2 2 0 0 1-2 2h-3v-6H9v6H6a2 2 0 0 1-2-2z",
+  },
+  {
+    path: "/games",
+    label: "게임",
+    d: "M8 7h8a5.5 5.5 0 0 1 0 11H8A5.5 5.5 0 0 1 8 7zM8 10.5v4M6 12.5h4M15.5 11.5h.01M17.5 13.8h.01",
+  },
+  {
+    path: "/ranking",
+    label: "랭킹",
+    d: "M7 4h10v5a5 5 0 0 1-10 0zM7 6H4.5v1A3 3 0 0 0 7.5 10M17 6h2.5v1a3 3 0 0 1-3 3M12 14v4M8 20h8",
+  },
+  {
+    path: "/shop",
+    label: "상점",
+    d: "M5 8h14l-1.2 12H6.2zM9 8V6.5a3 3 0 0 1 6 0V8",
+  },
+  {
+    path: "/profile",
+    label: "내 정보",
+    d: "M12 4a4 4 0 1 1 0 8a4 4 0 1 1 0-8zM4.5 20c1.4-3.6 4.6-5 7.5-5s6.1 1.4 7.5 5",
+  },
+] as const;
+export function TabBar({
+  active,
+  onNavigate,
+}: {
+  active: string;
+  onNavigate: (path: string) => void;
+}) {
   return (
-    <svg
-      viewBox="0 0 48 48"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {paths[type] ?? paths.luck}
-    </svg>
+    <nav className="tabbar" aria-label="주요 메뉴">
+      {tabs.map((tab) => {
+        const on = tab.path === active;
+        return (
+          <button
+            key={tab.path}
+            className={on ? "on" : ""}
+            aria-current={on ? "page" : undefined}
+            onClick={() => onNavigate(tab.path)}
+          >
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill={on ? "#FFE6DF" : "none"}
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d={tab.d} />
+            </svg>
+            <span>{tab.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+export function SectionTitle({
+  title,
+  right,
+  onClick,
+}: {
+  title: string;
+  right?: ReactNode;
+  onClick?: () => void;
+}) {
+  return (
+    <div className="section-title">
+      <h2>{title}</h2>
+      {right &&
+        (onClick ? (
+          <button onClick={onClick}>
+            {right}
+            <Chevron direction="right" size={12} width={2.6} />
+          </button>
+        ) : (
+          <span>{right}</span>
+        ))}
+    </div>
+  );
+}
+export function Segmented<T extends string | number>({
+  options,
+  value,
+  onChange,
+  colors,
+  label,
+}: {
+  options: readonly { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+  colors?: Partial<Record<string, string>>;
+  label: string;
+}) {
+  return (
+    <div className="segmented" role="tablist" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={String(option.value)}
+          role="tab"
+          aria-selected={option.value === value}
+          style={
+            option.value === value && colors?.[String(option.value)]
+              ? { color: colors[String(option.value)] }
+              : undefined
+          }
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   );
 }

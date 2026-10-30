@@ -12,9 +12,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "yegoom-3",
-      // Local development works without a Cloudflare account. Replace before deployment.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "yegoom-db",
+      "database_id": "088d5d45-6dea-43c1-b9b2-a972aa5a01d0",
       "migrations_dir": "migrations"
     }
   ],

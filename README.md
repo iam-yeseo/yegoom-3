@@ -7,11 +7,12 @@
 - 아이디·비밀번호 로그인, 서버 세션, 로그아웃, 운영자/플레이어 구분
 - 기상시간·퇴근시간·행운 점수: 예측 저장/수정, 출제자 정답·힌트 입력, 정답 공개, 공개 후 결과 비교
 - 한국 시간 기준 마감, 공개 전 정답 보호, 날짜가 바뀐 화면의 제출 차단
-- 원본 9개 화면을 바탕으로 한 캐치마인드·쿠지·캐릭터 뽑기 **체험 화면**
-- 로그인 전 체험, 홈의 개인 방, 내 정보, 주간 점수·변동 내역 화면
+- Claude Design 시안대로 만든 홈(아침/저녁), 하단 탭, 주간 랭킹, 출석 체크, 내 정보(캐릭터 선택·골드/점수 내역)
+- 캐치마인드·쿠지·캐릭터 뽑기, 주식 시장(목록·상세·장 마감·상장폐지), 로또·스피또 화면
+- 로그인 전 미리보기(`#/preview`)
 - 설치 가능한 PWA, 로컬 폰트와 정적 화면의 오프라인 재방문
 
-캐치마인드·쿠지·뽑기는 서버 게임이 아닙니다. 체험 결과는 저장되지 않으며 골드·점수가 변하지 않습니다. 주식·상점, 실제 보상/정산, 운영자 관리 화면은 후속 범위입니다. 골드·점수 원장은 준비되어 있지만 미정인 지급액과 배점은 임의로 적용하지 않았습니다.
+캐치마인드·쿠지·뽑기·주식·로또·스피또·출석은 아직 서버 기능이 없는 **화면 단계**입니다. 화면 안에서만 동작하고 저장되지 않으며 실제 골드·점수가 변하지 않습니다. 출석 받기와 내 캐릭터 선택은 이 기기에만 기억됩니다. 화면에 보이는 보상·배점·가격은 시안의 잠정값이며 모두 `src/sample.ts`의 `BALANCE`에 모여 있습니다. 실제 보상/정산과 운영자 관리 화면은 후속 범위입니다.
 
 ## 로컬 시작
 
@@ -40,7 +41,7 @@ npm run preview
 # http://localhost:8787
 ```
 
-서비스 워커는 빌드 결과에서만 등록됩니다. 개발 서버에서는 등록하지 않습니다. PWA 설치에는 HTTPS 또는 localhost가 필요합니다. iOS에서는 Safari의 공유 → 홈 화면에 추가를 사용합니다. API·로그인·게임 저장은 오프라인에서 이용할 수 없으며, 제출을 나중에 자동 전송하지 않습니다. 오프라인에서는 저장된 화면과 체험을 이용할 수 있습니다.
+서비스 워커는 빌드 결과에서만 등록됩니다. 개발 서버에서는 등록하지 않습니다. PWA 설치에는 HTTPS 또는 localhost가 필요합니다. iOS에서는 Safari의 공유 → 홈 화면에 추가를 사용합니다. API·로그인·게임 저장은 오프라인에서 이용할 수 없으며, 제출을 나중에 자동 전송하지 않습니다. 오프라인에서는 저장된 화면과 미리보기를 이용할 수 있습니다.
 
 ## 계정 관리
 
@@ -54,16 +55,12 @@ npm run user:create -- --username siwon --deactivate
 
 ## Cloudflare 연결 후 배포
 
-현재 원격 Worker·D1은 만들거나 배포하지 않았습니다. `wrangler.jsonc`의 DB ID는 로컬 실행을 위한 자리표시자입니다.
+원격 D1은 `yegoom-db`(`088d5d45-6dea-43c1-b9b2-a972aa5a01d0`)이며 `wrangler.jsonc`에 연결되어 있습니다. 기존 yegoom의 DB와 기록은 연결하지 않습니다. Cloudflare 대시보드의 Git 연결 빌드는 main에 푸시될 때 이 설정으로 배포합니다. 다른 DB로 바꿀 때는 `database_name`과 `database_id`를 함께 바꿉니다. 존재하지 않는 ID면 배포가 `D1 binding 'DB' references database … which was not found [code: 10181]` 오류로 실패합니다.
+
+배포는 테이블을 만들지 않습니다. 처음 한 번, 그리고 `migrations/`가 바뀔 때마다 원격 마이그레이션을 실행하고 계정을 만듭니다.
 
 ```sh
 npx wrangler login
-npx wrangler d1 create yegoom-3
-```
-
-반환된 `database_id`를 `wrangler.jsonc`의 `d1_databases[0].database_id`에 넣습니다. 새 예굼방3 DB를 사용하며 기존 yegoom의 DB와 기록을 연결하지 않습니다.
-
-```sh
 npm run db:migrate:remote
 npm run user:create -- --username min --display-name min --remote
 npm run user:create -- --username siwon --display-name siwon --remote
@@ -91,8 +88,11 @@ npm run deploy:check             # 원격 배포 없이 Worker 패키징 검사
 | 경로 | 역할 |
 | --- | --- |
 | `src/components/PredictionGame.tsx` | 세 예측 게임의 입력·출제·결과 화면 |
-| `src/components/PreviewGames.tsx` | 그림·쿠지·뽑기 로컬 체험 |
-| `src/styles.css`, `src/preview.css` | 원본에서 추출한 디자인 값과 반응형 화면 |
+| `src/components/PreviewGames.tsx` | 캐치마인드·쿠지·뽑기 화면 |
+| `src/screens/` | 홈·랭킹·출석·내 정보·주식·상점 화면 |
+| `src/sample.ts` | 잠정 밸런스 값(`BALANCE`)과 미리보기 데이터 |
+| `scripts/cutout-characters.py` | 캐릭터 원본의 크림색 배경 제거 |
+| `src/styles.css`, `src/preview.css`, `src/screens.css` | 시안에서 옮긴 디자인 값과 반응형 화면 |
 | `shared/types.ts` | 프런트엔드/Worker API 계약 |
 | `worker/index.ts` | 인증, 권한 검사, D1 저장·조회 |
 | `worker/rules.ts` | 출제자·마감·KST 날짜 정책 |
