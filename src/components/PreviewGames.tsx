@@ -7,61 +7,61 @@ import {
   type PointerEvent,
 } from "react";
 import "../preview.css";
+import { BALANCE } from "../sample";
+import { Avatar, Chevron, Coin, Toolbar, artSrc, type ArtKey } from "./UI";
 
 type Game = "catchmind" | "kuji" | "claw";
-const art = (name: string) => `/characters/${name}.png`;
-const titles: Record<Game, string> = {
-  catchmind: "캐치마인드",
-  kuji: "예굼쿠지",
-  claw: "캐릭터 뽑기",
-};
+type CatchView = "guess" | "draw" | "result";
+
+// These games have no server yet: boards, tries and gold change only on this
+// screen. The drawer of today's 캐치마인드 picture is siwon; min draws next.
+const DRAWER = "siwon";
+const NEXT_DRAWER = "min";
 
 export function PreviewGames({
   game,
+  me,
+  gold: startGold,
+  evening,
   onBack,
 }: {
   game: Game;
+  me: string;
+  gold: number;
+  evening: boolean;
   onBack: () => void;
 }) {
-  return (
-    <section className={`preview-game pg-${game}`}>
-      <header className="game-toolbar">
-        <button className="icon-button" onClick={onBack} aria-label="홈으로">
-          ‹
-        </button>
-        <h1>{titles[game]}</h1>
-        <span className="preview-label">체험</span>
-      </header>
-      {game === "catchmind" ? (
-        <Catchmind />
-      ) : game === "kuji" ? (
-        <Kuji />
-      ) : (
-        <Claw />
-      )}
-      <p className="pg-disclaimer">
-        화면 체험이에요. 실제 골드·점수는 변하지 않아요.
-      </p>
-    </section>
+  const [gold, setGold] = useState(startGold);
+  const [catchView, setCatchView] = useState<CatchView>(
+    evening ? "result" : me === NEXT_DRAWER ? "draw" : "guess",
   );
-}
-
-function Avatar({
-  name,
-  tint,
-  size = 40,
-}: {
-  name: string;
-  tint: string;
-  size?: number;
-}) {
+  const [won, setWon] = useState(false);
+  const spend = (amount: number) => setGold((value) => value - amount);
+  const title =
+    game === "kuji"
+      ? "예굼쿠지"
+      : game === "claw"
+        ? "캐릭터 뽑기"
+        : catchView === "draw"
+          ? "그림 그리기"
+          : "캐치마인드";
   return (
-    <span
-      className="pg-avatar"
-      style={{ background: tint, width: size, height: size }}
-    >
-      <img src={art(name)} alt="" />
-    </span>
+    <section className={`preview-game pg-${game} ${won ? "won" : ""}`}>
+      <Toolbar title={title} onBack={onBack} gold={gold} />
+      {game === "catchmind" ? (
+        catchView === "guess" ? (
+          <Guess />
+        ) : catchView === "draw" ? (
+          <Drawing />
+        ) : (
+          <CatchResult canDraw={me === NEXT_DRAWER} onDraw={() => setCatchView("draw")} />
+        )
+      ) : game === "kuji" ? (
+        <Kuji spend={spend} />
+      ) : (
+        <Claw spend={spend} onWon={setWon} onBack={onBack} />
+      )}
+    </section>
   );
 }
 
@@ -93,40 +93,8 @@ function Snowman() {
   );
 }
 
-function Catchmind() {
-  const [view, setView] = useState<"guess" | "draw" | "result">("guess");
-  return (
-    <>
-      <nav className="pg-tabs" aria-label="캐치마인드 체험 화면">
-        {(
-          [
-            ["guess", "맞히기"],
-            ["draw", "그리기"],
-            ["result", "결과 보기"],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={view === value}
-            onClick={() => setView(value)}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
-      {view === "guess" ? (
-        <Guess />
-      ) : view === "draw" ? (
-        <Drawing />
-      ) : (
-        <CatchResult />
-      )}
-    </>
-  );
-}
-
 function Guess() {
+  const { points, hintedPoints, hintAfter, endAfter } = BALANCE.catchmind;
   const [guess, setGuess] = useState("");
   const [log, setLog] = useState([
     { who: "min", word: "구름" },
@@ -134,8 +102,9 @@ function Guess() {
   ]);
   const [solved, setSolved] = useState(false);
   const fails = log.length;
-  const ended = fails >= 6;
-  const points = fails >= 3 ? 30 : 50;
+  const ended = fails >= endAfter;
+  const hinted = fails >= hintAfter;
+  const worth = hinted ? hintedPoints : points;
   function submit(event: FormEvent) {
     event.preventDefault();
     const word = guess.trim();
@@ -148,12 +117,10 @@ function Guess() {
     <div className="pg-stack">
       <div className="pg-card pg-drawing-card">
         <div className="pg-author">
-          <Avatar name="cat" tint="#FFF4CC" size={32} />
-          <strong>siwon</strong>
+          <Avatar username={DRAWER} size={32} />
+          <strong>{DRAWER}</strong>
           <span className="pg-muted">07:58</span>
-          <span className={`pg-chip ${fails >= 3 ? "yellow" : "coral"}`}>
-            샘플 {points}점
-          </span>
+          <span className={`pg-chip ${hinted ? "yellow" : "coral"}`}>{worth}점</span>
         </div>
         <div className="pg-picture">
           <Snowman />
@@ -162,31 +129,28 @@ function Guess() {
       <div className="pg-fails">
         <div className="pg-between">
           <span>모두의 오답</span>
-          <strong>
+          <strong className={hinted && !solved ? "hinted" : ""}>
             {solved
               ? "정답!"
               : ended
-                ? "체험 종료"
-                : fails >= 3
-                  ? `종료까지 ${6 - fails}번`
-                  : `힌트까지 ${3 - fails}번`}
+                ? "판 종료"
+                : hinted
+                  ? `종료까지 ${endAfter - fails}번`
+                  : `힌트까지 ${hintAfter - fails}번`}
           </strong>
         </div>
-        <div
-          className="pg-fail-nodes"
-          aria-label={`오답 ${fails}회, 6회면 종료`}
-        >
-          {Array.from({ length: 6 }, (_, i) => (
+        <div className="pg-fail-nodes" aria-label={`오답 ${fails}회, ${endAfter}회면 종료`}>
+          {Array.from({ length: endAfter }, (_, i) => (
             <span
               key={i}
-              className={`${i < fails ? "hit" : ""} ${i === 2 ? "hint" : ""} ${i === fails && !solved && !ended ? "next" : ""}`}
+              className={`${i < fails ? "hit" : ""} ${i === hintAfter - 1 ? "hint" : ""} ${i === fails && !solved && !ended ? "next" : ""}`}
             >
-              {i < fails ? "×" : i === 2 ? "힌트" : i === 5 ? "끝" : ""}
+              {i < fails ? "×" : i === hintAfter - 1 ? "힌트" : i === endAfter - 1 ? "끝" : ""}
             </span>
           ))}
         </div>
       </div>
-      {fails >= 3 && !solved && !ended && (
+      {hinted && !solved && !ended && (
         <div className="pg-hint" aria-label="첫 글자 힌트: 눈, 세 글자">
           <span>눈</span>
           <span />
@@ -205,20 +169,18 @@ function Guess() {
       <div aria-live="polite">
         {solved && (
           <div className="pg-correct">
-            <Avatar name="bunny" tint="#EEE8FC" size={48} />
+            <Avatar username="yeseo" size={48} />
             <div>
               <small>내가 맞힘</small>
               <strong>눈사람</strong>
             </div>
-            <b>
-              +{points}점 <small>샘플</small>
-            </b>
+            <b>+{worth}점</b>
           </div>
         )}
         {ended && !solved && (
           <div className="pg-ended">
-            <strong>정답은 눈사람!</strong>
-            <span>다음 그림에서 다시 도전해요.</span>
+            <strong>정답은 눈사람</strong>
+            <span>아무도 맞히지 못했어요</span>
           </div>
         )}
       </div>
@@ -227,9 +189,7 @@ function Guess() {
           aria-label="캐치마인드 정답"
           value={guess}
           onChange={(e) => setGuess(e.target.value)}
-          placeholder={
-            solved ? "맞혔어요" : ended ? "체험이 끝났어요" : "정답 입력"
-          }
+          placeholder={solved ? "맞혔어요" : ended ? "판이 끝났어요" : "정답 입력"}
           maxLength={40}
           disabled={solved || ended}
           autoComplete="off"
@@ -238,23 +198,24 @@ function Guess() {
           정답
         </button>
       </form>
-      {(solved || ended) && (
-        <button
-          className="pg-text-button"
-          onClick={() => {
-            setSolved(false);
-            setLog([]);
-            setGuess("");
-          }}
-        >
-          다시 체험하기
-        </button>
-      )}
     </div>
   );
 }
 
-function CatchResult() {
+function CatchResult({ canDraw, onDraw }: { canDraw: boolean; onDraw: () => void }) {
+  const next = (
+    <>
+      <div className="pg-avatar-pair">
+        <Avatar username="min" />
+        <Avatar username="yeseo" />
+      </div>
+      <div>
+        <small>다음 출제</small>
+        <strong>{NEXT_DRAWER}</strong>
+      </div>
+      {canDraw ? <Chevron direction="right" size={20} color="#ADA4B3" /> : <span>min → yeseo → siwon</span>}
+    </>
+  );
   return (
     <div className="pg-stack">
       <div className="pg-card pg-result-picture">
@@ -264,27 +225,23 @@ function CatchResult() {
         <span>눈사람</span>
       </div>
       <div className="pg-card pg-winner">
-        <Avatar name="axolotl" tint="#E3F6EE" size={64} />
+        <Avatar username="min" size={64} />
         <div>
           <small>맞힌 사람</small>
           <strong>min</strong>
         </div>
         <div className="pg-winner-points">
-          <b>+30점</b>
-          <small>샘플 · 힌트 후 오답 4회</small>
+          <b>+{BALANCE.catchmind.hintedPoints}점</b>
+          <small>힌트 후 · 오답 4회</small>
         </div>
       </div>
-      <div className="pg-card pg-next-player">
-        <div className="pg-avatar-pair">
-          <Avatar name="axolotl" tint="#E3F6EE" />
-          <Avatar name="bunny" tint="#EEE8FC" />
-        </div>
-        <div>
-          <small>다음 출제</small>
-          <strong>min</strong>
-        </div>
-        <span>min → yeseo → siwon</span>
-      </div>
+      {canDraw ? (
+        <button className="pg-card pg-next-player" onClick={onDraw}>
+          {next}
+        </button>
+      ) : (
+        <div className="pg-card pg-next-player">{next}</div>
+      )}
     </div>
   );
 }
@@ -303,8 +260,8 @@ function Drawing() {
   const [ink, setInk] = useState("#5E6A8A");
   const [size, setSize] = useState(1);
   const [eraser, setEraser] = useState(false);
-  const [message, setMessage] = useState("");
   const [hasDrawing, setHasDrawing] = useState(false);
+  const [posted, setPosted] = useState(false);
   function point(e: PointerEvent<HTMLCanvasElement>) {
     const node = canvas.current!;
     const rect = node.getBoundingClientRect();
@@ -314,7 +271,7 @@ function Drawing() {
     ];
   }
   function down(e: PointerEvent<HTMLCanvasElement>) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || posted) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const ctx = canvas.current?.getContext("2d");
     if (!ctx) return;
@@ -330,7 +287,6 @@ function Drawing() {
     ctx.stroke();
     drawing.current = true;
     setHasDrawing(true);
-    setMessage("");
   }
   function move(e: PointerEvent<HTMLCanvasElement>) {
     if (!drawing.current) return;
@@ -344,8 +300,10 @@ function Drawing() {
     const node = canvas.current;
     node?.getContext("2d")?.clearRect(0, 0, node.width, node.height);
     setHasDrawing(false);
-    setMessage("그림을 지웠어요.");
   }
+  const stop = () => {
+    drawing.current = false;
+  };
   return (
     <div className="pg-stack">
       <div className="pg-prompt">
@@ -360,18 +318,10 @@ function Drawing() {
           aria-label="우산을 그리는 캔버스. 마우스 또는 터치로 그릴 수 있어요."
           onPointerDown={down}
           onPointerMove={move}
-          onPointerUp={() => {
-            drawing.current = false;
-          }}
-          onPointerCancel={() => {
-            drawing.current = false;
-          }}
-          onLostPointerCapture={() => {
-            drawing.current = false;
-          }}
-        >
-          마우스 또는 터치로 우산을 그려보세요.
-        </canvas>
+          onPointerUp={stop}
+          onPointerCancel={stop}
+          onLostPointerCapture={stop}
+        />
       </div>
       <div className="pg-card pg-draw-tools">
         <div className="pg-inks">
@@ -410,49 +360,22 @@ function Drawing() {
       </div>
       <button
         className="primary-button pg-full"
-        disabled={!hasDrawing}
-        onClick={() =>
-          setMessage(
-            "체험 그림을 완성했어요. 다른 플레이어에게는 전송되지 않아요.",
-          )
-        }
+        disabled={!hasDrawing || posted}
+        onClick={() => setPosted(true)}
       >
-        그림 완성
+        {posted ? "올렸어요" : "올리기"}
       </button>
-      <p className="pg-message" role="status">
-        {message}
-      </p>
     </div>
   );
 }
 
-const gradeColors = [
-  "#FFD866",
-  "#FF8E7A",
-  "#B9A3F0",
-  "#8CC8F2",
-  "#8FD9C0",
-  "#FFE6DF",
-  "#EEE8FC",
-  "#E3F1FC",
-];
-const gradeText = [
-  "#5C4300",
-  "#fff",
-  "#fff",
-  "#fff",
-  "#fff",
-  "#C9533E",
-  "#7556C4",
-  "#3B7FB3",
-];
+const gradeColors = ["#FFD866", "#FF8E7A", "#B9A3F0", "#8CC8F2", "#8FD9C0", "#FFE6DF", "#EEE8FC", "#E3F1FC"];
+const gradeText = ["#5C4300", "#fff", "#fff", "#fff", "#fff", "#C9533E", "#7556C4", "#3B7FB3"];
 const totals = [1, 2, 3, 6, 10, 15, 25, 38];
 function makeBoard() {
   let seed = 7;
   const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const pool = totals.flatMap((count, grade) =>
-    Array.from({ length: count }, () => grade),
-  );
+  const pool = totals.flatMap((count, grade) => Array.from({ length: count }, () => grade));
   for (let i = pool.length - 1; i > 0; i--) {
     const j = Math.floor(random() * (i + 1));
     [pool[i], pool[j]] = [pool[j], pool[i]];
@@ -465,24 +388,19 @@ function makeBoard() {
   const used = new Set(indices.slice(0, 37));
   return pool.map((grade, i) => ({ grade, taken: used.has(i) }));
 }
-function Kuji() {
+function Kuji({ spend }: { spend: (amount: number) => void }) {
+  const { price, raisedPrice, raiseFrom, boughtToday } = BALANCE.kuji;
   const [board, setBoard] = useState(makeBoard);
   const [selected, setSelected] = useState<number[]>([]);
   const [drawn, setDrawn] = useState<number[]>([]);
-  const [count, setCount] = useState(4);
+  const [count, setCount] = useState(boughtToday);
   const remaining = board.filter((cell) => !cell.taken).length;
-  const cost = selected.reduce(
-    (sum, _, i) => sum + (count + i + 1 > 5 ? 400 : 300),
-    0,
-  );
+  const cost = selected.reduce((sum, _, i) => sum + (count + i + 1 >= raiseFrom ? raisedPrice : price), 0);
   function draw() {
     if (!selected.length) return;
+    spend(cost);
     setDrawn(selected.map((i) => board[i].grade));
-    setBoard((previous) =>
-      previous.map((cell, i) =>
-        selected.includes(i) ? { ...cell, taken: true } : cell,
-      ),
-    );
+    setBoard((previous) => previous.map((cell, i) => (selected.includes(i) ? { ...cell, taken: true } : cell)));
     setCount((value) => value + selected.length);
     setSelected([]);
   }
@@ -496,10 +414,10 @@ function Kuji() {
             <small>/ 100</small>
           </strong>
         </div>
-        <img src={art("drop")} alt="" />
+        <img src={artSrc("drop")} alt="" />
       </div>
       <div className="pg-stack">
-        <div className="pg-card pg-kuji-board" aria-label="쿠지 체험판 100칸">
+        <div className="pg-card pg-kuji-board" aria-label="쿠지판 100칸">
           {board.map((cell, i) => (
             <button
               key={i}
@@ -509,104 +427,81 @@ function Kuji() {
               disabled={cell.taken}
               className={selected.includes(i) ? "selected" : ""}
               onClick={() => {
-                setSelected((value) =>
-                  value.includes(i)
-                    ? value.filter((n) => n !== i)
-                    : [...value, i],
-                );
+                setSelected((value) => (value.includes(i) ? value.filter((n) => n !== i) : [...value, i]));
                 setDrawn([]);
               }}
             >
-              {cell.taken
-                ? String.fromCharCode(65 + cell.grade)
-                : selected.includes(i)
-                  ? "✓"
-                  : ""}
+              {cell.taken ? String.fromCharCode(65 + cell.grade) : selected.includes(i) ? "✓" : ""}
             </button>
           ))}
         </div>
         <div className="pg-kuji-legend">
-          {totals.map((total, i) => (
-            <div key={i}>
-              <b style={{ background: gradeColors[i], color: gradeText[i] }}>
-                {String.fromCharCode(65 + i)}
-              </b>
-              <span>
-                {board.filter((cell) => cell.grade === i && !cell.taken).length}
-                <small>/{total}</small>
-              </span>
-            </div>
-          ))}
+          {totals.map((total, i) => {
+            const left = board.filter((cell) => cell.grade === i && !cell.taken).length;
+            return (
+              <div key={i}>
+                <b style={{ background: gradeColors[i], color: gradeText[i] }}>{String.fromCharCode(65 + i)}</b>
+                <span className={left ? "" : "gone"}>
+                  {left}
+                  <small>/{total}</small>
+                </span>
+              </div>
+            );
+          })}
         </div>
         <div className="pg-kuji-cost">
-          <b>↑</b>
-          <span>체험 {count}장 · 6장째부터 장당 400G</span>
-          <div>
-            {Array.from({ length: 5 }, (_, i) => (
-              <i
-                key={i}
-                style={{
-                  background:
-                    i < count + selected.length ? "#F2C94C" : "#EDE3C4",
-                }}
-              />
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94700A" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12 19V5M6 11l6-6 6 6" />
+          </svg>
+          <span>
+            오늘 {count}장 · {raiseFrom}장째부터 장당 {raisedPrice}G
+          </span>
+          <div aria-hidden="true">
+            {Array.from({ length: raiseFrom - 1 }, (_, i) => (
+              <i key={i} style={{ background: i < count + selected.length ? "#F2C94C" : "#EDE3C4" }} />
             ))}
           </div>
         </div>
-        <button
-          className="primary-button pg-full"
-          disabled={!selected.length}
-          onClick={draw}
-        >
-          {selected.length
-            ? `${selected.length}장 체험 · ${cost.toLocaleString()}G`
-            : "칸을 골라주세요"}
+        <button className="primary-button pg-full" disabled={!selected.length} onClick={draw}>
+          {selected.length ? `${selected.length}장 뽑기 · ${cost.toLocaleString("ko-KR")}G` : "칸을 골라주세요"}
         </button>
         {drawn.length > 0 && (
           <div className="pg-card pg-kuji-result" role="status">
-            <strong>체험 결과</strong>
+            <strong>뽑은 쿠지</strong>
             <div>
               {drawn.map((grade, i) => (
-                <span
-                  key={i}
-                  style={{
-                    background: gradeColors[grade],
-                    color: gradeText[grade],
-                  }}
-                >
+                <span key={i} style={{ background: gradeColors[grade], color: gradeText[grade] }}>
                   {String.fromCharCode(65 + grade)}상
                 </span>
               ))}
             </div>
-            <small>실제 구매·보상 지급은 없어요.</small>
           </div>
         )}
-        <button
-          className="pg-text-button"
-          onClick={() => {
-            setBoard(makeBoard());
-            setSelected([]);
-            setDrawn([]);
-            setCount(4);
-          }}
-        >
-          체험판 다시 시작
-        </button>
       </div>
     </>
   );
 }
 
 type Phase = "idle" | "down" | "close" | "up" | "carry" | "won" | "missed";
-const prizes = [
-  { name: "manta", x: 2, y: 0, size: 96, rotate: -8 },
-  { name: "sprite", x: 24, y: -4, size: 92, rotate: 6 },
-  { name: "drop", x: 49, y: -6, size: 90, rotate: -4 },
-  { name: "popcorn", x: 13, y: 58, size: 82, rotate: 10 },
-  { name: "moon", x: 38, y: 62, size: 78, rotate: -12 },
-  { name: "axolotl", x: 63, y: 44, size: 74, rotate: 8 },
+const TARGET: ArtKey = "monkey";
+const prizes: { art: ArtKey; x: number; y: number; size: number; rotate: number }[] = [
+  { art: "manta", x: 2, y: 0, size: 96, rotate: -8 },
+  { art: "monkey", x: 24, y: -4, size: 92, rotate: 6 },
+  { art: "drop", x: 49, y: -6, size: 90, rotate: -4 },
+  { art: "bread", x: 13, y: 58, size: 82, rotate: 10 },
+  { art: "moon", x: 38, y: 62, size: 78, rotate: -12 },
+  { art: "axolotl", x: 63, y: 44, size: 74, rotate: 8 },
 ];
-function Claw() {
+function Claw({
+  spend,
+  onWon,
+  onBack,
+}: {
+  spend: (amount: number) => void;
+  onWon: (won: boolean) => void;
+  onBack: () => void;
+}) {
+  const { cost, dailyTries, points } = BALANCE.claw;
   const [x, setX] = useState(0.32);
   const [phase, setPhase] = useState<Phase>("idle");
   const [tries, setTries] = useState(3);
@@ -614,6 +509,7 @@ function Claw() {
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const busyRef = useRef(false);
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  useEffect(() => onWon(phase === "won"), [phase, onWon]);
   const busy = !["idle", "missed", "won"].includes(phase);
   const holding = success && ["up", "carry"].includes(phase);
   function grab() {
@@ -623,6 +519,7 @@ function Claw() {
     setSuccess(caught);
     setPhase("down");
     setTries((value) => value - 1);
+    spend(cost);
     const later = (fn: () => void, delay: number) => {
       timers.current.push(setTimeout(fn, delay));
     };
@@ -639,7 +536,7 @@ function Claw() {
       busyRef.current = false;
     }, 2400);
   }
-  function retry() {
+  function reset() {
     setPhase("idle");
     setX(0.32);
     setSuccess(false);
@@ -654,20 +551,19 @@ function Claw() {
           <i />
           <i />
           <span />
-          <img src={art("sprite")} alt="별귀 꿈 요정 캐릭터" />
+          <img src={artSrc(TARGET)} alt="별숭이" />
         </div>
-        <div className="pg-success-copy">
+        <div className="pg-success-copy" role="status">
           <span>뽑았다!</span>
-          <strong>성공!</strong>
-          <b>
-            +30점 <small>샘플</small>
-          </b>
-          <small>체험 남은 횟수 {tries} / 5</small>
+          <strong>+{points}점</strong>
+          <small>
+            오늘 남은 횟수 {tries} / {dailyTries}
+          </small>
         </div>
         <div className="pg-success-actions">
-          <button onClick={retry}>확인</button>
-          <button disabled={!tries} onClick={retry}>
-            한 번 더 · 체험
+          <button onClick={onBack}>확인</button>
+          <button disabled={!tries} onClick={reset}>
+            한 번 더 · {cost}G
           </button>
         </div>
       </div>
@@ -676,14 +572,15 @@ function Claw() {
     <>
       <div className="pg-claw-heading">
         <div>
-          <span>체험 남은 횟수</span>
+          <span>오늘 남은 횟수</span>
           <strong>
             {tries}
-            <small> / 5</small>
+            <small> / {dailyTries}</small>
           </strong>
         </div>
         <span className="pg-claw-price">
-          <i>G</i>200 / 회 · 샘플
+          <Coin size={22} />
+          {cost} / 회
         </span>
       </div>
       <div className="pg-machine">
@@ -691,33 +588,22 @@ function Claw() {
           <div className="pg-machine-rail" />
           <div className="pg-claw" style={{ left: `${x * 100}%` }}>
             <div className="pg-claw-cart" />
-            <div
-              className="pg-claw-rope"
-              style={{ height: ["down", "close"].includes(phase) ? 206 : 24 }}
-            />
+            <div className="pg-claw-rope" style={{ height: ["down", "close"].includes(phase) ? 206 : 24 }} />
             <div className="pg-claw-head">
               <i />
-              <span
-                style={{
-                  transform: `rotate(${phase === "close" || holding ? -8 : 24}deg)`,
-                }}
-              />
-              <span
-                style={{
-                  transform: `rotate(${phase === "close" || holding ? 8 : -24}deg)`,
-                }}
-              />
+              <span style={{ transform: `rotate(${phase === "close" || holding ? -8 : 24}deg)` }} />
+              <span style={{ transform: `rotate(${phase === "close" || holding ? 8 : -24}deg)` }} />
             </div>
-            {holding && <img src={art("sprite")} alt="" />}
+            {holding && <img src={artSrc(TARGET)} alt="" />}
           </div>
           <div className="pg-out">OUT</div>
           {prizes
-            .filter((_, i) => !(holding && i === 1))
+            .filter((prize) => !(holding && prize.art === TARGET))
             .map((prize) => (
               <img
-                key={prize.name}
+                key={prize.art}
                 className="pg-prize"
-                src={art(prize.name)}
+                src={artSrc(prize.art)}
                 alt=""
                 style={{
                   left: `${prize.x}%`,
@@ -739,7 +625,7 @@ function Claw() {
             setPhase("idle");
           }}
         >
-          ‹
+          <Chevron size={26} width={2.8} />
         </button>
         <button
           aria-label="집게 오른쪽으로"
@@ -749,28 +635,12 @@ function Claw() {
             setPhase("idle");
           }}
         >
-          ›
+          <Chevron direction="right" size={26} width={2.8} />
         </button>
-        <button disabled={busy || !tries} onClick={grab}>
-          {busy ? "두근두근…" : !tries ? "체험 완료" : "잡기"}
+        <button disabled={busy || !tries} onClick={grab} aria-live="polite">
+          {busy ? "두근두근…" : !tries ? "내일 다시" : phase === "missed" ? "놓쳤어요 · 다시" : "잡기"}
         </button>
       </div>
-      <p className="pg-message" aria-live="polite">
-        {phase === "missed"
-          ? "앗, 놓쳤어요! 별귀 요정 위에 집게를 맞춰보세요."
-          : "집게를 움직여 별귀 요정을 잡아보세요."}
-      </p>
-      {!tries && (
-        <button
-          className="pg-text-button"
-          onClick={() => {
-            setTries(3);
-            retry();
-          }}
-        >
-          다시 체험하기
-        </button>
-      )}
     </>
   );
 }

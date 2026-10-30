@@ -4,7 +4,7 @@ async function login(page: Page, username: string) {
   await page.getByLabel('아이디', { exact: true }).fill(username);
   await page.getByLabel('비밀번호', { exact: true }).fill('e2e-only-password-2026');
   await page.getByRole('button', { name: '예굼방 들어가기' }).click();
-  await expect(page.getByRole('heading', { name: `${username}의 예굼방` })).toBeVisible();
+  await expect(page.getByRole('heading', { name: username, exact: true })).toBeVisible();
 }
 
 test('mobile and desktop previews render all game screens without errors or overflow', async ({ page }) => {
@@ -12,7 +12,7 @@ test('mobile and desktop previews render all game screens without errors or over
   page.on('pageerror', error => errors.push(error.message));
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const route of ['/preview','/preview/game/wake','/preview/game/luck','/preview/game/offwork','/preview/play/catchmind','/preview/play/kuji','/preview/play/claw']) {
+    for (const route of ['/preview','/preview/games','/preview/ranking','/preview/attendance','/preview/profile','/preview/game/wake','/preview/game/luck','/preview/game/offwork','/preview/play/catchmind','/preview/play/kuji','/preview/play/claw','/preview/stock','/preview/stock/upa','/preview/stock/bang','/preview/shop','/preview/shop/lotto','/preview/shop/speetto']) {
       await page.goto(`/#${route}`);
       await expect(page.locator('main')).toBeVisible();
       await expect(page.locator('main')).not.toContainText('NaN');
@@ -60,7 +60,7 @@ test('PWA caches the app shell and previews offline but never caches authenticat
   await context.setOffline(true);
   await page.reload();
   await expect(page.getByRole('status')).toContainText('오프라인');
-  await expect(page.getByRole('heading', { name: '우리의 작은 놀이터' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'yeseo', exact: true })).toBeVisible();
   await page.goto('/#/preview/game/wake');
   await expect(page.getByRole('heading', { name: 'min은 몇 시에 일어날까?' })).toBeVisible();
 });

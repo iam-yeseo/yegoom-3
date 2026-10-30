@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { GameState, User } from "../../shared/types";
-import { Avatar, Character, Toolbar, characters } from "./UI";
+import { BALANCE, predictionPoints, rankOf } from "../sample";
+import { Avatar, Character, Coin, Toolbar, playerColor } from "./UI";
 
 type Props = {
   game: GameState;
@@ -27,10 +28,13 @@ function TimeWheel({
   value,
   onChange,
   disabled,
+  hours = [0, 23],
 }: {
   value: string;
   onChange: (v: string) => void;
   disabled: boolean;
+  /** Inclusive hour range the wheel cycles through. */
+  hours?: [number, number];
 }) {
   const [hour, minute] = value.split(":").map(Number);
   function change(n: number, part: number) {
@@ -44,8 +48,10 @@ function TimeWheel({
       {[hour, minute].map((v, part) => (
         <div className="time-column" key={part}>
           {[-2, -1, 0, 1, 2].map((offset) => {
+            const [low, high] = part ? [0, 59] : hours;
             const max = part ? 60 : 24;
-            const number = (v + offset + max) % max;
+            const span = high - low + 1;
+            const number = ((((v + offset - low) % span) + span) % span) + low;
             return offset === 0 ? (
               <label key={offset} className="wheel-active">
                 <span className="sr-only">{part ? "분" : "시"}</span>
@@ -127,7 +133,7 @@ export function PredictionGame({
     demo || (author ? game.canEditAnswer : game.canPredict && left > 0);
   const revealed = game.phase === "revealed";
   const saved = initial === value && initial !== null;
-  const palette = characters[game.authorUsername];
+  
   const update = (next: string) => {
     setValue(next);
     setNotice("");
@@ -158,11 +164,9 @@ export function PredictionGame({
     try {
       await onSave(value, hint, author);
       setNotice(
-        demo
-          ? "체험 입력을 확인했어요. 실제 게임에는 저장되지 않아요."
-          : author
-            ? "정답을 저장했어요. 공개 전까지 수정할 수 있어요."
-            : "예측을 저장했어요. 마감 전까지 수정할 수 있어요.",
+        author
+          ? "정답을 저장했어요. 공개 전까지 수정할 수 있어요."
+          : "예측을 저장했어요. 마감 전까지 수정할 수 있어요.",
       );
     } catch (e) {
       setError(
@@ -193,7 +197,6 @@ export function PredictionGame({
           title={game.title}
           onBack={onBack}
           gold={user.gold}
-          right={demo ? <span className="preview-label">체험</span> : undefined}
         />
         <div className="character-stage">
           <div className="character-shadow" />
@@ -201,7 +204,7 @@ export function PredictionGame({
             username={game.authorUsername}
             className="hero-character"
           />
-          <span className="author-pill" style={{ color: palette?.color }}>
+          <span className="author-pill" style={{ color: playerColor[game.authorUsername] }}>
             출제 {game.authorUsername}
           </span>
         </div>
@@ -227,43 +230,45 @@ export function PredictionGame({
       {revealed ? (
         <div className="screen-body result-list">
           {game.results.length ? (
-            game.results.map((result) => (
-              <article className="card result-card" key={result.playerId}>
-                <div className="result-player">
-                  <span
-                    className={`rank-badge ${result.difference === game.results[0].difference ? "first" : ""}`}
-                  >
-                    {game.results.findIndex(
-                      (r) => r.difference === result.difference,
-                    ) + 1}
-                  </span>
-                  <Avatar username={result.username} size={46} />
-                  <div className="result-name">
-                    <strong>
-                      {result.displayName}
-                      {result.username === user.username ? " (나)" : ""}
-                    </strong>
-                    <span>
-                      {result.difference}
-                      {game.id === "luck" ? "점" : "분"} 차이
+            game.results.map((result) => {
+              const rank = rankOf(game.results, result);
+              return (
+                <article className="card result-card" key={result.playerId}>
+                  <div className="result-player">
+                    <span className={`rank-badge ${rank === 1 ? "first" : ""}`}>
+                      {rank}
                     </span>
+                    <Avatar username={result.username} size={46} />
+                    <div className="result-name">
+                      <strong>
+                        {result.displayName}
+                        {result.username === user.username ? " (나)" : ""}
+                      </strong>
+                      <span>
+                        {result.difference === 0
+                          ? "정확히 맞힘"
+                          : `${result.difference}${game.id === "luck" ? "점" : "분"} 차이`}
+                      </span>
+                    </div>
+                    <strong className="result-guess">
+                      {result.value}
+                      {game.id === "luck" ? "점" : ""}
+                    </strong>
                   </div>
-                  <strong className="result-guess">
-                    {result.value}
-                    {game.id === "luck" ? "점" : ""}
-                  </strong>
-                </div>
-                <div className="result-rewards">
-                  <span className="pill peach">
-                    {result.difference === 0
-                      ? "정확히 맞혔어요!"
-                      : result.difference === game.results[0].difference
-                        ? "가장 가까운 예측"
-                        : "참여 완료"}
-                  </span>
-                </div>
-              </article>
-            ))
+                  <div className="result-rewards">
+                    <span className="reward points">+{predictionPoints(rank)}점</span>
+                    <span className="reward gold">
+                      <Coin size={20} />+{BALANCE.participationGold} 참여
+                    </span>
+                    {rank === 1 && (
+                      <span className="reward bonus">
+                        <Coin size={20} />+{BALANCE.firstPlaceGold} 1등 보너스
+                      </span>
+                    )}
+                  </div>
+                </article>
+              );
+            })
           ) : (
             <div className="card empty-state">
               이번 라운드에는 제출한 예측이 없어요.
@@ -271,7 +276,7 @@ export function PredictionGame({
           )}
           <div className="result-caption">
             <span />
-            {game.authorUsername} · {game.answer}
+            {game.authorUsername} {game.answer}
             {game.id === "offwork"
               ? " 퇴근"
               : game.id === "wake"
@@ -279,11 +284,6 @@ export function PredictionGame({
                 : "점"}
             <span />
           </div>
-          <p className="subtle-note">
-            {demo
-              ? "화면 체험용 결과예요. 실제 점수·골드는 변하지 않아요."
-              : "점수와 골드 보상은 배점 확정 후 적용돼요."}
-          </p>
         </div>
       ) : (
         <form onSubmit={submit}>
@@ -348,6 +348,7 @@ export function PredictionGame({
                   value={value}
                   onChange={update}
                   disabled={!editable || busy}
+                  hours={game.id === "wake" && !author ? [5, 12] : [0, 23]}
                 />
               )}
               {author && game.id === "luck" && (
@@ -369,7 +370,9 @@ export function PredictionGame({
             </section>
             {!author && game.participants.length > 0 && (
               <div className="card submission-list">
-                {game.participants.map(player => (
+                {[...game.participants]
+                  .sort((a, b) => Number(a.username === user.username) - Number(b.username === user.username))
+                  .map(player => (
                   <div className="submission-card" key={player.playerId}>
                     <Avatar username={player.username} />
                     <strong>{player.displayName}{player.username === user.username ? " (나)" : ""}</strong>

@@ -1,0 +1,181 @@
+import type { GameId, GameResult, GameState, LedgerEntry } from "../shared/types";
+import type { ArtKey } from "./components/UI";
+
+// Provisional balance values taken from the Claude Design mock-ups. The
+// planning document leaves all of them open (docs/decisions.md); change them
+// here once they are decided. Nothing below is credited to the server ledger.
+export const BALANCE = {
+  attendanceGold: 100,
+  weeklyRewards: [3000, 1800, 1000],
+  predictionPoints: [40, 20, 10],
+  participationGold: 100,
+  firstPlaceGold: 500,
+  catchmind: { points: 50, hintedPoints: 30, hintAfter: 3, endAfter: 6 },
+  claw: { cost: 200, dailyTries: 5, points: 30 },
+  kuji: { price: 300, raisedPrice: 400, raiseFrom: 6, boughtToday: 4 },
+  lotto: { price: 500, picks: 5, max: 25, drawHour: 17 },
+  speetto: { price: 300, prize: 1500 },
+};
+
+/** 1-based place by closeness; equal differences share a place. */
+export const rankOf = (results: GameResult[], result: GameResult) =>
+  results.findIndex((r) => r.difference === result.difference) + 1;
+/** Points for a prediction placed `rank` (1-based) by closeness. */
+export const predictionPoints = (rank: number) =>
+  BALANCE.predictionPoints[rank - 1] ?? 0;
+
+export const KST = "Asia/Seoul";
+export function kstParts(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: KST,
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      weekday: "short",
+      hour: "numeric",
+      minute: "numeric",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .map((part) => [part.type, part.value]),
+  );
+  const weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(
+    parts.weekday,
+  );
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    /** 0 = Monday … 6 = Sunday */
+    weekday,
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+  };
+}
+export const weekdayNames = ["월", "화", "수", "목", "금", "토", "일"];
+export function kstDateText(date = new Date()) {
+  const t = kstParts(date);
+  return `${t.month}월 ${t.day}일 ${weekdayNames[t.weekday]}요일`;
+}
+/** Weekdays 09:00–18:00 KST. Public holidays are not known yet. */
+export function marketOpen(date = new Date()) {
+  const t = kstParts(date);
+  return t.weekday < 5 && t.hour >= 9 && t.hour < 18;
+}
+
+export interface Stock {
+  id: string;
+  name: string;
+  art: ArtKey;
+  price: number;
+  change: number | null;
+  held: number;
+  average: number;
+}
+export const LIMIT = 15;
+export const stocks: Stock[] = [
+  { id: "upa", name: "우파전자", art: "axolotl", price: 2480, change: 15.0, held: 4, average: 1860 },
+  { id: "nyang", name: "냥냥푸드", art: "cat", price: 1120, change: 3.2, held: 0, average: 0 },
+  { id: "tokki", name: "토끼항공", art: "bunny", price: 920, change: 6.1, held: 2, average: 860 },
+  { id: "manta", name: "만타해운", art: "manta", price: 3050, change: 0.8, held: 0, average: 0 },
+  { id: "star", name: "별숭이게임즈", art: "monkey", price: 860, change: -1.4, held: 0, average: 0 },
+  { id: "moon", name: "달빛엔터", art: "moon", price: 1780, change: -4.6, held: 1, average: 1900 },
+  { id: "bbang", name: "빵빵제과", art: "bread", price: 410, change: -15.0, held: 0, average: 0 },
+  { id: "bang", name: "방울바이오", art: "drop", price: 0, change: null, held: 8, average: 200 },
+];
+
+/** Sample week used by the logged-out preview. */
+export const previewScores: Record<string, number> = {
+  siwon: 412,
+  yeseo: 340,
+  min: 285,
+};
+export const previewLastWeek = [
+  { username: "siwon", score: 512 },
+  { username: "yeseo", score: 470 },
+  { username: "min", score: 401 },
+];
+export const previewDaily = [62, 88, 45, 105, 155, 0, 0];
+export const previewGold = 12480;
+
+/** The preview plays as yeseo, who sets 행운 점수, so that round is seen as siwon. */
+export const previewViewer = (id: GameId) => (id === "luck" ? "siwon" : "yeseo");
+/**
+ * Prediction rounds shown to the logged-out preview, fixed to the design's
+ * frames: 기상시간 and 행운 점수 open (2a, 2b), 퇴근시간 revealed (2c).
+ */
+export function previewGame(id: GameId): GameState {
+  const title =
+    id === "wake" ? "기상시간 맞히기" : id === "offwork" ? "퇴근시간 맞히기" : "행운 점수 맞히기";
+  const authorUsername = id === "wake" ? "min" : id === "offwork" ? "siwon" : "yeseo";
+  const viewer = previewViewer(id);
+  const others = ["min", "siwon", "yeseo"].filter((name) => name !== authorUsername);
+  const base: GameState = {
+    id,
+    title,
+    authorUsername,
+    deadline: new Date(Date.now() + (id === "wake" ? 4644 : 28044) * 1000).toISOString(),
+    roundDate: "preview",
+    phase: "open",
+    hint: "비 와도 기분 좋음. 점심이 맛있었다",
+    prediction: null,
+    answer: null,
+    answerEntered: true,
+    results: [],
+    // Others first and the viewer last, as in the design.
+    participants: [...others.filter((n) => n !== viewer), viewer].map((username) => ({
+      playerId: username,
+      username,
+      displayName: username,
+      submitted: username !== viewer,
+    })),
+    canPredict: true,
+    canEditAnswer: false,
+    canReveal: false,
+  };
+  if (id !== "offwork") return base;
+  return {
+    ...base,
+    phase: "revealed",
+    answer: "18:12",
+    prediction: "18:20",
+    results: [
+      { playerId: "yeseo", username: "yeseo", displayName: "yeseo", value: "18:20", difference: 8 },
+      { playerId: "min", username: "min", displayName: "min", value: "17:50", difference: 22 },
+    ],
+  };
+}
+
+/** Sample gold and score history for the preview's 내 정보 screen. */
+export function previewLedger(): LedgerEntry[] {
+  const today = Date.now();
+  const yesterday = today - 86_400_000;
+  const at = (base: number, time: string) => {
+    const t = kstParts(new Date(base));
+    const day = `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}`;
+    return new Date(`${day}T${time}:00+09:00`).toISOString();
+  };
+  const rows: [number, string, string, number, "gold" | "score"][] = [
+    [today, "17:00", "로또 4등", 1000, "gold"],
+    [today, "13:06", "캐릭터 뽑기", -200, "gold"],
+    [today, "13:02", "쿠지 4장", -1200, "gold"],
+    [today, "11:20", "로또 2장", -1000, "gold"],
+    [today, "09:12", "출석", 100, "gold"],
+    [yesterday, "17:48", "주식 매도 · 우파전자", 3140, "gold"],
+    [yesterday, "08:55", "출석", 100, "gold"],
+    [today, "13:10", "캐치마인드 정답", 50, "score"],
+    [today, "13:06", "캐릭터 뽑기", 30, "score"],
+    [today, "08:47", "기상시간 맞히기", 30, "score"],
+    [yesterday, "18:00", "주식 수익 1위", 40, "score"],
+    [yesterday, "18:00", "행운 점수 맞히기", 25, "score"],
+    [yesterday, "08:31", "기상시간 맞히기", 20, "score"],
+  ];
+  return rows.map(([base, time, reason, amount, currency], i) => ({
+    id: `preview-${i}`,
+    currency,
+    amount,
+    reason,
+    createdAt: at(base, time),
+  }));
+}

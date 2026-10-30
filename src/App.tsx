@@ -2,13 +2,30 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BootstrapResponse,
   GameId,
-  GameState,
+  LedgerEntry,
   User,
 } from "../shared/types";
 import { ApiFailure, api } from "./api";
-import { Avatar, Character, GameIcon, Gold, Toolbar } from "./components/UI";
+import { dayKey } from "./attendance";
+import { Character, TabBar, tabs } from "./components/UI";
 import { PredictionGame } from "./components/PredictionGame";
 import { PreviewGames } from "./components/PreviewGames";
+import {
+  kstParts,
+  previewDaily,
+  previewGame,
+  previewGold,
+  previewLastWeek,
+  previewLedger,
+  previewScores,
+  previewViewer,
+} from "./sample";
+import { Attendance } from "./screens/Attendance";
+import { Home, SoloGames, TodayGames, isEvening, type HomeData } from "./screens/Home";
+import { Profile } from "./screens/Profile";
+import { Ranking } from "./screens/Ranking";
+import { Lotto, ShopMain, Speetto } from "./screens/Shop";
+import { StockDetail, StockMarket } from "./screens/Stock";
 
 function navigate(path: string) {
   window.location.hash = path;
@@ -26,65 +43,49 @@ function useRoute() {
   }, []);
   return route;
 }
-const demoUser: User = {
+const previewUser: User = {
   id: "preview",
   username: "yeseo",
   displayName: "yeseo",
   role: "player",
-  gold: 0,
-  weeklyScore: 0,
+  gold: previewGold,
+  weeklyScore: previewScores.yeseo,
 };
-function sampleGame(id: GameId): GameState {
-  const base: GameState = {
-    id,
-    title:
-      id === "wake"
-        ? "기상시간 맞히기"
-        : id === "offwork"
-          ? "퇴근시간 맞히기"
-          : "행운 점수 맞히기",
-    authorUsername:
-      id === "wake" ? "min" : id === "offwork" ? "siwon" : "yeseo",
-    deadline: new Date(
-      Date.now() + (id === "luck" ? 28044 : 4644) * 1000,
-    ).toISOString(),
-    roundDate: "체험",
-    phase: "open",
-    hint: "비 와도 기분 좋음. 점심이 맛있었다",
-    prediction: null,
-    answer: null,
-    answerEntered: true,
-    results: [],
-    participants: (id === "luck" ? ["siwon", "min"] : ["yeseo", "siwon"]).map((username, index) => ({
-      playerId: username, username, displayName: username, submitted: index === 1,
+const gameIds: GameId[] = ["wake", "offwork", "luck"];
+function previewHome(): HomeData {
+  return {
+    username: previewUser.username,
+    displayName: previewUser.displayName,
+    attendanceKey: "preview",
+    gold: previewGold,
+    players: Object.entries(previewScores).map(([username, weeklyScore]) => ({
+      username,
+      displayName: username,
+      weeklyScore,
     })),
-    canPredict: true,
-    canEditAnswer: false,
-    canReveal: false,
+    games: gameIds.map((id) => previewGame(id)),
   };
-  if (id === "offwork")
-    return {
-      ...base,
-      phase: "revealed",
-      answer: "18:12",
-      results: [
-        {
-          playerId: "preview",
-          username: "yeseo",
-          displayName: "yeseo",
-          value: "18:20",
-          difference: 8,
-        },
-        {
-          playerId: "min",
-          username: "min",
-          displayName: "min",
-          value: "17:50",
-          difference: 22,
-        },
-      ],
-    };
-  return base;
+}
+function homeData(data: BootstrapResponse): HomeData {
+  return {
+    username: data.user.username,
+    displayName: data.user.displayName,
+    attendanceKey: data.user.username,
+    gold: data.user.gold,
+    players: data.players,
+    games: data.games,
+  };
+}
+/** This week's score entries summed per weekday (Mon–Sun, KST). */
+function dailyScores(ledger: LedgerEntry[]) {
+  const daily = [0, 0, 0, 0, 0, 0, 0];
+  const monday = dayKey(new Date(Date.now() - kstParts().weekday * 86_400_000));
+  for (const entry of ledger) {
+    const date = new Date(entry.createdAt);
+    if (entry.currency === "score" && dayKey(date) >= monday)
+      daily[kstParts(date).weekday] += entry.amount;
+  }
+  return daily;
 }
 function Login({
   onLogin,
@@ -188,311 +189,6 @@ function Login({
     </div>
   );
 }
-function Home({
-  data,
-  demo = false,
-}: {
-  data: BootstrapResponse | null;
-  demo?: boolean;
-}) {
-  const user = data?.user ?? demoUser;
-  const prefix = demo ? "/preview" : "";
-  const games = [
-    {
-      id: "wake",
-      title: "기상시간",
-      sub: "min의 아침을 맞혀 봐",
-      tint: "mint",
-      time: "10:30 마감",
-    },
-    {
-      id: "offwork",
-      title: "퇴근시간",
-      sub: "siwon의 하루는 언제 끝날까",
-      tint: "peach",
-      time: "17:00 마감",
-    },
-    {
-      id: "luck",
-      title: "행운 점수",
-      sub: "yeseo의 오늘을 예측해 봐",
-      tint: "lavender",
-      time: "17:00 마감",
-    },
-  ];
-  return (
-    <div className="home-page">
-      <header className="home-header">
-        <span className="wordmark">
-          예굼방<span>3</span>
-        </span>
-        <button
-          className="profile-button"
-          onClick={() => navigate(demo ? "/login" : "/profile")}
-          aria-label={demo ? "로그인 화면으로" : "내 정보"}
-        >
-          {demo ? (
-            <span className="preview-label">체험</span>
-          ) : (
-            <Avatar username={user.username} size={36} />
-          )}
-        </button>
-      </header>
-      <section className="personal-room">
-        <div className="room-window">
-          <span className="window-cloud" />
-        </div>
-        <span className="room-star">✧</span>
-        <span className="room-frame">✦</span>
-        <div className="room-floor" />
-        <div className="room-rug" />
-        <div className="room-greeting">오늘도 반가워!</div>
-        <Character username={user.username} className="room-character" />
-        <div className="room-plant">
-          <span>♧</span>
-          <i />
-        </div>
-      </section>
-      <section className="home-profile">
-        <div>
-          <p>{demo ? "미리 만나는 예굼방" : "나의 작은 아지트"}</p>
-          <h1>
-            {demo ? "우리의 작은 놀이터" : `${user.displayName}의 예굼방`}
-          </h1>
-        </div>
-        {!demo && <Gold value={user.gold} />}
-      </section>
-      {demo ? (
-        <div className="demo-intro">
-          <span className="status-dot" />
-          체험 중에는 실제 기록과 재화가 바뀌지 않아요.
-        </div>
-      ) : (
-        <button className="weekly-card" onClick={() => navigate("/ranking")}>
-          <span className="weekly-icon">✦</span>
-          <div>
-            <span>이번 주 나의 점수</span>
-            <strong>
-              {user.weeklyScore}
-              <small>점</small>
-            </strong>
-          </div>
-          <span className="weekly-link">
-            순위 보기 <span aria-hidden="true">›</span>
-          </span>
-        </button>
-      )}
-      <section className="home-games">
-        <div className="section-heading">
-          <h2>함께하는 게임</h2>
-          <span>매일 새로운 한 판</span>
-        </div>
-        <div className="game-grid">
-          {games.map((game) => (
-            <button
-              key={game.id}
-              className={`game-tile ${game.tint}`}
-              onClick={() => navigate(`${prefix}/game/${game.id}`)}
-            >
-              <span className="tile-icon">
-                <GameIcon type={game.id} />
-              </span>
-              <strong>
-                {game.title}
-                <br />
-                맞히기
-              </strong>
-              <small>{game.time}</small>
-              <span className="tile-arrow" aria-hidden="true">
-                ↗
-              </span>
-            </button>
-          ))}
-          <button
-            className="game-tile sky"
-            onClick={() => navigate(`${prefix}/play/catchmind`)}
-          >
-            <span className="tile-icon">
-              <GameIcon type="catchmind" />
-            </span>
-            <strong>캐치마인드</strong>
-            <small>그림 속 정답은? · 체험</small>
-            <span className="tile-arrow" aria-hidden="true">
-              ↗
-            </span>
-          </button>
-          <button
-            className="game-tile yellow"
-            onClick={() => navigate(`${prefix}/play/kuji`)}
-          >
-            <span className="tile-icon">
-              <GameIcon type="kuji" />
-            </span>
-            <strong>예굼쿠지</strong>
-            <small>행운의 한 칸 · 체험</small>
-            <span className="tile-arrow" aria-hidden="true">
-              ↗
-            </span>
-          </button>
-          <div className="game-tile coming">
-            <span className="coming-plus" aria-hidden="true">
-              +
-            </span>
-            <strong>다음 놀이는?</strong>
-            <small>새로운 게임 준비 중</small>
-          </div>
-        </div>
-      </section>
-      <section className="home-games solo-games">
-        <div className="section-heading">
-          <h2>혼자서도 즐겁게</h2>
-        </div>
-        <button
-          className="wide-game claw-tile"
-          onClick={() => navigate(`${prefix}/play/claw`)}
-        >
-          <div>
-            <span className="preview-label">체험</span>
-            <h3>캐릭터 뽑기</h3>
-            <p>말랑한 친구들을 만나 봐!</p>
-          </div>
-          <img src="/characters/sprite.png" alt="" className="character" />
-        </button>
-        <div className="soon-row">
-          <span className="small-game-icon">
-            <GameIcon type="stock" />
-          </span>
-          <strong>주식 시장</strong>
-          <span className="pill muted">준비 중</span>
-        </div>
-        <div className="soon-row">
-          <span className="small-game-icon">
-            <GameIcon type="shop" />
-          </span>
-          <strong>예굼 상점</strong>
-          <span className="pill muted">준비 중</span>
-        </div>
-      </section>
-      <footer className="home-footer">예굼방에서, 오늘도 좋은 하루.</footer>
-      {demo && (
-        <div className="demo-login">
-          <button className="primary-button" onClick={() => navigate("/login")}>
-            로그인하고 함께하기
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-function Profile({
-  data,
-  onLogout,
-}: {
-  data: BootstrapResponse;
-  onLogout: () => Promise<void>;
-}) {
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  return (
-    <>
-      <Toolbar title="내 정보" onBack={() => navigate("/")} />
-      <div className="screen-body profile-page">
-        <div className="card profile-card">
-          <Avatar username={data.user.username} size={80} />
-          <h2>{data.user.displayName}</h2>
-          <span className="pill lavender">
-            {data.user.role === "admin" ? "운영자" : "플레이어"}
-          </span>
-          <Gold value={data.user.gold} />
-        </div>
-        <h2 className="small-heading">골드 · 점수 내역</h2>
-        <div className="card ledger-list">
-          {data.ledger.length ? (
-            data.ledger.map((entry) => (
-              <div className="ledger-entry" key={entry.id}>
-                <div>
-                  <strong>{entry.reason}</strong>
-                  <small>
-                    {new Date(entry.createdAt).toLocaleString("ko-KR", {
-                      timeZone: "Asia/Seoul",
-                    })}
-                  </small>
-                </div>
-                <span>
-                  {entry.amount > 0 ? "+" : ""}
-                  {entry.amount}
-                  {entry.currency === "gold" ? "G" : "점"}
-                </span>
-              </div>
-            ))
-          ) : (
-            <p className="empty-state">아직 변동 내역이 없어요.</p>
-          )}
-        </div>
-        {error && (
-          <p role="alert" className="form-message error">
-            {error}
-          </p>
-        )}
-        <button
-          className="secondary-button"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await onLogout();
-            } catch (e) {
-              setError(
-                e instanceof Error ? e.message : "로그아웃하지 못했어요.",
-              );
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {busy ? "로그아웃 중…" : "로그아웃"}
-        </button>
-      </div>
-    </>
-  );
-}
-function Ranking({ data }: { data: BootstrapResponse }) {
-  const players = [...data.players].sort(
-    (a, b) => b.weeklyScore - a.weeklyScore,
-  );
-  return (
-    <>
-      <Toolbar
-        title="이번 주 순위"
-        onBack={() => navigate("/")}
-        gold={data.user.gold}
-      />
-      <div className="screen-body ranking-page">
-        <div className="ranking-hero">
-          <span>✦</span>
-          <h1>같이 놀면 더 즐거워</h1>
-          <p>월요일부터 일요일까지, 우리의 한 주</p>
-        </div>
-        {players.map((player) => (
-          <div className="card ranking-player" key={player.id}>
-            <span className="rank-badge first">
-              {players.findIndex((p) => p.weeklyScore === player.weeklyScore) +
-                1}
-            </span>
-            <Avatar username={player.username} size={48} />
-            <strong>{player.displayName}</strong>
-            <b>
-              {player.weeklyScore}
-              <small>점</small>
-            </b>
-          </div>
-        ))}
-        <p className="subtle-note">점수 배점과 주간 보상은 준비 중이에요.</p>
-      </div>
-    </>
-  );
-}
-
 export default function App() {
   const route = useRoute();
   const [data, setData] = useState<BootstrapResponse | null>(null);
@@ -565,18 +261,14 @@ export default function App() {
       document.removeEventListener("visibilitychange", visible);
     };
   }, [data?.user.id, refresh]);
-  const [sample, setSample] = useState<{ id: GameId; game: GameState } | null>(
-    null,
-  );
   const path = demo ? route.replace("/preview", "") || "/" : route;
   const gameId = path.match(/^\/game\/(wake|offwork|luck)$/)?.[1] as
     GameId | undefined;
   const play = path.match(/^\/play\/(catchmind|kuji|claw)$/)?.[1] as
     "catchmind" | "kuji" | "claw" | undefined;
-  useEffect(() => {
-    if (demo && gameId) setSample({ id: gameId, game: sampleGame(gameId) });
-  }, [demo, gameId]);
-  const home = () => navigate(demo ? "/preview" : "/");
+  const stockId = path.match(/^\/stock\/([a-z]+)$/)?.[1];
+  const go = (to: string) => navigate(demo ? `/preview${to === "/" ? "" : to}` : to);
+  const home = () => go("/");
   function mutate<T>(
     action: () => Promise<T>,
     apply: (result: T) => void,
@@ -605,35 +297,19 @@ export default function App() {
     mutationQueue.current = operation.catch(() => undefined);
     return operation;
   }
+  const signedIn = !demo && !loading && data !== null;
+  const view = demo ? previewHome() : data ? homeData(data) : null;
+  const me = demo ? previewUser : data?.user;
+  const tab = tabs.find((t) => t.path === path)?.path;
   let content: React.ReactNode;
-  if (demo) {
-    if (play) content = <PreviewGames key={play} game={play} onBack={home} />;
-    else if (gameId && sample?.id === gameId)
-      content = (
-        <PredictionGame
-          key={`demo-${gameId}`}
-          game={sample.game}
-          user={
-            gameId === "luck"
-              ? { ...demoUser, username: "siwon", displayName: "siwon" }
-              : demoUser
-          }
-          serverTime={new Date().toISOString()}
-          demo
-          onBack={home}
-          onSave={async () => {}}
-          onReveal={async () => {}}
-        />
-      );
-    else content = <Home data={null} demo />;
-  } else if (loading)
+  if (!demo && loading)
     content = (
       <div className="loading-page" role="status">
         <Character username="min" />
         <p>예굼방 문을 여는 중…</p>
       </div>
     );
-  else if (!data)
+  else if (!demo && !data)
     content = (
       <>
         <Login
@@ -663,9 +339,33 @@ export default function App() {
         )}
       </>
     );
+  else if (!view || !me) content = null;
   else if (play)
-    content = <PreviewGames key={play} game={play} onBack={home} />;
-  else if (gameId) {
+    content = (
+      <PreviewGames
+        key={play}
+        game={play}
+        me={me.username}
+        gold={me.gold}
+        evening={isEvening()}
+        onBack={home}
+      />
+    );
+  else if (gameId && demo) {
+    const viewer = previewViewer(gameId);
+    content = (
+      <PredictionGame
+        key={`demo-${gameId}`}
+        game={previewGame(gameId)}
+        user={{ ...previewUser, username: viewer, displayName: viewer }}
+        serverTime={new Date().toISOString()}
+        demo
+        onBack={home}
+        onSave={async () => {}}
+        onReveal={async () => {}}
+      />
+    );
+  } else if (gameId && data) {
     const game = data.games.find((g) => g.id === gameId);
     content = game ? (
       <PredictionGame
@@ -720,20 +420,71 @@ export default function App() {
         </button>
       </div>
     );
-  } else if (path === "/profile")
+  } else if (path === "/games")
+    content = (
+      <div className="games-tab">
+        <header className="tab-header">
+          <h1>게임</h1>
+        </header>
+        <div className="screen-body stack">
+          <TodayGames data={view} go={go} />
+          <SoloGames go={go} />
+        </div>
+      </div>
+    );
+  else if (path === "/ranking")
+    content = (
+      <Ranking
+        me={view.displayName}
+        gold={me.gold}
+        players={view.players}
+        daily={demo ? previewDaily : dailyScores(data?.ledger ?? [])}
+        lastWeek={demo ? previewLastWeek : null}
+        onBack={home}
+      />
+    );
+  else if (path === "/attendance")
+    content = (
+      <Attendance attendanceKey={view.attendanceKey} gold={me.gold} onBack={home} />
+    );
+  else if (path === "/profile")
     content = (
       <Profile
-        data={data}
-        onLogout={() =>
-          mutate(api.logout, () => {
-            setData(null);
-            navigate("/login");
-          })
+        username={view.username}
+        displayName={view.displayName}
+        attendanceKey={view.attendanceKey}
+        gold={me.gold}
+        weeklyScore={me.weeklyScore}
+        ledger={demo ? previewLedger() : (data?.ledger ?? [])}
+        others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
+        onBack={home}
+        onLogin={demo ? () => navigate("/login") : undefined}
+        onLogout={
+          signedIn
+            ? () =>
+                mutate(api.logout, () => {
+                  setData(null);
+                  navigate("/login");
+                })
+            : undefined
         }
       />
     );
-  else if (path === "/ranking") content = <Ranking data={data} />;
-  else content = <Home data={data} />;
+  else if (path === "/stock")
+    content = <StockMarket gold={me.gold} onBack={home} go={go} />;
+  else if (stockId)
+    content = <StockDetail id={stockId} gold={me.gold} onBack={() => go("/stock")} />;
+  else if (path === "/shop") content = <ShopMain go={go} />;
+  else if (path === "/shop/lotto")
+    content = <Lotto gold={me.gold} onBack={() => go("/shop")} />;
+  else if (path === "/shop/speetto")
+    content = <Speetto gold={me.gold} onBack={() => go("/shop")} />;
+  else content = <Home data={view} go={go} />;
+  // Sub-pages have their own back button instead of the tab bar.
+  const subPage =
+    !!play || !!gameId || !!stockId ||
+    ["/attendance", "/stock", "/shop/lotto", "/shop/speetto"].includes(path);
+  const showTabs = !!view && !!me && !subPage;
   return (
     <>
       <aside className="desktop-brand" aria-hidden="true">
@@ -751,7 +502,7 @@ export default function App() {
           <i />
         </div>
       </aside>
-      <main className="app-shell">
+      <main className={`app-shell ${showTabs ? "with-tabs" : ""}`}>
         {!online && (
           <div className="connection-banner" role="status">
             오프라인이에요. 게임 저장은 연결 후 가능해요.
@@ -764,6 +515,7 @@ export default function App() {
           </div>
         )}
         {content}
+        {showTabs && <TabBar active={tab ?? "/"} onNavigate={go} />}
       </main>
     </>
   );
