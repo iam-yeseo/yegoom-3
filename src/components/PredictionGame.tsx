@@ -295,10 +295,13 @@ export function PredictionGame({
     if (game.id === "luck") anim(luckNumber.current, [{ translate: "0 0" }, { translate: "0 -3px" }, { translate: "0 0" }], { dur: 140, fill: "none" });
   });
   useEffect(() => {
-    void preloadSprites(heroKey, ["greet", "jump"]);
+    void preloadSprites(heroKey, revealed ? ["jump"] : ["greet", "jump"]);
     setOneShot(null);
+    if (revealed) return;
     const timer = window.setTimeout(() => setOneShot((state) => state ?? "greet"), 320);
     return () => window.clearTimeout(timer);
+    // Only read the reveal state on entry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.id, heroKey]);
   useEffect(() => {
     if (!revealed) return;
