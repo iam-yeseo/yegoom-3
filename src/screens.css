@@ -2446,6 +2446,6 @@ em.ring::after {
 @media (min-width: 600px) {
   .tabbar,
   .kuji-sheet {
-    width: 390px;
+    width: var(--app-width);
   }
 }
