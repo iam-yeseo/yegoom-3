@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   BootstrapResponse,
   GameId,
@@ -7,6 +7,7 @@ import type {
 } from "../shared/types";
 import { ApiFailure, api } from "./api";
 import { dayKey } from "./attendance";
+import { anim } from "./motion";
 import { Character, TabBar, tabs } from "./components/UI";
 import { PredictionGame } from "./components/PredictionGame";
 import { PreviewGames } from "./components/PreviewGames";
@@ -86,6 +87,45 @@ function dailyScores(ledger: LedgerEntry[]) {
       daily[kstParts(date).weekday] += entry.amount;
   }
   return daily;
+}
+/** Navigation depth: tab pages 0, sub-pages 1, a stock's detail 2. */
+function depthOf(path: string) {
+  if (/^\/stock\/./.test(path)) return 2;
+  if (tabs.some((t) => t.path === path)) return 0;
+  return path === "/login" ? 0 : 1;
+}
+/** Pushes deeper pages in from the right, pops back from the left and fades tab switches. */
+function useScreenTransition(path: string) {
+  const ref = useRef<HTMLDivElement>(null);
+  const previous = useRef(path);
+  useLayoutEffect(() => {
+    const from = previous.current;
+    previous.current = path;
+    if (from === path || !ref.current) return;
+    const delta = depthOf(path) - depthOf(from);
+    if (delta > 0)
+      anim(ref.current, [{ translate: "100% 0" }, { translate: "0 0" }], { dur: 300, ease: "out", fill: "none" });
+    else if (delta < 0)
+      anim(ref.current, [{ translate: "-24% 0", opacity: 0.6 }, { translate: "0 0", opacity: 1 }], { dur: 260, ease: "inOut", fill: "none" });
+    else anim(ref.current, [{ opacity: 0 }, { opacity: 1 }], { dur: 240, ease: "inOut", fill: "none" });
+  }, [path]);
+  return ref;
+}
+function Skeleton() {
+  return (
+    <div className="skeleton-page" role="status" aria-label="불러오는 중">
+      <div className="skeleton-hero" />
+      {[0, 1, 2, 3].map((i) => (
+        <div className="skeleton-card" key={i} style={{ animationDelay: `${i * 35}ms` }}>
+          <i />
+          <span>
+            <b />
+            <b />
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 }
 function Login({
   onLogin,
@@ -302,13 +342,7 @@ export default function App() {
   const me = demo ? previewUser : data?.user;
   const tab = tabs.find((t) => t.path === path)?.path;
   let content: React.ReactNode;
-  if (!demo && loading)
-    content = (
-      <div className="loading-page" role="status">
-        <Character username="min" />
-        <p>예굼방 문을 여는 중…</p>
-      </div>
-    );
+  if (!demo && loading) content = <Skeleton />;
   else if (!demo && !data)
     content = (
       <>
@@ -485,6 +519,7 @@ export default function App() {
     !!play || !!gameId || !!stockId ||
     ["/attendance", "/stock", "/shop/lotto", "/shop/speetto"].includes(path);
   const showTabs = !!view && !!me && !subPage;
+  const screenRef = useScreenTransition(path);
   return (
     <>
       <aside className="desktop-brand" aria-hidden="true">
@@ -514,7 +549,9 @@ export default function App() {
             <button onClick={() => void refresh()}>다시 시도</button>
           </div>
         )}
-        {content}
+        <div className="screen" ref={screenRef}>
+          {content}
+        </div>
         {showTabs && <TabBar active={tab ?? "/"} onNavigate={go} />}
       </main>
     </>

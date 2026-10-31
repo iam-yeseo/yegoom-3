@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { SectionTitle, Toolbar, art, artSrc, type ArtKey } from "../components/UI";
+import { Coin, SectionTitle, Toolbar, art, artSrc, type ArtKey } from "../components/UI";
+import { anim, confetti, crumbs, popIn, reduced, shake, tween, useCountUp } from "../motion";
 import { BALANCE, kstParts } from "../sample";
 import { ShopCards } from "./Home";
 
@@ -34,6 +35,81 @@ function secondsToDraw() {
   return Math.max(0, (BALANCE.lotto.drawHour - t.hour) * 3600 - t.minute * 60 - now.getSeconds());
 }
 
+/** 17:00 draw: winning balls roll in one by one, then my matching numbers light up. */
+function LottoResult({ gold, onBack, bought }: { gold: number; onBack: () => void; bought: number[][] }) {
+  const [rolled, setRolled] = useState(reduced() ? winning.length : 0);
+  const done = rolled >= winning.length;
+  const draw = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (done) return;
+    const t = setTimeout(() => setRolled((n) => n + 1), rolled ? 520 : 300);
+    return () => clearTimeout(t);
+  }, [rolled, done]);
+  useEffect(() => {
+    if (!rolled) return;
+    anim(draw.current?.children[rolled - 1], [
+      { translate: "-220px 0", rotate: "-200deg", opacity: 0 },
+      { translate: "0 0", rotate: "0deg", opacity: 1 },
+    ], { dur: 560, ease: "out" });
+    document.querySelectorAll(`.ticket-balls i[data-n="${winning[rolled - 1]}"]`).forEach((el) =>
+      anim(el, [{ scale: "1" }, { scale: "1.25", offset: 0.4 }, { scale: "1" }], { dur: 420, delay: 420, ease: "out", fill: "none" }),
+    );
+  }, [rolled]);
+  return (
+    <div className="lotto result">
+      <div className="lotto-hero result">
+        <Toolbar title="로또" onBack={onBack} gold={gold} />
+        <div className="draw">
+          <span>
+            {kstParts().month}월 {kstParts().day}일 당첨 번호
+          </span>
+          <div ref={draw}>
+            {winning.map((n, i) => (
+              <i key={n} style={{ background: winColors[i], color: i ? "#fff" : "#5C4300", visibility: i < rolled ? "visible" : "hidden" }}>
+                {n}
+              </i>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="screen-body stack">
+        {bought.map((ticket, t) => {
+          const matched = ticket.filter((n) => winning.includes(n)).length;
+          const won = matched >= 3;
+          return (
+            <section className="card ticket" key={t}>
+              <div className="card-head">
+                <span className={`ticket-tag ${won && done ? "won" : ""}`} style={{ opacity: done ? 1 : 0 }}>
+                  {won ? `4등 · ${matched}개 일치` : `${matched}개 일치`}
+                </span>
+                <b className={won ? "gain" : "none"} style={{ opacity: done ? 1 : 0 }}>
+                  {won ? "+1,000G" : "꽝"}
+                </b>
+              </div>
+              <div className="ticket-balls">
+                {ticket.map((n) => {
+                  const at = winning.indexOf(n);
+                  const lit = at >= 0 && at < rolled;
+                  return (
+                    <i
+                      key={n}
+                      data-n={n}
+                      style={lit ? { background: winColors[at], color: at ? "#fff" : "#5C4300" } : undefined}
+                    >
+                      {n}
+                    </i>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+        <p className="next-draw">다음 추첨 · 내일 17:00</p>
+      </div>
+    </div>
+  );
+}
+
 export function Lotto({ gold, onBack }: { gold: number; onBack: () => void }) {
   const [left, setLeft] = useState(secondsToDraw);
   const [picks, setPicks] = useState<number[]>([3, 11, 18]);
@@ -43,57 +119,31 @@ export function Lotto({ gold, onBack }: { gold: number; onBack: () => void }) {
     return () => clearInterval(timer);
   }, []);
   const { picks: need, max, price } = BALANCE.lotto;
-  if (left <= 0) {
-    return (
-      <div className="lotto result">
-        <div className="lotto-hero result">
-          <Toolbar title="로또" onBack={onBack} gold={gold} />
-          <div className="draw">
-            <span>
-              {kstParts().month}월 {kstParts().day}일 당첨 번호
-            </span>
-            <div>
-              {winning.map((n, i) => (
-                <i key={n} style={{ background: winColors[i], color: i ? "#fff" : "#5C4300" }}>
-                  {n}
-                </i>
-              ))}
-            </div>
-          </div>
-        </div>
-        <div className="screen-body stack">
-          {bought.map((ticket, t) => {
-            const matched = ticket.filter((n) => winning.includes(n)).length;
-            const won = matched >= 3;
-            return (
-              <section className="card ticket" key={t}>
-                <div className="card-head">
-                  <span className={`ticket-tag ${won ? "won" : ""}`}>
-                    {won ? `4등 · ${matched}개 일치` : `${matched}개 일치`}
-                  </span>
-                  <b className={won ? "gain" : "none"}>{won ? "+1,000G" : "꽝"}</b>
-                </div>
-                <div className="ticket-balls">
-                  {ticket.map((n) => {
-                    const at = winning.indexOf(n);
-                    return (
-                      <i
-                        key={n}
-                        style={at >= 0 ? { background: winColors[at], color: at ? "#fff" : "#5C4300" } : undefined}
-                      >
-                        {n}
-                      </i>
-                    );
-                  })}
-                </div>
-              </section>
-            );
-          })}
-          <p className="next-draw">다음 추첨 · 내일 17:00</p>
-        </div>
-      </div>
+  const balls = useRef<HTMLDivElement>(null);
+  const pickBall = (button: HTMLElement, n: number, on: boolean) => {
+    if (!on && picks.length >= need) {
+      shake(button);
+      return;
+    }
+    if (!on) anim(button, [{ scale: ".6" }, { scale: "1.18", offset: 0.6 }, { scale: "1" }], { dur: 340, fill: "none" });
+    setPicks((prev) => (on ? prev.filter((x) => x !== n) : [...prev, n]));
+  };
+  const autoPick = () => {
+    const next = [...picks];
+    const added: number[] = [];
+    while (next.length + added.length < need) {
+      const n = 1 + Math.floor(Math.random() * max);
+      if (!next.includes(n) && !added.includes(n)) added.push(n);
+    }
+    // Fill the empty places one at a time.
+    added.forEach((n, i) =>
+      setTimeout(() => {
+        setPicks((prev) => (prev.length < need && !prev.includes(n) ? [...prev, n] : prev));
+        anim(balls.current?.children[n - 1], [{ scale: ".6" }, { scale: "1.18", offset: 0.6 }, { scale: "1" }], { dur: 340, fill: "none" });
+      }, reduced() ? 0 : i * 140),
     );
-  }
+  };
+  if (left <= 0) return <LottoResult gold={gold} onBack={onBack} bought={bought} />;
   const full = picks.length === need;
   return (
     <div className="lotto">
@@ -116,34 +166,16 @@ export function Lotto({ gold, onBack }: { gold: number; onBack: () => void }) {
             <h2>
               {picks.length} / {need}
             </h2>
-            <button
-              className="auto-button"
-              onClick={() => {
-                const next = [...picks];
-                while (next.length < need) {
-                  const n = 1 + Math.floor(Math.random() * max);
-                  if (!next.includes(n)) next.push(n);
-                }
-                setPicks(next);
-              }}
-            >
+            <button className="auto-button" onClick={autoPick}>
               자동
             </button>
           </div>
-          <div className="balls">
+          <div className="balls" ref={balls}>
             {Array.from({ length: max }, (_, i) => {
               const n = i + 1;
               const on = picks.includes(n);
               return (
-                <button
-                  key={n}
-                  aria-pressed={on}
-                  onClick={() =>
-                    setPicks((prev) =>
-                      on ? prev.filter((x) => x !== n) : prev.length < need ? [...prev, n] : prev,
-                    )
-                  }
-                >
+                <button key={n} aria-pressed={on} data-nopress onClick={(e) => pickBall(e.currentTarget, n, on)}>
                   {n}
                 </button>
               );
@@ -178,12 +210,40 @@ export function Lotto({ gold, onBack }: { gold: number; onBack: () => void }) {
 }
 
 const symbols: ArtKey[] = ["cat", "cat", "cat"];
-export function Speetto({ gold, onBack }: { gold: number; onBack: () => void }) {
+export function Speetto({ gold: startGold, onBack }: { gold: number; onBack: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const strokes = useRef(0);
   const scratching = useRef(false);
+  const symbolsRef = useRef<HTMLDivElement>(null);
   const [revealed, setRevealed] = useState(false);
   const [round, setRound] = useState(0);
+  const [prize, setPrize] = useState(0);
+  const [gold, setGold] = useState(startGold);
+  const shownGold = useCountUp(gold);
+  // On a win: the coating fades, symbols pop in turn, confetti, then the
+  // prize counts up and lands in the gold pill.
+  useEffect(() => {
+    if (!revealed) return;
+    const syms = [...(symbolsRef.current?.children ?? [])];
+    syms.forEach((el, i) => popIn(el, { delay: 450 + i * 150 }));
+    const t = setTimeout(() => {
+      confetti(symbolsRef.current);
+      tween(0, BALANCE.speetto.prize, 900, (v) => setPrize(Math.round(v)), () => setGold((g) => g + BALANCE.speetto.prize));
+    }, reduced() ? 0 : 450 + syms.length * 150);
+    return () => clearTimeout(t);
+  }, [revealed]);
+  /** Share of the coating already scratched off, sampled on a coarse grid. */
+  function cleared(node: HTMLCanvasElement) {
+    const data = node.getContext("2d")!.getImageData(0, 0, node.width, node.height).data;
+    let clear = 0;
+    let total = 0;
+    for (let y = 4; y < node.height; y += 10)
+      for (let x = 4; x < node.width; x += 10) {
+        total += 1;
+        if (data[(y * node.width + x) * 4 + 3] < 40) clear += 1;
+      }
+    return clear / total;
+  }
   useEffect(() => {
     const node = canvas.current;
     const ctx = node?.getContext("2d");
@@ -202,7 +262,7 @@ export function Speetto({ gold, onBack }: { gold: number; onBack: () => void }) 
       ctx.fill();
     }
     ctx.fillStyle = "#fff";
-    ctx.font = "800 40px Pretendard Variable, Pretendard, sans-serif";
+    ctx.font = "800 40px TmoneyRoundWind, Pretendard Variable, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("여기를 긁어보세요", node.width / 2, node.height / 2);
@@ -222,12 +282,23 @@ export function Speetto({ gold, onBack }: { gold: number; onBack: () => void }) 
       7,
     );
     ctx.fill();
+    crumbs(e.clientX, e.clientY);
     strokes.current += 1;
-    if (strokes.current > 90) setRevealed(true);
+    if (strokes.current % 8 === 0 && cleared(node) > 0.6) setRevealed(true);
   }
   return (
     <div className="speetto">
-      <Toolbar title="스피또" onBack={onBack} gold={gold} />
+      <Toolbar
+        title="스피또"
+        onBack={onBack}
+        right={
+          <span className="gold">
+            <Coin />
+            {shownGold.toLocaleString("ko-KR")}
+            <span className="sr-only"> 골드</span>
+          </span>
+        }
+      />
       <p className="speetto-rule">같은 캐릭터 3개면 당첨</p>
       <div className="screen-body">
         <section className="scratch-card">
@@ -236,7 +307,7 @@ export function Speetto({ gold, onBack }: { gold: number; onBack: () => void }) 
             <span>No. {String(412 + round).padStart(4, "0")}</span>
           </div>
           <div className="scratch-area">
-            <div className="scratch-symbols">
+            <div className="scratch-symbols" ref={symbolsRef}>
               {symbols.map((key, i) => (
                 <span key={i} style={{ background: art[key].tint }}>
                   <img className="character" src={artSrc(key)} alt={art[key].name} />
@@ -264,7 +335,7 @@ export function Speetto({ gold, onBack }: { gold: number; onBack: () => void }) 
             />
           </div>
           <div className={`scratch-result ${revealed ? "won" : ""}`} aria-live="polite">
-            {revealed ? `당첨! +${BALANCE.speetto.prize.toLocaleString("ko-KR")}G` : "?"}
+            {revealed ? `당첨! +${prize.toLocaleString("ko-KR")}G` : "?"}
           </div>
           {!revealed && (
             <button className="text-button" onClick={() => setRevealed(true)}>
@@ -278,6 +349,8 @@ export function Speetto({ gold, onBack }: { gold: number; onBack: () => void }) 
           className="primary-button"
           onClick={() => {
             setRevealed(false);
+            setPrize(0);
+            setGold((g) => g - BALANCE.speetto.price);
             setRound((r) => r + 1);
           }}
         >
