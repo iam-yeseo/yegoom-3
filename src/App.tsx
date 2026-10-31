@@ -111,6 +111,50 @@ function useScreenTransition(path: string) {
   }, [path]);
   return ref;
 }
+/** The colour painted at the top of the app column, for the phone's status bar. */
+function topColor(shell: Element): string {
+  const rect = shell.getBoundingClientRect();
+  let el = document.elementFromPoint(rect.left + rect.width / 2, Math.max(rect.top, 0) + 1);
+  for (; el && el !== document.documentElement; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    // A gradient counts by its first stop unless that stop is see-through.
+    const stop = style.backgroundImage.match(/rgba?\([^)]*\)/)?.[0];
+    if (stop && !/,\s*0\)$/.test(stop)) return stop;
+    if (!/rgba\(0, 0, 0, 0\)|transparent/.test(style.backgroundColor)) return style.backgroundColor;
+  }
+  return "#FFF9EE";
+}
+/** Keeps theme-color and the page background behind the status bar in step
+ * with the top of the current screen, so the bar blends into the hero. */
+function useStatusBarColor(screen: { current: HTMLElement | null }, path: string) {
+  useEffect(() => {
+    const node = screen.current;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (!node || !meta) return;
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const shell = node.closest(".app-shell");
+        if (!shell) return;
+        const color = topColor(shell);
+        meta.setAttribute("content", color);
+        document.documentElement.style.setProperty("--top-color", color);
+      });
+    };
+    update();
+    // Again once the push/pop transition has settled, and whenever the
+    // screen changes its own backgrounds (character swap, claw win…).
+    const settle = setTimeout(update, 360);
+    const observer = new MutationObserver(update);
+    observer.observe(node, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style"] });
+    return () => {
+      clearTimeout(settle);
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [screen, path]);
+}
 function Skeleton() {
   return (
     <div className="skeleton-page" role="status" aria-label="불러오는 중">
@@ -520,6 +564,7 @@ export default function App() {
     ["/attendance", "/stock", "/shop/lotto", "/shop/speetto"].includes(path);
   const showTabs = !!view && !!me && !subPage;
   const screenRef = useScreenTransition(path);
+  useStatusBarColor(screenRef, `${path}|${loading}|${!!data}`);
   return (
     <>
       <aside className="desktop-brand" aria-hidden="true">

@@ -973,6 +973,13 @@ button svg {
     transform: scale(1);
   }
 }
+/* On phones the page behind the status bar takes the top colour of the
+   current screen (set from App), and the cream of the app below it. */
+@media (max-width: 599px) {
+  :root {
+    background: linear-gradient(var(--top-color, #fff9ee) 50%, #fff9ee 50%);
+  }
+}
 @media (min-width: 600px) {
   .app-shell {
     max-width: 390px;
