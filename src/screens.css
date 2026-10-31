@@ -11,7 +11,7 @@
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: min(100%, 390px);
+  width: 100%;
   height: calc(78px + env(safe-area-inset-bottom));
   padding: 12px 0 env(safe-area-inset-bottom);
   display: grid;
@@ -2336,7 +2336,7 @@ em.delisted {
   justify-content: center;
 }
 .kuji-sheet {
-  width: min(100%, 390px);
+  width: 100%;
   padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
   border-radius: 28px 28px 0 0;
   background: #fff9ee;
@@ -2446,4 +2446,11 @@ em.ring::after {
 .podium-block,
 .daily-bars i {
   transform-origin: 50% 100%;
+}
+
+@media (min-width: 600px) {
+  .tabbar,
+  .kuji-sheet {
+    width: 390px;
+  }
 }

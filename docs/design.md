@@ -6,7 +6,7 @@
 
 | 요소 | 기준 |
 | --- | --- |
-| 글꼴 | 티머니 둥근바람체(TmoneyRoundWind) Regular·ExtraBold, `public/fonts`의 WOFF2. 파일이 없거나 불러오는 동안은 Pretendard Variable |
+| 글꼴 | 티머니 둥근바람체(TmoneyRoundWind) Regular·ExtraBold. 한글·숫자·영문 모두 이 글꼴로 표시한다. `public/fonts`의 WOFF2는 기존 yegoom 레포의 파일(사용자가 제공한 `01_otf.zip`을 윤곽 그대로 압축한 것)과 같다. 불러오는 동안은 Pretendard Variable |
 | 바탕 | `#FFF9EE` |
 | 본문/보조 | `#3A3340` / `#7C7383` |
 | CTA | `#F47C66`, 높이 56px, radius 20px |
@@ -16,7 +16,7 @@
 | 보라 | `#EEE8FC` / `#B9A3F0` / `#7556C4` |
 | 노랑 | `#FFF4CC` / `#FFD866` / `#94700A` |
 | 파랑 | `#E3F1FC` / `#8CC8F2` / `#3B7FB3` |
-| 기준 폭 | 390px, 좁은 화면에도 맞춤 |
+| 기준 폭 | 휴대전화에서는 화면 전체 폭, 600px 이상 화면에서는 390px 열을 가운데 정렬 |
 | 본문 여백 | 16px, 카드 간격 12px |
 | 제목/카운트다운 | 17px 800 / 44px 800 |
 
