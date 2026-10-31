@@ -20,16 +20,32 @@
 | 본문 여백 | 16px, 카드 간격 12px |
 | 제목/카운트다운 | 17px 800 / 44px 800 |
 
-캐릭터 8종의 원본은 크림색 배경의 1254px RGB 이미지다. 시안처럼 `mix-blend-mode:multiply`로 배경을 녹이면 색이 있는 배경 위에서 네모 테두리가 드러나므로, `scripts/cutout-characters.py`로 배경을 투명하게 오리고 바닥 그림자만 반투명으로 남긴 640px PNG를 `public/characters`에 넣었다. 캐릭터 그림 자체는 수정하지 않았다. 파일 이름은 시안과 같다(`bread`, `monkey` 등). 현재 애니메이션은 CSS의 가벼운 움직임이며 `prefers-reduced-motion`을 지원한다. 최종 투명 캐릭터나 Rive/Lottie는 후속 작업이다.
+캐릭터 8종은 사용자가 완성한 투명 RGBA 아트다. 원본은 Google Drive의 [YEGOOM 3/characterImg](https://drive.google.com/drive/folders/1PTne7e8qwR8GlWlDRXyHTMHcZ_MDo71O)에 읽기 전용으로 보관한다. 캐릭터마다 `idle`, `happy`, `sleepy`, `greet`, `jump` 시트가 하나씩 있으며, 각 시트는 1536×1024px, 3열×2행의 512×512px 칸 6개로 구성된다. 프레임 순서는 좌→우, 위→아래이며 발 기준선은 칸 안의 y=470이다. 공중 프레임과 포즈별 차이를 포함해 원본 위치를 그대로 유지한다.
+
+`scripts/prepare-characters.py`는 칸을 자르고 이어 붙이거나 포맷을 변환할 뿐, 앱에 쓰는 프레임을 리샘플하거나 이동·보정하지 않는다. `idle`의 f0을 그대로 저장한 512px RGBA PNG 8장을 `public/characters/<key>.png`에, 6프레임을 가로로 이어 붙인 3072×512px WebP 40장을 `public/characters/sprites/<key>-<state>.webp`에 둔다. WebP는 RGB quality 85와 무손실 alpha를 사용한다. 키·캐릭터 이름·tint는 유지한다. 분리한 프레임, 미리보기 GIF, 검사 시트와 `manifest.csv`는 [characterImg_web](https://drive.google.com/drive/folders/1mtBQMxxZqBEpQ2uk532ZtcuBg98o8FER)에 보관한다.
+
+`src/components/UI.tsx`의 `CharacterSprite`는 `background-position-x`를 `steps(6, jump-none)`으로 옮겨 6프레임을 같은 시간씩 표시한다. 재생 설정은 한 곳에 모은다.
+
+| state | 길이 | 재생 |
+| --- | --- | --- |
+| `idle` | 1800ms | 반복 |
+| `sleepy` | 2400ms | 반복 |
+| `happy` | 1200ms | 반복 |
+| `greet` | 900ms | 1회 후 기본 state로 복귀 |
+| `jump` | 680ms | 1회 후 기본 state로 복귀 |
+
+홈 방은 아침에 `greet` 후 `idle`, 저녁에 인사 없이 `sleepy`를 재생하며 탭하면 `jump` 후 해당 기본 state로 돌아온다. 예측 게임 히어로는 기존 지연 시간을 유지해 진입 인사와 공개 후 점프를 재생한다. 로그인 3마리는 `idle`을 0·−0.6·−1.2초 지연으로 시작하고, 랭킹 시상대는 착지 후 1위가 `happy`, 2·3위가 `idle`을 반복한다. 내 정보는 `idle`, 뽑기 성공 화면은 착지 후 `happy`를 반복한다. Avatar, 캐릭터 선택 그리드, 목록·배너·방 액자, 주식·상점·쿠지, 뽑기 기계 안과 집게의 인형은 정지 PNG를 사용한다.
+
+스프라이트가 로드되기 전이나 FAIL 판정일 때는 정지 이미지를 표시하며, 1회 재생은 로드가 끝난 뒤 시작한다. `prefers-reduced-motion: reduce`에서는 f0 정지 이미지만 표시하고 1회 재생 완료 콜백을 바로 호출한다. 스프라이트에는 같은 의미의 `bob`·`sway`나 기존 인사·점프 모션을 겹치지 않는다. `dropIn`, 내 정보의 캐릭터 교체, `popIn`은 바깥 요소에서 유지한다. Rive/Lottie는 후속 작업이다.
 
 Pretendard 라이선스는 `public/fonts/OFL.txt`에 포함한다. 캐릭터는 사용자 제공 자료로서 별도 재배포 라이선스를 임의 부여하지 않는다. 앱 아이콘은 별도 SVG로 만들었으며 `scripts/build-icons.mjs`로 PNG를 재생성할 수 있다.
 
 ## 모션
 
-Claude Design의 `Yegoom Motion Spec`과 `yegoom-motion.js`를 `src/motion.ts`로 옮겼다. 토큰(시간 120–1200ms, `out`·`inOut`·`spring` 곡선)과 캐릭터 동작(대기·인사·탭 반응·기쁨 홉·저녁 흔들림), 컨페티·반짝이·코인·토스트를 모두 이 파일에서 가져다 쓴다. 규칙은 시안과 같다.
+Claude Design의 `Yegoom Motion Spec`과 `yegoom-motion.js`를 `src/motion.ts`로 옮겼다. 토큰(시간 120–1200ms, `out`·`inOut`·`spring` 곡선), 기존 캐릭터 동작 함수, 컨페티·반짝이·코인·토스트는 이 파일에 유지한다. 위에서 정한 스프라이트 적용 위치의 인사·점프·반복 동작만 프레임 재생으로 바꾼다. 나머지 모션 규칙은 시안과 같다.
 
-- transform(scale·translate·rotate)과 opacity만 움직인다. 레이아웃 속성은 애니메이션하지 않는다.
-- 반복 모션은 캐릭터 대기와 인형 운반 흔들림뿐이다. 축하 연출은 1.2초 이하, 컨페티는 화면당 한 번이다.
+- `src/motion.ts`의 모션은 transform(scale·translate·rotate)과 opacity만 움직인다. 스프라이트는 안쪽 요소의 `background-position`만 움직이며, 레이아웃 속성은 애니메이션하지 않는다.
+- 반복 모션은 위 표의 캐릭터 상태와 인형 운반 흔들림에 사용한다. 기존 축하 연출은 1.2초 이하, 컨페티는 화면당 한 번이다.
 - `prefers-reduced-motion`이면 이동·크기·회전을 끄고 200ms 이하 페이드만 남긴다. 숫자는 바로 바뀌고 입자와 반복 모션은 없다.
 
 시안과 다른 점: 하위 화면 push/pop은 새 화면만 움직인다(이전 화면은 바로 사라진다). 화면 전환에서 이전 화면을 함께 밀어내려면 라우터가 두 화면을 동시에 유지해야 해서 후속 작업으로 남겼다.
