@@ -13,6 +13,7 @@
   font-display: swap;
 }
 :root {
+  --app-width: 560px;
   --dur-press: 120ms;
   --dur-s: 200ms;
   --dur-m: 260ms;
@@ -104,7 +105,7 @@ button svg {
 }
 .app-shell {
   position: relative;
-  /* Phones use the full width; wider screens keep the 390px design column. */
+  /* Phones use the full width; wider screens keep the 560px app column. */
   width: 100%;
   min-height: 100dvh;
   margin: 0 auto;
@@ -1005,7 +1006,7 @@ button svg {
 }
 @media (min-width: 600px) {
   .app-shell {
-    max-width: 390px;
+    max-width: var(--app-width);
     margin: 32px auto;
     min-height: calc(100dvh - 64px);
     border-radius: 28px;
@@ -1016,11 +1017,11 @@ button svg {
     min-height: calc(100dvh - 64px);
   }
 }
-@media (min-width: 1024px) {
+@media (min-width: 1180px) {
   .desktop-brand {
     display: block;
     position: fixed;
-    left: max(40px, calc(50% - 450px));
+    left: calc(50% - var(--app-width) / 2 - 40px - 210px);
     top: 100px;
     width: 210px;
   }
