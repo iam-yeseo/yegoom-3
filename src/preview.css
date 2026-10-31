@@ -600,6 +600,9 @@
   font-size: 16px;
   font-weight: 800;
 }
+.preview-game.pg-claw {
+  --claw-machine-width: 400px;
+}
 .pg-claw {
   background: linear-gradient(180deg, #e3f1fc 0%, #fff9ee 55%);
 }
@@ -639,8 +642,13 @@
   margin-bottom: 4px;
   white-space: nowrap;
 }
+.pg-machine,
+.pg-claw-controls {
+  width: calc(100% - 32px);
+  max-width: var(--claw-machine-width);
+  margin: 0 auto;
+}
 .pg-machine {
-  margin: 0 16px;
   border-radius: 32px;
   background: #ffb9a6;
   padding: 12px;
@@ -761,7 +769,7 @@
   max-width: none;
 }
 .pg-claw-controls {
-  padding: 16px 16px 20px;
+  padding: 16px 0 20px;
   display: flex;
   align-items: center;
   gap: 10px;

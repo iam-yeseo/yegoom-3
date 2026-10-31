@@ -19,6 +19,9 @@ test('mobile and desktop previews render all game screens without errors or over
       if (width === 1440) {
         const appWidth = await page.locator('.app-shell').evaluate(element => element.getBoundingClientRect().width);
         expect(appWidth).toBe(560);
+        if (route === '/preview/play/claw') {
+          expect(await page.locator('.pg-machine').evaluate(element => element.getBoundingClientRect().width)).toBe(400);
+        }
         if (await page.locator('.tabbar').count()) {
           expect(await page.locator('.tabbar').evaluate(element => element.getBoundingClientRect().width)).toBe(appWidth);
         }
