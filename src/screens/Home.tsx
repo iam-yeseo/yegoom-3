@@ -1,15 +1,18 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameState } from "../../shared/types";
 import { claimToday, useAttendance } from "../attendance";
 import {
   Avatar,
-  Character,
+  CharacterSprite,
   Chevron,
   Coin,
   SectionTitle,
   art,
   artSrc,
+  preloadSprites,
+  useCharacter,
   type ArtKey,
+  type CharState,
 } from "../components/UI";
 import {
   BALANCE,
@@ -24,12 +27,8 @@ import {
   anim,
   coinFly,
   flip,
-  greet,
-  hop,
-  squishJump,
   toast,
   useCountUp,
-  useMountMotion,
   useOnChange,
 } from "../motion";
 
@@ -321,7 +320,6 @@ function AttendanceCard({
       { scale: "1.8", rotate: "-20deg", opacity: 0 },
       { scale: "1", rotate: "0deg", opacity: 1 },
     ], { dur: 420, ease: "spring" });
-    hop(document.querySelector(".room-character"));
   });
   const t = kstParts();
   const monday = new Date(Date.now() - t.weekday * 86_400_000);
@@ -386,11 +384,27 @@ function AttendanceCard({
   );
 }
 
-function Room({ data, gold, evening }: { data: HomeData; gold: number; evening: boolean }) {
+function Room({ data, gold, evening, jumpRequest }: {
+  data: HomeData;
+  gold: number;
+  evening: boolean;
+  jumpRequest: number;
+}) {
   const shown = useCountUp(gold);
-  const character = useMountMotion<HTMLImageElement>((el) => {
-    setTimeout(() => greet(el), 300);
-  });
+  const chosen = useCharacter(data.username);
+  const [oneShot, setOneShot] = useState<CharState | null>(null);
+  const playJump = useCallback(() => {
+    setOneShot((state) => state === "jump" ? state : "jump");
+  }, []);
+  const finish = useCallback(() => setOneShot(null), []);
+  useEffect(() => {
+    void preloadSprites(chosen, ["greet", "jump", "sleepy"]);
+    setOneShot(null);
+    if (evening) return;
+    const timer = window.setTimeout(() => setOneShot((state) => state ?? "greet"), 300);
+    return () => window.clearTimeout(timer);
+  }, [chosen, evening]);
+  useOnChange(jumpRequest, playJump);
   return (
     <div className={`room ${evening ? "evening" : ""}`}>
       <div className="room-top">
@@ -427,12 +441,14 @@ function Room({ data, gold, evening }: { data: HomeData; gold: number; evening: 
         className="room-character-button"
         aria-label="내 캐릭터"
         data-nopress
-        onClick={(e) => squishJump(e.currentTarget.firstElementChild)}
+        onClick={playJump}
       >
-        <span ref={character} className="room-character-wrap">
-          <Character
+        <span className="room-character-wrap">
+          <CharacterSprite
             username={data.username}
+            state={oneShot ?? (evening ? "sleepy" : "idle")}
             className={`room-character ${evening ? "sleepy" : ""}`}
+            onDone={finish}
           />
         </span>
       </button>
@@ -445,6 +461,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
   const evening = isEvening();
   // The preview shows the attendance gold; real claims are not credited yet.
   const [bonus, setBonus] = useState(0);
+  const [jumpRequest, setJumpRequest] = useState(0);
   const table = standings(data.players);
   const me = table.find((p) => p.username === data.username);
   const top = table[0];
@@ -459,7 +476,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
       : `1위 ${top.displayName}까지 ${top.weeklyScore - me.weeklyScore}점`;
   return (
     <div className={`home ${evening ? "evening" : ""}`}>
-      <Room data={data} gold={data.gold + bonus} evening={evening} />
+      <Room data={data} gold={data.gold + bonus} evening={evening} jumpRequest={jumpRequest} />
       <div className="home-score">
         <div className="home-score-row">
           <div>
@@ -482,7 +499,10 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
         <AttendanceCard
           data={data}
           go={go}
-          onClaimed={() => data.attendanceKey === "preview" && setBonus(BALANCE.attendanceGold)}
+          onClaimed={() => {
+            if (data.attendanceKey === "preview") setBonus(BALANCE.attendanceGold);
+            setJumpRequest((request) => request + 1);
+          }}
         />
         <TodayGames data={data} go={go} />
         <SoloGames go={go} />

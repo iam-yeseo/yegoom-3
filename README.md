@@ -92,7 +92,8 @@ npm run deploy:check             # 원격 배포 없이 Worker 패키징 검사
 | `src/screens/` | 홈·랭킹·출석·내 정보·주식·상점 화면 |
 | `src/sample.ts` | 잠정 밸런스 값(`BALANCE`)과 미리보기 데이터 |
 | `src/motion.ts` | 모션 토큰·캐릭터 동작·컨페티·토스트 (Claude Design 모션 스펙) |
-| `scripts/cutout-characters.py` | 캐릭터 원본의 크림색 배경 제거 |
+| `scripts/prepare-characters.py` | 최종 캐릭터 시트를 프레임·정지 PNG·웹 스프라이트·QA 자료로 분리 |
+| `scripts/cutout-characters.py` | 캐릭터 원본의 크림색 배경 제거 (이전 임시 아트용) |
 | `src/styles.css`, `src/preview.css`, `src/screens.css` | 시안에서 옮긴 디자인 값과 반응형 화면 |
 | `shared/types.ts` | 프런트엔드/Worker API 계약 |
 | `worker/index.ts` | 인증, 권한 검사, D1 저장·조회 |

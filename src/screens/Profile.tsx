@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import type { LedgerEntry } from "../../shared/types";
 import { useAttendance } from "../attendance";
 import {
-  Character,
+  CharacterSprite,
   Segmented,
   Toolbar,
   art,
@@ -116,7 +116,9 @@ export function Profile({
         <Toolbar title="내 정보" onBack={onBack} gold={gold} />
         <div className="profile-stage" ref={stage}>
           <i />
-          <Character username={username} className="profile-character" />
+          <span className="profile-character">
+            <CharacterSprite username={username} state="idle" />
+          </span>
         </div>
         <div className="profile-summary">
           <h1>{displayName}</h1>

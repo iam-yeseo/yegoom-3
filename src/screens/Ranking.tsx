@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Avatar, Character, Coin, Toolbar } from "../components/UI";
+import { Avatar, CharacterSprite, Coin, Toolbar, preloadSprites, useCharacter } from "../components/UI";
 import { BALANCE, kstParts, weekdayNames } from "../sample";
 import { anim, confetti, dropIn, reduced, tween } from "../motion";
 import { standings, type HomePlayer } from "./Home";
@@ -53,7 +53,6 @@ function usePodiumEntrance(ref: { current: HTMLDivElement | null }) {
     places.forEach((place) => {
       const delay = order(place) * 160;
       anim(place.querySelector(".podium-block"), [{ scale: "1 0" }, { scale: "1 1" }], { dur: 520, ease: "spring", delay });
-      dropIn(place.querySelector(".podium-character"), { delay: delay + 240 });
       anim(place.querySelector(".podium-reward"), [{ scale: ".4", opacity: 0 }, { scale: "1", opacity: 1 }], { dur: 420, ease: "spring", delay: delay + 900 });
     });
     root.parentElement?.querySelectorAll(".daily-bars i").forEach((bar, i) =>
@@ -63,6 +62,28 @@ function usePodiumEntrance(ref: { current: HTMLDivElement | null }) {
     const t = setTimeout(() => confetti(first?.querySelector(".podium-block"), { spread: 170 }), reduced() ? 0 : 1300);
     return () => clearTimeout(t);
   }, [ref]);
+}
+
+/** Keep the sprite on its first frame until the existing entrance has landed. */
+function PodiumCharacter({ username, rank }: { username: string; rank: number }) {
+  const key = useCharacter(username);
+  const character = useRef<HTMLSpanElement>(null);
+  const [landed, setLanded] = useState(reduced);
+  useEffect(() => { void preloadSprites(key, ["idle", "happy"]); }, [key]);
+  useEffect(() => {
+    let active = true;
+    setLanded(reduced());
+    const entrance = dropIn(character.current, { delay: (3 - rank) * 160 + 240 });
+    if (entrance) {
+      void entrance.finished.then(() => { if (active) setLanded(true); }, () => {});
+    } else setLanded(true);
+    return () => { active = false; entrance?.cancel(); };
+  }, [rank]);
+  return (
+    <span ref={character} className={`podium-character${landed ? " landed" : ""}`}>
+      <CharacterSprite username={username} state={rank === 1 ? "happy" : "idle"} />
+    </span>
+  );
 }
 
 export function Ranking({
@@ -108,10 +129,9 @@ export function Ranking({
             const style = podiumStyle[Math.min(player.rank, 3) as 1 | 2 | 3];
             return (
               <div key={player.username} className="podium-place" data-rank={Math.min(player.rank, 3)}>
-                <Character
+                <PodiumCharacter
                   username={player.username}
-                  className="podium-character"
-                  alt=""
+                  rank={Math.min(player.rank, 3)}
                 />
                 <div
                   className="podium-block"

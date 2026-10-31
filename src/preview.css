@@ -850,14 +850,16 @@
   border-radius: 50%;
   background: radial-gradient(circle, #ffffff 0%, rgba(255, 255, 255, 0) 70%);
 }
-.pg-celebration > img {
+.pg-celebration > .pg-win-character {
   position: absolute;
   left: 50%;
   top: 30px;
   width: 270px;
   height: 270px;
   margin-left: -135px;
-  animation: pg-bob 2.6s ease-in-out infinite;
+}
+.pg-win-character:not(.landed) {
+  --sprite-play-state: paused;
 }
 .pg-success-copy {
   padding: 0 20px;

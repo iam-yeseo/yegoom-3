@@ -1,4 +1,4 @@
-import { useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { anim, useOnChange } from "../motion";
 
 export const art = {
@@ -14,6 +14,67 @@ export const art = {
 export type ArtKey = keyof typeof art;
 export const artKeys = Object.keys(art) as ArtKey[];
 export const artSrc = (key: ArtKey) => `/characters/${key}.png`;
+
+export const charStates = ["idle", "happy", "sleepy", "greet", "jump"] as const;
+export type CharState = (typeof charStates)[number];
+export const spritePlayback = {
+  idle: { duration: 1800, loop: true },
+  happy: { duration: 1200, loop: true },
+  sleepy: { duration: 2400, loop: true },
+  greet: { duration: 900, loop: false },
+  jump: { duration: 680, loop: false },
+} as const satisfies Record<CharState, { duration: number; loop: boolean }>;
+export const spriteSrc = (key: ArtKey, state: CharState) =>
+  `/characters/sprites/${key}-${state}.webp`;
+
+// The reviewed 40 sheets contain PASS/FLAG results only. Record future FAIL
+// states here before publishing assets, so they never request a broken strip.
+const failedSprites: Partial<Record<ArtKey, readonly CharState[]>> = {};
+interface SpriteLoad {
+  ready: boolean;
+  promise: Promise<boolean>;
+}
+const spriteLoads = new Map<string, SpriteLoad>();
+function loadSprite(key: ArtKey, state: CharState): Promise<boolean> {
+  if (failedSprites[key]?.includes(state) || typeof Image === "undefined")
+    return Promise.resolve(false);
+  const src = spriteSrc(key, state);
+  const cached = spriteLoads.get(src);
+  if (cached) return cached.promise;
+  const entry: SpriteLoad = { ready: false, promise: Promise.resolve(false) };
+  spriteLoads.set(src, entry);
+  entry.promise = new Promise((resolve) => {
+    const image = new Image();
+    const failed = () => {
+      // A later visit/preload can retry after a temporary offline failure.
+      if (spriteLoads.get(src) === entry) spriteLoads.delete(src);
+      resolve(false);
+    };
+    image.onload = async () => {
+      try {
+        if (typeof image.decode === "function") await image.decode();
+        entry.ready = true;
+        resolve(true);
+      } catch {
+        failed();
+      }
+    };
+    image.onerror = failed;
+    image.src = src;
+  });
+  return entry.promise;
+}
+export const preloadSprites = (key: ArtKey, states: readonly CharState[]) =>
+  Promise.all(states.map((state) => loadSprite(key, state)));
+
+const spriteReducedMotion = typeof window === "undefined"
+  ? null
+  : window.matchMedia("(prefers-reduced-motion: reduce)");
+function subscribeSpriteMotion(listener: () => void) {
+  spriteReducedMotion?.addEventListener("change", listener);
+  return () => spriteReducedMotion?.removeEventListener("change", listener);
+}
+const spriteMotionSnapshot = () => spriteReducedMotion?.matches ?? false;
 
 const defaults: Record<string, ArtKey> = {
   min: "axolotl",
@@ -78,6 +139,95 @@ export function Character({
     />
   );
 }
+
+/** One sheet playback; remounting this renderer cancels the previous state. */
+function SpriteFrames({
+  artKey,
+  state,
+  className,
+  onDone,
+}: {
+  artKey: ArtKey;
+  state: CharState;
+  className: string;
+  onDone?: () => void;
+}) {
+  const reducedMotion = useSyncExternalStore(subscribeSpriteMotion, spriteMotionSnapshot, () => false);
+  const src = spriteSrc(artKey, state);
+  const blocked = failedSprites[artKey]?.includes(state) ?? false;
+  const [status, setStatus] = useState<"loading" | "ready" | "failed">(() =>
+    blocked ? "failed" : spriteLoads.get(src)?.ready ? "ready" : "loading",
+  );
+  const callback = useRef(onDone);
+  callback.current = onDone;
+  const finished = useRef(false);
+  const finish = useCallback(() => {
+    if (!spritePlayback[state].loop && !finished.current) {
+      finished.current = true;
+      callback.current?.();
+    }
+  }, [state]);
+
+  useEffect(() => {
+    if (blocked || reducedMotion) return;
+    let active = true;
+    void loadSprite(artKey, state).then((ready) => {
+      if (active) setStatus(ready ? "ready" : "failed");
+    });
+    return () => { active = false; };
+  }, [artKey, state, blocked, reducedMotion]);
+  useEffect(() => {
+    if (reducedMotion || status === "failed") finish();
+  }, [reducedMotion, status, finish]);
+
+  const playing = status === "ready" && !reducedMotion && !blocked;
+  const playback = spritePlayback[state];
+  return (
+    <span
+      key={playing ? "sprite" : "still"}
+      className={`character character-sprite${playing ? " is-playing" : ""} ${className}`}
+      aria-hidden="true"
+      data-state={state}
+      data-ready={status === "ready"}
+      style={{
+        backgroundImage: `url("${playing ? src : artSrc(artKey)}")`,
+        backgroundSize: playing ? "600% 100%" : "contain",
+        animationDuration: `${playback.duration}ms`,
+        animationIterationCount: playback.loop ? "infinite" : "1",
+      }}
+      onAnimationEnd={(event) => {
+        if (event.target === event.currentTarget && event.animationName === "character-frames") finish();
+      }}
+    />
+  );
+}
+
+export function CharacterSprite({
+  username,
+  artKey,
+  state,
+  className = "",
+  onDone,
+}: {
+  username?: string;
+  artKey?: ArtKey;
+  state: CharState;
+  className?: string;
+  onDone?: () => void;
+}) {
+  const chosen = useCharacter(username ?? "");
+  const key = artKey ?? chosen;
+  return (
+    <SpriteFrames
+      key={`${key}:${state}`}
+      artKey={key}
+      state={state}
+      className={className}
+      onDone={onDone}
+    />
+  );
+}
+
 export function Avatar({
   username,
   artKey,

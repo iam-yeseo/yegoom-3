@@ -25,7 +25,7 @@ import {
   useMountMotion,
   useOnChange,
 } from "../motion";
-import { Avatar, Chevron, Coin, Toolbar, artSrc, type ArtKey } from "./UI";
+import { Avatar, CharacterSprite, Chevron, Coin, Toolbar, artSrc, preloadSprites, type ArtKey } from "./UI";
 
 type Game = "catchmind" | "kuji" | "claw";
 type CatchView = "guess" | "draw" | "result";
@@ -606,10 +606,18 @@ const prizes: { art: ArtKey; x: number; y: number; size: number; rotate: number 
 function ClawSuccess({ tries, onBack, onAgain }: { tries: number; onBack: () => void; onAgain: () => void }) {
   const { cost, dailyTries, points } = BALANCE.claw;
   const [score, setScore] = useState(0);
-  const character = useMountMotion<HTMLImageElement>((el) => {
-    dropIn(el);
-    setTimeout(() => confetti(el, { spread: 170 }), reduced() ? 0 : 500);
-  });
+  const character = useRef<HTMLDivElement>(null);
+  const [landed, setLanded] = useState(reduced);
+  useEffect(() => {
+    let active = true;
+    void preloadSprites(TARGET, ["happy"]);
+    const entrance = dropIn(character.current);
+    if (entrance) {
+      void entrance.finished.then(() => { if (active) setLanded(true); }, () => {});
+    } else setLanded(true);
+    const particles = setTimeout(() => confetti(character.current, { spread: 170 }), reduced() ? 0 : 500);
+    return () => { active = false; clearTimeout(particles); entrance?.cancel(); };
+  }, []);
   useEffect(() => tween(0, points, 700, (v) => setScore(Math.round(v))), [points]);
   return (
     <div className="pg-claw-success">
@@ -620,7 +628,9 @@ function ClawSuccess({ tries, onBack, onAgain }: { tries: number; onBack: () => 
         <i />
         <i />
         <span />
-        <img ref={character} src={artSrc(TARGET)} alt="별숭이" />
+        <div ref={character} className={`pg-win-character${landed ? " landed" : ""}`}>
+          <CharacterSprite artKey={TARGET} state="happy" />
+        </div>
       </div>
       <div className="pg-success-copy" role="status">
         <span>뽑았다!</span>

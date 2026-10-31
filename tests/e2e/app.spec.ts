@@ -24,6 +24,47 @@ test('mobile and desktop previews render all game screens without errors or over
   expect(errors).toEqual([]);
 });
 
+test('preview heroes greet only before the answer is revealed', async ({ page }, testInfo) => {
+  type HeroHistory = { states: string[]; startedAt: number };
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.addInitScript(() => {
+    const observed = window as typeof window & { heroHistory: HeroHistory };
+    observed.heroHistory = { states: [], startedAt: 0 };
+    new MutationObserver(() => {
+      const state = document.querySelector('.hero-character')?.getAttribute('data-state');
+      const history = observed.heroHistory;
+      if (state && state !== history.states.at(-1)) {
+        if (!history.states.length) history.startedAt = performance.now();
+        history.states.push(state);
+      }
+    }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-state'] });
+  });
+  const states = () => page.evaluate(() =>
+    (window as typeof window & { heroHistory: HeroHistory }).heroHistory.states,
+  );
+
+  await page.goto('/#/preview/game/offwork');
+  await page.locator('.hero-character').waitFor({ state: 'attached' });
+  await expect.poll(() => page.evaluate(() => {
+    const history = (window as typeof window & { heroHistory: HeroHistory }).heroHistory;
+    return history.states.length ? performance.now() - history.startedAt : 0;
+  }), { timeout: 2000, intervals: [50] }).toBeGreaterThanOrEqual(1500);
+  expect(await states()).not.toContain('greet');
+  await expect.poll(states, { timeout: 2500, intervals: [50] }).toEqual(['idle', 'jump', 'idle']);
+  const offwork = await states();
+
+  // A full navigation gives the open round its own observer and history.
+  await page.goto('about:blank');
+  await page.goto('/#/preview/game/wake');
+  await page.locator('.hero-character').waitFor({ state: 'attached' });
+  await expect.poll(states, { timeout: 1500, intervals: [50] }).toContain('greet');
+  await expect.poll(states, { timeout: 4000, intervals: [50] }).toEqual(['idle', 'greet', 'idle']);
+  await testInfo.attach('hero-state-history', {
+    body: JSON.stringify({ offwork, wake: await states() }, null, 2),
+    contentType: 'application/json',
+  });
+});
+
 test('login persists an author answer, hides it from another player, and logout clears access', async ({ page, browser }) => {
   await login(page, 'min');
   await page.goto('/#/game/wake');
