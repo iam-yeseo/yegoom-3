@@ -119,6 +119,28 @@ button svg {
   object-fit: contain;
   user-select: none;
 }
+.character-sprite {
+  display: block;
+  width: 100%;
+  height: 100%;
+  flex-shrink: 0;
+  background-repeat: no-repeat;
+  background-position: 50% 50%;
+  background-size: contain;
+}
+.character-sprite.is-playing {
+  background-position: 0% 0%;
+  background-size: 600% 100%;
+  animation-name: character-frames;
+  animation-timing-function: steps(6, jump-none);
+  animation-delay: var(--sprite-delay, 0ms);
+  animation-fill-mode: both;
+  animation-play-state: var(--sprite-play-state, running);
+}
+@keyframes character-frames {
+  from { background-position-x: 0%; }
+  to { background-position-x: 100%; }
+}
 .avatar {
   display: inline-flex;
   align-items: center;
@@ -400,26 +422,28 @@ button svg {
   justify-content: center;
   margin: 0 -16px;
 }
-.login-characters img {
+.login-characters .character {
   width: 145px;
   height: 145px;
   position: absolute;
   bottom: 0;
 }
-.login-characters img:nth-child(1) {
+.login-characters .character:nth-child(1) {
+  --sprite-delay: 0s;
   left: -8px;
   bottom: 4px;
   transform: rotate(-8deg);
 }
-.login-characters img:nth-child(2) {
+.login-characters .character:nth-child(2) {
+  --sprite-delay: -0.6s;
   width: 190px;
   height: 190px;
   left: 50%;
   margin-left: -95px;
   z-index: 2;
-  animation: bob 4s ease-in-out infinite;
 }
-.login-characters img:nth-child(3) {
+.login-characters .character:nth-child(3) {
+  --sprite-delay: -1.2s;
   right: -8px;
   bottom: 4px;
   transform: rotate(8deg);
@@ -544,7 +568,6 @@ button svg {
 .hero-character {
   width: 100%;
   height: 100%;
-  animation: bob 3.2s ease-in-out infinite;
 }
 .author-pill {
   position: absolute;
@@ -1062,15 +1085,15 @@ button svg {
   .result-guess {
     font-size: 21px;
   }
-  .login-characters img:nth-child(1) {
+  .login-characters .character:nth-child(1) {
     left: -12px;
     width: 130px;
   }
-  .login-characters img:nth-child(3) {
+  .login-characters .character:nth-child(3) {
     right: -12px;
     width: 130px;
   }
-  .login-characters img:nth-child(2) {
+  .login-characters .character:nth-child(2) {
     width: 170px;
     margin-left: -85px;
   }

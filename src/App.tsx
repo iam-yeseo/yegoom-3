@@ -8,7 +8,7 @@ import type {
 import { ApiFailure, api } from "./api";
 import { dayKey } from "./attendance";
 import { anim } from "./motion";
-import { Character, TabBar, tabs } from "./components/UI";
+import { CharacterSprite, TabBar, tabs } from "./components/UI";
 import { PredictionGame } from "./components/PredictionGame";
 import { PreviewGames } from "./components/PreviewGames";
 import {
@@ -204,9 +204,9 @@ function Login({
         <span className="login-spark spark-one">✦</span>
         <span className="login-spark spark-two">✦</span>
         <div className="login-characters">
-          <Character username="min" />
-          <Character username="yeseo" />
-          <Character username="siwon" />
+          <CharacterSprite username="min" state="idle" />
+          <CharacterSprite username="yeseo" state="idle" />
+          <CharacterSprite username="siwon" state="idle" />
         </div>
         <h1>
           어서 와,

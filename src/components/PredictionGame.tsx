@@ -1,21 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameState, User } from "../../shared/types";
 import { BALANCE, predictionPoints, rankOf } from "../sample";
 import {
   anim,
   confetti,
   flipY,
-  greet,
-  hop,
   pop,
   reduced,
   rise,
-  squishJump,
   toast,
   tween,
   useOnChange,
 } from "../motion";
-import { Avatar, Character, Coin, Toolbar, playerColor } from "./UI";
+import {
+  Avatar,
+  CharacterSprite,
+  Coin,
+  Toolbar,
+  playerColor,
+  preloadSprites,
+  useCharacter,
+  type CharState,
+} from "./UI";
 
 type Props = {
   game: GameState;
@@ -274,7 +280,12 @@ export function PredictionGame({
   const urgent = !revealed && left > 0 && left < 600;
   const countdownRef = useRef<HTMLElement>(null);
   const luckNumber = useRef<HTMLLabelElement>(null);
-  const hero = useRef<HTMLButtonElement>(null);
+  const heroKey = useCharacter(game.authorUsername);
+  const [oneShot, setOneShot] = useState<CharState | null>(null);
+  const playJump = useCallback(() => {
+    setOneShot((state) => state === "jump" ? state : "jump");
+  }, []);
+  const finish = useCallback(() => setOneShot(null), []);
   const results = useRef<HTMLDivElement>(null);
   const answerRef = useRef<HTMLElement>(null);
   useOnChange(left, () => {
@@ -284,13 +295,15 @@ export function PredictionGame({
     if (game.id === "luck") anim(luckNumber.current, [{ translate: "0 0" }, { translate: "0 -3px" }, { translate: "0 0" }], { dur: 140, fill: "none" });
   });
   useEffect(() => {
-    const character = hero.current?.firstElementChild;
-    if (!revealed) {
-      const t = setTimeout(() => greet(character), 320);
-      return () => clearTimeout(t);
-    }
+    void preloadSprites(heroKey, ["greet", "jump"]);
+    setOneShot(null);
+    const timer = window.setTimeout(() => setOneShot((state) => state ?? "greet"), 320);
+    return () => window.clearTimeout(timer);
+  }, [game.id, heroKey]);
+  useEffect(() => {
+    if (!revealed) return;
     // Result reveal: answer flips, cards rise by rank, chips pop one by one,
-    // then confetti for 1st place and a hop from the setter.
+    // then confetti for 1st place and the setter's jump sprite.
     flipY(answerRef.current);
     const cards = [...(results.current?.querySelectorAll(".result-card") ?? [])];
     cards.forEach((card, i) => rise(card, { delay: 520 + i * 140 }));
@@ -299,11 +312,11 @@ export function PredictionGame({
     const done = 520 + cards.length * 140 + chips.length * 110 + 200;
     const t = setTimeout(() => {
       if (cards.length) confetti(cards[0].querySelector(".rank-badge"));
-      hop(character);
+      playJump();
     }, reduced() ? 0 : done);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revealed]);
+  }, [revealed, playJump]);
   
   const update = (next: string) => {
     setValue(next);
@@ -367,15 +380,19 @@ export function PredictionGame({
         <div className="character-stage">
           <div className="character-shadow" />
           <button
-            ref={hero}
             type="button"
             className="hero-character-button"
             aria-label={`${game.authorUsername}의 캐릭터`}
             data-nopress
-            onClick={(e) => squishJump(e.currentTarget.firstElementChild)}
+            onClick={playJump}
           >
             <span className="hero-character-wrap">
-              <Character username={game.authorUsername} className="hero-character" />
+              <CharacterSprite
+                username={game.authorUsername}
+                state={oneShot ?? "idle"}
+                className="hero-character"
+                onDone={finish}
+              />
             </span>
           </button>
           <span className="author-pill" style={{ color: playerColor[game.authorUsername] }}>
