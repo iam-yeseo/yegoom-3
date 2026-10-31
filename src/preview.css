@@ -681,10 +681,17 @@
   border-radius: 8px;
   background: #8cc8f2;
 }
+.pg-claw-arm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform-origin: 50% 0;
+}
+/* The rope overshoots on the way down; the arms snap shut with a spring. */
 .pg-claw-rope {
   width: 4px;
   background: #a9bfd6;
-  transition: height 0.7s ease-in-out;
+  transition: height 0.7s var(--ease-spring);
 }
 .pg-claw-head {
   position: relative;
@@ -709,16 +716,28 @@
   border-radius: 5px;
   background: #8cc8f2;
   transform-origin: 50% 0;
-  transition: transform 0.3s;
+  transition: transform 0.26s var(--ease-spring);
 }
 .pg-claw-head > span:last-child {
   left: auto;
   right: 4px;
 }
-.pg-claw > img {
+.pg-claw-arm > img {
   width: 76px;
   height: 76px;
   margin-top: -18px;
+}
+.pg-claw-arm > img.carrying {
+  transform-origin: 50% 0;
+  animation: carry-wobble 0.42s ease-in-out infinite alternate;
+}
+@keyframes carry-wobble {
+  from {
+    rotate: -9deg;
+  }
+  to {
+    rotate: 9deg;
+  }
 }
 .pg-out {
   position: absolute;

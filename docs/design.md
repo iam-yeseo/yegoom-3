@@ -6,7 +6,7 @@
 
 | 요소 | 기준 |
 | --- | --- |
-| 글꼴 | Pretendard Variable, 로컬 WOFF2 |
+| 글꼴 | 티머니 둥근바람체(TmoneyRoundWind) Regular·ExtraBold, `public/fonts`의 WOFF2. 파일이 없거나 불러오는 동안은 Pretendard Variable |
 | 바탕 | `#FFF9EE` |
 | 본문/보조 | `#3A3340` / `#7C7383` |
 | CTA | `#F47C66`, 높이 56px, radius 20px |
@@ -23,3 +23,15 @@
 캐릭터 8종의 원본은 크림색 배경의 1254px RGB 이미지다. 시안처럼 `mix-blend-mode:multiply`로 배경을 녹이면 색이 있는 배경 위에서 네모 테두리가 드러나므로, `scripts/cutout-characters.py`로 배경을 투명하게 오리고 바닥 그림자만 반투명으로 남긴 640px PNG를 `public/characters`에 넣었다. 캐릭터 그림 자체는 수정하지 않았다. 파일 이름은 시안과 같다(`bread`, `monkey` 등). 현재 애니메이션은 CSS의 가벼운 움직임이며 `prefers-reduced-motion`을 지원한다. 최종 투명 캐릭터나 Rive/Lottie는 후속 작업이다.
 
 Pretendard 라이선스는 `public/fonts/OFL.txt`에 포함한다. 캐릭터는 사용자 제공 자료로서 별도 재배포 라이선스를 임의 부여하지 않는다. 앱 아이콘은 별도 SVG로 만들었으며 `scripts/build-icons.mjs`로 PNG를 재생성할 수 있다.
+
+## 모션
+
+Claude Design의 `Yegoom Motion Spec`과 `yegoom-motion.js`를 `src/motion.ts`로 옮겼다. 토큰(시간 120–1200ms, `out`·`inOut`·`spring` 곡선)과 캐릭터 동작(대기·인사·탭 반응·기쁨 홉·저녁 흔들림), 컨페티·반짝이·코인·토스트를 모두 이 파일에서 가져다 쓴다. 규칙은 시안과 같다.
+
+- transform(scale·translate·rotate)과 opacity만 움직인다. 레이아웃 속성은 애니메이션하지 않는다.
+- 반복 모션은 캐릭터 대기와 인형 운반 흔들림뿐이다. 축하 연출은 1.2초 이하, 컨페티는 화면당 한 번이다.
+- `prefers-reduced-motion`이면 이동·크기·회전을 끄고 200ms 이하 페이드만 남긴다. 숫자는 바로 바뀌고 입자와 반복 모션은 없다.
+
+시안과 다른 점: 하위 화면 push/pop은 새 화면만 움직인다(이전 화면은 바로 사라진다). 화면 전환에서 이전 화면을 함께 밀어내려면 라우터가 두 화면을 동시에 유지해야 해서 후속 작업으로 남겼다.
+
+티머니 둥근바람체는 Regular(400)과 ExtraBold(800)만 있어 600 이하는 Regular, 700·800은 ExtraBold로 표시된다. 글꼴 파일의 라이선스는 배포처의 이용 약관을 따른다.

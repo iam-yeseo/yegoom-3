@@ -1,4 +1,5 @@
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useRef, useSyncExternalStore, type ReactNode } from "react";
+import { anim, useOnChange } from "../motion";
 
 export const art = {
   axolotl: { tint: "#E3F6EE", name: "우파" },
@@ -213,8 +214,22 @@ export function TabBar({
   active: string;
   onNavigate: (path: string) => void;
 }) {
+  const nav = useRef<HTMLElement>(null);
+  useOnChange(active, () => {
+    const icon = nav.current?.querySelector("button.on svg");
+    anim(
+      icon,
+      [
+        { translate: "0 0", scale: "1 1" },
+        { translate: "0 -7px", scale: ".92 1.1", offset: 0.35 },
+        { translate: "0 0", scale: "1.1 .9", offset: 0.7 },
+        { translate: "0 0", scale: "1 1" },
+      ],
+      { dur: 420, ease: "inOut", fill: "none" },
+    );
+  });
   return (
-    <nav className="tabbar" aria-label="주요 메뉴">
+    <nav className="tabbar" aria-label="주요 메뉴" ref={nav}>
       {tabs.map((tab) => {
         const on = tab.path === active;
         return (
@@ -282,7 +297,17 @@ export function Segmented<T extends string | number>({
   label: string;
 }) {
   return (
-    <div className="segmented" role="tablist" aria-label={label}>
+    <div
+      className="segmented"
+      role="tablist"
+      aria-label={label}
+      style={
+        {
+          "--count": options.length,
+          "--index": Math.max(0, options.findIndex((o) => o.value === value)),
+        } as React.CSSProperties
+      }
+    >
       {options.map((option) => (
         <button
           key={String(option.value)}

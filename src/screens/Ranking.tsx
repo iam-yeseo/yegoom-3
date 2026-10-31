@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Avatar, Character, Coin, Toolbar } from "../components/UI";
 import { BALANCE, kstParts, weekdayNames } from "../sample";
+import { anim, confetti, dropIn, reduced, tween } from "../motion";
 import { standings, type HomePlayer } from "./Home";
 
 const podiumStyle = {
@@ -24,6 +25,44 @@ function settleLeft(now: number) {
   const elapsed = (t.weekday * 24 + t.hour) * 60 + t.minute;
   const minutes = Math.max(0, 7 * 24 * 60 - elapsed);
   return `${Math.floor(minutes / 1440)}일 ${Math.floor((minutes % 1440) / 60)}시간 ${String(minutes % 60).padStart(2, "0")}분`;
+}
+
+/** A score that counts up from 0 after `delay` ms. */
+function CountFrom({ value, delay }: { value: number; delay: number }) {
+  const [shown, setShown] = useState(reduced() ? value : 0);
+  useEffect(() => {
+    let stop = () => {};
+    const t = setTimeout(() => {
+      stop = tween(0, value, 700, (v) => setShown(Math.round(v)));
+    }, reduced() ? 0 : delay);
+    return () => {
+      clearTimeout(t);
+      stop();
+    };
+  }, [value, delay]);
+  return <>{shown}</>;
+}
+/** Podium entrance: blocks rise 3rd → 2nd → 1st, characters drop onto them,
+ * reward chips pop, daily bars grow, then confetti for 1st place. */
+function usePodiumEntrance(ref: { current: HTMLDivElement | null }) {
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const places = [...root.querySelectorAll<HTMLElement>(".podium-place")];
+    const order = (el: HTMLElement) => 3 - Number(el.dataset.rank);
+    places.forEach((place) => {
+      const delay = order(place) * 160;
+      anim(place.querySelector(".podium-block"), [{ scale: "1 0" }, { scale: "1 1" }], { dur: 520, ease: "spring", delay });
+      dropIn(place.querySelector(".podium-character"), { delay: delay + 240 });
+      anim(place.querySelector(".podium-reward"), [{ scale: ".4", opacity: 0 }, { scale: "1", opacity: 1 }], { dur: 420, ease: "spring", delay: delay + 900 });
+    });
+    root.parentElement?.querySelectorAll(".daily-bars i").forEach((bar, i) =>
+      anim(bar, [{ scale: "1 0" }, { scale: "1 1" }], { dur: 520, ease: "spring", delay: 400 + i * 50 }),
+    );
+    const first = places.find((p) => p.dataset.rank === "1");
+    const t = setTimeout(() => confetti(first?.querySelector(".podium-block"), { spread: 170 }), reduced() ? 0 : 1300);
+    return () => clearTimeout(t);
+  }, [ref]);
 }
 
 export function Ranking({
@@ -53,8 +92,10 @@ export function Ranking({
   const today = kstParts().weekday;
   const max = Math.max(...daily, 1);
   const lastWeekDate = new Date(now - 7 * 86_400_000);
+  const root = useRef<HTMLDivElement>(null);
+  usePodiumEntrance(root);
   return (
-    <div className="ranking">
+    <div className="ranking" ref={root}>
       <div className="ranking-hero">
         <Toolbar title="주간 랭킹" onBack={onBack} gold={gold} />
         <div className="ranking-week">
@@ -66,7 +107,7 @@ export function Ranking({
           {podium.map((player) => {
             const style = podiumStyle[Math.min(player.rank, 3) as 1 | 2 | 3];
             return (
-              <div key={player.username} className="podium-place">
+              <div key={player.username} className="podium-place" data-rank={Math.min(player.rank, 3)}>
                 <Character
                   username={player.username}
                   className="podium-character"
@@ -80,7 +121,9 @@ export function Ranking({
                     {player.rank}
                   </span>
                   <span className="podium-name">{player.displayName}</span>
-                  <strong>{player.weeklyScore}</strong>
+                  <strong>
+                    <CountFrom value={player.weeklyScore} delay={(3 - Math.min(player.rank, 3)) * 160 + 500} />
+                  </strong>
                   <span className="podium-reward">
                     <Coin size={18} />
                     {(BALANCE.weeklyRewards[player.rank - 1] ?? 0).toLocaleString("ko-KR")}

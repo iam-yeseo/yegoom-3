@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { LedgerEntry } from "../../shared/types";
 import { useAttendance } from "../attendance";
 import {
@@ -14,6 +14,7 @@ import {
   type ArtKey,
 } from "../components/UI";
 import { KST, weekdayNames } from "../sample";
+import { anim, pop, reduced, useOnChange } from "../motion";
 
 /** Picks an icon for a ledger reason by the game it mentions. */
 function reasonIcon(reason: string): ArtKey {
@@ -74,6 +75,36 @@ export function Profile({
   const mine = useCharacter(username);
   const { monthCount } = useAttendance(attendanceKey);
   const [currency, setCurrency] = useState<"gold" | "score">("gold");
+  const stage = useRef<HTMLDivElement>(null);
+  const grid = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  // Swap: the old character flattens away, then the new one springs up.
+  const pick = (key: ArtKey) => {
+    if (key === mine) return;
+    const out = anim(stage.current?.querySelector(".profile-character"), [
+      { scale: "1 1", opacity: 1 },
+      { scale: "1.25 .2", opacity: 0 },
+    ], { dur: 200, ease: "inOut" });
+    const swap = () => {
+      out?.cancel();
+      chooseCharacter(username, key);
+    };
+    if (out && !reduced()) out.finished.then(swap, swap);
+    else swap();
+  };
+  useOnChange(mine, () => {
+    anim(stage.current?.querySelector(".profile-character"), [
+      { scale: ".3 1.3", translate: "0 20px", opacity: 0 },
+      { scale: "1.18 .84", translate: "0 0", opacity: 1, offset: 0.55 },
+      { scale: ".95 1.05", offset: 0.8 },
+      { scale: "1 1", translate: "0 0", opacity: 1 },
+    ], { dur: 560, ease: "inOut" });
+    pop(grid.current?.querySelector("[aria-pressed='true'] .check"), 1.35);
+  });
+  useOnChange(currency, () => {
+    const dx = currency === "score" ? 28 : -28;
+    anim(list.current, [{ translate: `${dx}px 0`, opacity: 0 }, { translate: "0 0", opacity: 1 }], { dur: 280, ease: "spring" });
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const owners = new Map(others.map((name) => [characterOf(name), name]));
@@ -81,12 +112,9 @@ export function Profile({
   let lastDate = "";
   return (
     <div className="profile">
-      <div
-        className="profile-hero"
-        style={{ background: `linear-gradient(180deg, ${art[mine].tint} 0%, #FFF9EE 100%)` }}
-      >
+      <div className="profile-hero" style={{ backgroundColor: art[mine].tint }}>
         <Toolbar title="내 정보" onBack={onBack} gold={gold} />
-        <div className="profile-stage">
+        <div className="profile-stage" ref={stage}>
           <i />
           <Character username={username} className="profile-character" />
         </div>
@@ -111,14 +139,14 @@ export function Profile({
       <div className="screen-body stack">
         <section className="card character-picker">
           <h2>내 캐릭터</h2>
-          <div className="character-grid">
+          <div className="character-grid" ref={grid}>
             {artKeys.map((key) => (
               <button
                 key={key}
                 style={{ background: art[key].tint }}
                 aria-pressed={key === mine}
                 aria-label={`${art[key].name}${owners.has(key) ? `, ${owners.get(key)}의 캐릭터` : ""}`}
-                onClick={() => chooseCharacter(username, key)}
+                onClick={() => pick(key)}
               >
                 <img className="character" src={artSrc(key)} alt="" />
                 {owners.has(key) && <span className="owner">{owners.get(key)}</span>}
@@ -143,6 +171,7 @@ export function Profile({
             value={currency}
             onChange={setCurrency}
           />
+          <div ref={list}>
           {rows.length ? (
             rows.map((entry) => {
               const date = dateLabel(entry.createdAt);
@@ -172,6 +201,7 @@ export function Profile({
           ) : (
             <p className="history-empty">아직 내역이 없어요</p>
           )}
+          </div>
         </section>
         {error && (
           <p role="alert" className="form-message error">

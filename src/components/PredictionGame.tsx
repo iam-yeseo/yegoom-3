@@ -1,6 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GameState, User } from "../../shared/types";
 import { BALANCE, predictionPoints, rankOf } from "../sample";
+import {
+  anim,
+  confetti,
+  flipY,
+  greet,
+  hop,
+  pop,
+  reduced,
+  rise,
+  squishJump,
+  toast,
+  tween,
+  useOnChange,
+} from "../motion";
 import { Avatar, Character, Coin, Toolbar, playerColor } from "./UI";
 
 type Props = {
@@ -24,6 +38,142 @@ function clock(seconds: number) {
     .map((v) => String(v).padStart(2, "0"))
     .join(":");
 }
+const ROW = 40;
+/**
+ * One column of the time wheel. Drag or flick it: it follows the finger, keeps
+ * going with momentum (×0.9 per frame) and snaps to the nearest value. Rows
+ * tilt, shrink and fade with distance. The centre stays a number input for
+ * keyboard and screen-reader use.
+ */
+function WheelColumn({
+  value,
+  low,
+  high,
+  label,
+  disabled,
+  onChange,
+}: {
+  value: number;
+  low: number;
+  high: number;
+  label: string;
+  disabled: boolean;
+  onChange: (n: number) => void;
+}) {
+  const span = high - low + 1;
+  const wrap = (n: number) => ((((n - low) % span) + span) % span) + low;
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const live = useRef({ offset: 0, value });
+  live.current.value = value;
+  const gesture = useRef<{ y: number; start: number; lastY: number; lastT: number; v: number; moved: boolean } | null>(null);
+  const frame = useRef(0);
+  const stopTween = useRef<() => void>(() => {});
+  useEffect(() => () => {
+    cancelAnimationFrame(frame.current);
+    stopTween.current();
+  }, []);
+  const move = (next: number) => {
+    live.current.offset = next;
+    setOffset(next);
+  };
+  function settle(velocity: number) {
+    let v = reduced() ? 0 : velocity;
+    const step = () => {
+      if (Math.abs(v) > 0.6) {
+        move(live.current.offset + v);
+        v *= 0.9;
+        frame.current = requestAnimationFrame(step);
+        return;
+      }
+      const steps = Math.round(live.current.offset / ROW);
+      if (steps) onChange(wrap(live.current.value - steps));
+      const rest = live.current.offset - steps * ROW;
+      move(rest);
+      stopTween.current = tween(rest, 0, 320, move, () => setDragging(false));
+    };
+    step();
+  }
+  const rows = Math.ceil(Math.abs(offset) / ROW) + 3;
+  const items = [];
+  for (let i = -rows; i <= rows; i++) {
+    const y = i * ROW + offset;
+    const distance = Math.abs(y) / ROW;
+    if (distance > 2.6 || (i === 0 && !dragging)) continue;
+    items.push(
+      <span
+        key={i}
+        className={`wheel-item ${distance < 0.5 ? "near" : ""}`}
+        style={{
+          transform: `translateY(${y}px) rotateX(${(-y / ROW) * 18}deg) scale(${1 - Math.min(distance, 2) * 0.12})`,
+          opacity: 1 - Math.min(distance, 2.6) * 0.32,
+        }}
+        aria-hidden="true"
+      >
+        {String(wrap(value + i)).padStart(2, "0")}
+      </span>,
+    );
+  }
+  return (
+    <div
+      className={`time-column ${dragging ? "dragging" : ""} ${disabled ? "disabled" : ""}`}
+      onPointerDown={(e) => {
+        if (disabled || e.button !== 0) return;
+        cancelAnimationFrame(frame.current);
+        stopTween.current();
+        gesture.current = { y: e.clientY, start: live.current.offset, lastY: e.clientY, lastT: e.timeStamp, v: 0, moved: false };
+      }}
+      onPointerMove={(e) => {
+        const g = gesture.current;
+        if (!g) return;
+        if (!g.moved && Math.abs(e.clientY - g.y) > 4) {
+          g.moved = true;
+          setDragging(true);
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }
+        if (!g.moved) return;
+        const dt = Math.max(1, e.timeStamp - g.lastT);
+        g.v = ((e.clientY - g.lastY) / dt) * 16;
+        g.lastY = e.clientY;
+        g.lastT = e.timeStamp;
+        move(g.start + e.clientY - g.y);
+      }}
+      onPointerUp={(e) => {
+        const g = gesture.current;
+        gesture.current = null;
+        if (!g) return;
+        if (g.moved) {
+          settle(g.v);
+          return;
+        }
+        // A tap on a neighbouring row selects it.
+        const rect = e.currentTarget.getBoundingClientRect();
+        const steps = Math.round((e.clientY - (rect.top + rect.height / 2)) / ROW);
+        if (steps && (e.target as Element).tagName !== "INPUT") onChange(wrap(value + steps));
+      }}
+      onPointerCancel={() => {
+        if (gesture.current?.moved) settle(0);
+        gesture.current = null;
+      }}
+    >
+      {items}
+      <label className="wheel-active" style={{ opacity: dragging ? 0 : 1 }}>
+        <span className="sr-only">{label}</span>
+        <input
+          type="number"
+          min={low}
+          max={high}
+          value={String(value).padStart(2, "0")}
+          onChange={(event) => {
+            const n = Number(event.target.value);
+            if (Number.isInteger(n) && n >= 0 && n <= (label === "분" ? 59 : 23)) onChange(n);
+          }}
+          disabled={disabled}
+        />
+      </label>
+    </div>
+  );
+}
 function TimeWheel({
   value,
   onChange,
@@ -37,54 +187,41 @@ function TimeWheel({
   hours?: [number, number];
 }) {
   const [hour, minute] = value.split(":").map(Number);
-  function change(n: number, part: number) {
+  const set = (part: number) => (n: number) => {
     const next = [hour, minute];
     next[part] = n;
     onChange(next.map((v) => String(v).padStart(2, "0")).join(":"));
-  }
+  };
   return (
     <div className="time-wheel" role="group" aria-label="예측 시간 선택">
       <div className="wheel-selection" />
-      {[hour, minute].map((v, part) => (
-        <div className="time-column" key={part}>
-          {[-2, -1, 0, 1, 2].map((offset) => {
-            const [low, high] = part ? [0, 59] : hours;
-            const max = part ? 60 : 24;
-            const span = high - low + 1;
-            const number = ((((v + offset - low) % span) + span) % span) + low;
-            return offset === 0 ? (
-              <label key={offset} className="wheel-active">
-                <span className="sr-only">{part ? "분" : "시"}</span>
-                <input
-                  type="number"
-                  min="0"
-                  max={max - 1}
-                  value={String(v).padStart(2, "0")}
-                  onChange={(event) => {
-                    const n = Number(event.target.value);
-                    if (Number.isInteger(n) && n >= 0 && n < max)
-                      change(n, part);
-                  }}
-                  disabled={disabled}
-                />
-              </label>
-            ) : (
-              <button
-                type="button"
-                className={`wheel-option ${Math.abs(offset) === 2 ? "far" : ""}`}
-                disabled={disabled}
-                onClick={() => change(number, part)}
-                key={offset}
-                aria-label={`${number}${part ? "분" : "시"} 선택`}
-              >
-                {String(number).padStart(2, "0")}
-              </button>
-            );
-          })}
-        </div>
-      ))}
+      <WheelColumn value={hour} low={hours[0]} high={hours[1]} label="시" disabled={disabled} onChange={set(0)} />
+      <WheelColumn value={minute} low={0} high={59} label="분" disabled={disabled} onChange={set(1)} />
       <span className="wheel-colon" aria-hidden="true">
         :
+      </span>
+    </div>
+  );
+}
+/** A submission row whose status chip pops when it turns to 제출 완료. */
+function SubmissionRow({
+  player,
+  me,
+}: {
+  player: GameState["participants"][number];
+  me: boolean;
+}) {
+  const chip = useRef<HTMLSpanElement>(null);
+  useOnChange(player.submitted, () => player.submitted && pop(chip.current, 1.2));
+  return (
+    <div className="submission-card">
+      <Avatar username={player.username} />
+      <strong>
+        {player.displayName}
+        {me ? " (나)" : ""}
+      </strong>
+      <span ref={chip} className={`pill ${player.submitted ? "mint" : "muted"}`}>
+        {player.submitted ? "제출 완료" : "아직"}
       </span>
     </div>
   );
@@ -108,7 +245,6 @@ export function PredictionGame({
   const [hint, setHint] = useState(game.hint);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [now, setNow] = useState(Date.parse(serverTime));
   useEffect(() => {
     const offset = Date.parse(serverTime) - Date.now();
@@ -132,17 +268,50 @@ export function PredictionGame({
   const editable =
     demo || (author ? game.canEditAnswer : game.canPredict && left > 0);
   const revealed = game.phase === "revealed";
-  const saved = initial === value && initial !== null;
+  // Remember the last saved value so the button turns to 제출 완료 right away.
+  const [savedValue, setSavedValue] = useState<string | null>(null);
+  const saved = (savedValue ?? initial) === value && (savedValue ?? initial) !== null;
+  const urgent = !revealed && left > 0 && left < 600;
+  const countdownRef = useRef<HTMLElement>(null);
+  const luckNumber = useRef<HTMLLabelElement>(null);
+  const hero = useRef<HTMLButtonElement>(null);
+  const results = useRef<HTMLDivElement>(null);
+  const answerRef = useRef<HTMLElement>(null);
+  useOnChange(left, () => {
+    if (urgent) anim(countdownRef.current, [{ scale: "1" }, { scale: "1.035" }, { scale: "1" }], { dur: 600, ease: "inOut", fill: "none" });
+  });
+  useOnChange(value, () => {
+    if (game.id === "luck") anim(luckNumber.current, [{ translate: "0 0" }, { translate: "0 -3px" }, { translate: "0 0" }], { dur: 140, fill: "none" });
+  });
+  useEffect(() => {
+    const character = hero.current?.firstElementChild;
+    if (!revealed) {
+      const t = setTimeout(() => greet(character), 320);
+      return () => clearTimeout(t);
+    }
+    // Result reveal: answer flips, cards rise by rank, chips pop one by one,
+    // then confetti for 1st place and a hop from the setter.
+    flipY(answerRef.current);
+    const cards = [...(results.current?.querySelectorAll(".result-card") ?? [])];
+    cards.forEach((card, i) => rise(card, { delay: 520 + i * 140 }));
+    const chips = [...(results.current?.querySelectorAll(".reward") ?? [])];
+    chips.forEach((chip, i) => anim(chip, [{ scale: ".6", opacity: 0 }, { scale: "1", opacity: 1 }], { dur: 420, ease: "spring", delay: 520 + cards.length * 140 + i * 110 }));
+    const done = 520 + cards.length * 140 + chips.length * 110 + 200;
+    const t = setTimeout(() => {
+      if (cards.length) confetti(cards[0].querySelector(".rank-badge"));
+      hop(character);
+    }, reduced() ? 0 : done);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealed]);
   
   const update = (next: string) => {
     setValue(next);
-    setNotice("");
     setError("");
   };
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
-    setNotice("");
     if (!editable) return;
     if (
       game.id === "luck"
@@ -163,11 +332,8 @@ export function PredictionGame({
     setBusy(true);
     try {
       await onSave(value, hint, author);
-      setNotice(
-        author
-          ? "정답을 저장했어요. 공개 전까지 수정할 수 있어요."
-          : "예측을 저장했어요. 마감 전까지 수정할 수 있어요.",
-      );
+      setSavedValue(value);
+      toast(author ? "정답을 저장했어요" : "예측을 저장했어요");
     } catch (e) {
       setError(
         e instanceof Error
@@ -183,7 +349,7 @@ export function PredictionGame({
     setError("");
     try {
       await onReveal();
-      setNotice("정답을 공개했어요. 예측도 마감되었어요.");
+      toast("정답을 공개했어요");
     } catch (e) {
       setError(e instanceof Error ? e.message : "공개하지 못했어요.");
     } finally {
@@ -200,10 +366,18 @@ export function PredictionGame({
         />
         <div className="character-stage">
           <div className="character-shadow" />
-          <Character
-            username={game.authorUsername}
-            className="hero-character"
-          />
+          <button
+            ref={hero}
+            type="button"
+            className="hero-character-button"
+            aria-label={`${game.authorUsername}의 캐릭터`}
+            data-nopress
+            onClick={(e) => squishJump(e.currentTarget.firstElementChild)}
+          >
+            <span className="hero-character-wrap">
+              <Character username={game.authorUsername} className="hero-character" />
+            </span>
+          </button>
           <span className="author-pill" style={{ color: playerColor[game.authorUsername] }}>
             출제 {game.authorUsername}
           </span>
@@ -214,7 +388,10 @@ export function PredictionGame({
           <span>
             {revealed ? "정답" : author ? "예측 마감까지" : "마감까지"}
           </span>
-          <strong className={revealed ? "answer-number" : ""}>
+          <strong
+            ref={revealed ? answerRef : countdownRef}
+            className={revealed ? "answer-number" : urgent ? "urgent" : ""}
+          >
             {revealed
               ? `${game.answer ?? "—"}${game.id === "luck" ? "점" : ""}`
               : clock(left)}
@@ -228,7 +405,7 @@ export function PredictionGame({
         </div>
       </div>
       {revealed ? (
-        <div className="screen-body result-list">
+        <div className="screen-body result-list" ref={results}>
           {game.results.length ? (
             game.results.map((result) => {
               const rank = rankOf(game.results, result);
@@ -307,7 +484,7 @@ export function PredictionGame({
               </h2>
               {game.id === "luck" ? (
                 <div className="luck-input">
-                  <label className="luck-number">
+                  <label className="luck-number" ref={luckNumber}>
                     <span className="sr-only">
                       {author ? "정답 점수" : "예측 점수"}
                     </span>
@@ -356,10 +533,7 @@ export function PredictionGame({
                   함께 볼 힌트
                   <textarea
                     value={hint}
-                    onChange={(e) => {
-                      setHint(e.target.value);
-                      setNotice("");
-                    }}
+                    onChange={(e) => setHint(e.target.value)}
                     placeholder="오늘의 기분은 어때요?"
                     maxLength={200}
                     required
@@ -372,25 +546,23 @@ export function PredictionGame({
               <div className="card submission-list">
                 {[...game.participants]
                   .sort((a, b) => Number(a.username === user.username) - Number(b.username === user.username))
-                  .map(player => (
-                  <div className="submission-card" key={player.playerId}>
-                    <Avatar username={player.username} />
-                    <strong>{player.displayName}{player.username === user.username ? " (나)" : ""}</strong>
-                    <span className={`pill ${player.submitted ? "mint" : "muted"}`}>
-                      {player.submitted ? "제출 완료" : "아직"}
-                    </span>
-                  </div>
-                ))}
+                  .map((player) => (
+                    <SubmissionRow
+                      key={player.playerId}
+                      player={
+                        // The preview has no server, so mark my row once saved.
+                        demo && player.username === user.username && savedValue !== null
+                          ? { ...player, submitted: true }
+                          : player
+                      }
+                      me={player.username === user.username}
+                    />
+                  ))}
               </div>
             )}
             {error && (
               <p className="form-message error" role="alert">
                 {error}
-              </p>
-            )}
-            {notice && (
-              <p className="form-message success" role="status">
-                {notice}
               </p>
             )}
             {!editable && (
@@ -409,13 +581,20 @@ export function PredictionGame({
               disabled={!editable || busy}
               type="submit"
             >
-              {busy
-                ? "저장 중…"
-                : author
-                  ? "정답 저장"
-                  : saved
-                    ? "제출 완료 · 마감 전까지 수정 가능"
-                    : `${value}${game.id === "luck" ? "점" : ""}으로 예측`}
+              {saved && !author && (
+                <svg className="saved-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M5 12.5l4.5 4.5L19 7.5" pathLength="1" />
+                </svg>
+              )}
+              <span key={busy ? "busy" : saved ? "saved" : "idle"} className="button-label">
+                {busy
+                  ? "저장 중…"
+                  : author
+                    ? "정답 저장"
+                    : saved
+                      ? "제출 완료 · 마감 전까지 수정 가능"
+                      : `${value}${game.id === "luck" ? "점" : ""}으로 예측`}
+              </span>
             </button>
             {author && game.canReveal && !demo && (
               <button

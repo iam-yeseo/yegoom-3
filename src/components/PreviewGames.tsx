@@ -8,6 +8,23 @@ import {
 } from "react";
 import "../preview.css";
 import { BALANCE } from "../sample";
+import {
+  anim,
+  confetti,
+  dropIn,
+  flipY,
+  hop,
+  pop,
+  popIn,
+  reduced,
+  rise,
+  shake,
+  sparkle,
+  toast,
+  tween,
+  useMountMotion,
+  useOnChange,
+} from "../motion";
 import { Avatar, Chevron, Coin, Toolbar, artSrc, type ArtKey } from "./UI";
 
 type Game = "catchmind" | "kuji" | "claw";
@@ -105,6 +122,22 @@ function Guess() {
   const ended = fails >= endAfter;
   const hinted = fails >= hintAfter;
   const worth = hinted ? hintedPoints : points;
+  const form = useRef<HTMLFormElement>(null);
+  const nodes = useRef<HTMLDivElement>(null);
+  const words = useRef<HTMLDivElement>(null);
+  const correct = useRef<HTMLDivElement>(null);
+  useOnChange(fails, (before) => {
+    if (fails <= before) return;
+    shake(form.current);
+    pop(nodes.current?.children[fails - 1], 1.25);
+    rise(words.current?.lastElementChild);
+  });
+  useOnChange(solved, () => {
+    if (!solved) return;
+    popIn(correct.current);
+    confetti(correct.current);
+    hop(correct.current?.querySelector(".avatar"));
+  });
   function submit(event: FormEvent) {
     event.preventDefault();
     const word = guess.trim();
@@ -139,7 +172,7 @@ function Guess() {
                   : `힌트까지 ${hintAfter - fails}번`}
           </strong>
         </div>
-        <div className="pg-fail-nodes" aria-label={`오답 ${fails}회, ${endAfter}회면 종료`}>
+        <div className="pg-fail-nodes" ref={nodes} aria-label={`오답 ${fails}회, ${endAfter}회면 종료`}>
           {Array.from({ length: endAfter }, (_, i) => (
             <span
               key={i}
@@ -150,15 +183,9 @@ function Guess() {
           ))}
         </div>
       </div>
-      {hinted && !solved && !ended && (
-        <div className="pg-hint" aria-label="첫 글자 힌트: 눈, 세 글자">
-          <span>눈</span>
-          <span />
-          <span />
-        </div>
-      )}
+      {hinted && !solved && !ended && <HintTiles />}
       {!solved && (
-        <div className="pg-wrong-words">
+        <div className="pg-wrong-words" ref={words}>
           {log.map((item, i) => (
             <span key={i}>
               {item.who} · {item.word}
@@ -168,7 +195,7 @@ function Guess() {
       )}
       <div aria-live="polite">
         {solved && (
-          <div className="pg-correct">
+          <div className="pg-correct" ref={correct}>
             <Avatar username="yeseo" size={48} />
             <div>
               <small>내가 맞힘</small>
@@ -184,7 +211,7 @@ function Guess() {
           </div>
         )}
       </div>
-      <form className="pg-answer" onSubmit={submit}>
+      <form className="pg-answer" onSubmit={submit} ref={form}>
         <input
           aria-label="캐치마인드 정답"
           value={guess}
@@ -198,6 +225,17 @@ function Guess() {
           정답
         </button>
       </form>
+    </div>
+  );
+}
+
+function HintTiles() {
+  const first = useMountMotion<HTMLSpanElement>((el) => flipY(el));
+  return (
+    <div className="pg-hint" aria-label="첫 글자 힌트: 눈, 세 글자">
+      <span ref={first}>눈</span>
+      <span />
+      <span />
     </div>
   );
 }
@@ -256,54 +294,77 @@ const inks = [
 ] as const;
 function Drawing() {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const drawing = useRef(false);
+  const last = useRef<{ x: number; y: number } | null>(null);
+  const history = useRef<ImageData[]>([]);
   const [ink, setInk] = useState("#5E6A8A");
   const [size, setSize] = useState(1);
   const [eraser, setEraser] = useState(false);
-  const [hasDrawing, setHasDrawing] = useState(false);
+  const [strokes, setStrokes] = useState(0);
   const [posted, setPosted] = useState(false);
-  function point(e: PointerEvent<HTMLCanvasElement>) {
+  const context = () => canvas.current?.getContext("2d") ?? null;
+  function point(e: { clientX: number; clientY: number }) {
     const node = canvas.current!;
     const rect = node.getBoundingClientRect();
-    return [
-      ((e.clientX - rect.left) * node.width) / rect.width,
-      ((e.clientY - rect.top) * node.height) / rect.height,
-    ];
+    return {
+      x: ((e.clientX - rect.left) * node.width) / rect.width,
+      y: ((e.clientY - rect.top) * node.height) / rect.height,
+    };
   }
   function down(e: PointerEvent<HTMLCanvasElement>) {
-    if (e.button !== 0 || posted) return;
+    const ctx = context();
+    if (e.button !== 0 || posted || !ctx || !canvas.current) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    const ctx = canvas.current?.getContext("2d");
-    if (!ctx) return;
-    const [x, y] = point(e);
+    // Undo works per stroke: keep the canvas as it was before this one.
+    history.current = [...history.current.slice(-19), ctx.getImageData(0, 0, canvas.current.width, canvas.current.height)];
+    const p = point(e);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.lineWidth = [6, 12, 24][size] * (eraser ? 2.5 : 1);
     ctx.strokeStyle = ink;
     ctx.globalCompositeOperation = eraser ? "destination-out" : "source-over";
     ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + 0.1, y);
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x + 0.1, p.y);
     ctx.stroke();
-    drawing.current = true;
-    setHasDrawing(true);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    last.current = p;
+    setStrokes((n) => n + 1);
   }
   function move(e: PointerEvent<HTMLCanvasElement>) {
-    if (!drawing.current) return;
-    const ctx = canvas.current?.getContext("2d");
-    if (!ctx) return;
-    const [x, y] = point(e);
-    ctx.lineTo(x, y);
-    ctx.stroke();
+    const ctx = context();
+    if (!last.current || !ctx) return;
+    // Coalesced events and midpoint curves keep fast strokes smooth.
+    const events = e.nativeEvent.getCoalescedEvents?.() ?? [e.nativeEvent];
+    for (const ev of events.length ? events : [e.nativeEvent]) {
+      const p = point(ev);
+      const prev = last.current;
+      const mid = { x: (prev.x + p.x) / 2, y: (prev.y + p.y) / 2 };
+      ctx.quadraticCurveTo(prev.x, prev.y, mid.x, mid.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(mid.x, mid.y);
+      last.current = p;
+    }
+  }
+  const stop = () => {
+    last.current = null;
+  };
+  function undo() {
+    const ctx = context();
+    const snapshot = history.current.pop();
+    if (!ctx || !snapshot) return;
+    ctx.putImageData(snapshot, 0, 0);
+    setStrokes((n) => Math.max(0, n - 1));
   }
   function clear() {
     const node = canvas.current;
-    node?.getContext("2d")?.clearRect(0, 0, node.width, node.height);
-    setHasDrawing(false);
+    const ctx = context();
+    if (!node || !ctx) return;
+    history.current = [...history.current.slice(-19), ctx.getImageData(0, 0, node.width, node.height)];
+    ctx.clearRect(0, 0, node.width, node.height);
+    setStrokes(0);
   }
-  const stop = () => {
-    drawing.current = false;
-  };
   return (
     <div className="pg-stack">
       <div className="pg-prompt">
@@ -355,13 +416,21 @@ function Drawing() {
           <button aria-pressed={eraser} onClick={() => setEraser((v) => !v)}>
             지우개
           </button>
-          <button onClick={clear}>전체 지우기</button>
+          <button onClick={undo} disabled={!history.current.length || posted} aria-label="한 획 되돌리기">
+            되돌리기
+          </button>
+          <button onClick={clear} disabled={posted}>
+            전체 지우기
+          </button>
         </div>
       </div>
       <button
         className="primary-button pg-full"
-        disabled={!hasDrawing || posted}
-        onClick={() => setPosted(true)}
+        disabled={!strokes || posted}
+        onClick={() => {
+          setPosted(true);
+          toast("그림을 올렸어요");
+        }}
       >
         {posted ? "올렸어요" : "올리기"}
       </button>
@@ -387,6 +456,53 @@ function makeBoard() {
   }
   const used = new Set(indices.slice(0, 37));
   return pool.map((grade, i) => ({ grade, taken: used.has(i) }));
+}
+function KujiSheet({ grades, onClose }: { grades: number[]; onClose: () => void }) {
+  const [shown, setShown] = useState(0);
+  const sheet = useRef<HTMLDivElement>(null);
+  const best = Math.min(...grades);
+  const done = shown >= grades.length;
+  useEffect(() => {
+    anim(sheet.current?.parentElement, [{ opacity: 0 }, { opacity: 1 }], { dur: 200 });
+    anim(sheet.current, [{ translate: "0 100%" }, { translate: "0 0" }], { dur: 420, ease: "spring" });
+    const timers = grades.map((_, i) => setTimeout(() => setShown(i + 1), reduced() ? 0 : 420 + i * 750));
+    return () => timers.forEach(clearTimeout);
+  }, [grades]);
+  useEffect(() => {
+    if (!shown) return;
+    const ticket = sheet.current?.querySelectorAll(".kuji-ticket")[shown - 1];
+    const grade = grades[shown - 1];
+    flipY(ticket);
+    if (grade === 0) {
+      setTimeout(() => {
+        pop(ticket, 1.12);
+        confetti(ticket, { n: 44, spread: 190 });
+        sparkle(ticket, { n: 10, r: 46 });
+        hop(document.querySelector(".pg-kuji-heading img"));
+      }, 300);
+    } else if (grade <= 2) sparkle(ticket, { delay: 260 });
+  }, [shown, grades]);
+  return (
+    <div className="kuji-scrim" onClick={(e) => e.target === e.currentTarget && done && onClose()}>
+      <div className="kuji-sheet" ref={sheet} role="dialog" aria-label="뽑은 쿠지">
+        <strong aria-live="polite">{done && best === 0 ? "A상 당첨!" : "뽑은 쿠지"}</strong>
+        <div className="kuji-tickets">
+          {grades.map((grade, i) => (
+            <span
+              key={i}
+              className={`kuji-ticket ${i < shown ? "open" : ""} ${i < shown && grade === 0 ? "grand" : ""}`}
+              style={i < shown ? { background: gradeColors[grade], color: gradeText[grade] } : undefined}
+            >
+              {i < shown ? `${String.fromCharCode(65 + grade)}상` : "?"}
+            </span>
+          ))}
+        </div>
+        <button className="primary-button" disabled={!done} onClick={onClose}>
+          확인
+        </button>
+      </div>
+    </div>
+  );
 }
 function Kuji({ spend }: { spend: (amount: number) => void }) {
   const { price, raisedPrice, raiseFrom, boughtToday } = BALANCE.kuji;
@@ -422,13 +538,19 @@ function Kuji({ spend }: { spend: (amount: number) => void }) {
             <button
               key={i}
               type="button"
+              data-nopress
               aria-label={`${i + 1}번 칸${cell.taken ? `, 이미 뽑힌 ${String.fromCharCode(65 + cell.grade)}상` : selected.includes(i) ? ", 선택됨" : ""}`}
               aria-pressed={selected.includes(i)}
               disabled={cell.taken}
               className={selected.includes(i) ? "selected" : ""}
-              onClick={() => {
-                setSelected((value) => (value.includes(i) ? value.filter((n) => n !== i) : [...value, i]));
-                setDrawn([]);
+              onClick={(e) => {
+                const on = selected.includes(i);
+                anim(e.currentTarget, on ? [{ scale: ".85" }, { scale: "1" }] : [{ scale: ".6" }, { scale: "1.15", offset: 0.6 }, { scale: "1" }], {
+                  dur: on ? 200 : 320,
+                  ease: "out",
+                  fill: "none",
+                });
+                setSelected((value) => (on ? value.filter((n) => n !== i) : [...value, i]));
               }}
             >
               {cell.taken ? String.fromCharCode(65 + cell.grade) : selected.includes(i) ? "✓" : ""}
@@ -465,24 +587,13 @@ function Kuji({ spend }: { spend: (amount: number) => void }) {
         <button className="primary-button pg-full" disabled={!selected.length} onClick={draw}>
           {selected.length ? `${selected.length}장 뽑기 · ${cost.toLocaleString("ko-KR")}G` : "칸을 골라주세요"}
         </button>
-        {drawn.length > 0 && (
-          <div className="pg-card pg-kuji-result" role="status">
-            <strong>뽑은 쿠지</strong>
-            <div>
-              {drawn.map((grade, i) => (
-                <span key={i} style={{ background: gradeColors[grade], color: gradeText[grade] }}>
-                  {String.fromCharCode(65 + grade)}상
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
+      {drawn.length > 0 && <KujiSheet grades={drawn} onClose={() => setDrawn([])} />}
     </>
   );
 }
 
-type Phase = "idle" | "down" | "close" | "up" | "carry" | "won" | "missed";
+type Phase = "idle" | "down" | "close" | "up" | "carry" | "drop" | "won" | "missed";
 const TARGET: ArtKey = "monkey";
 const prizes: { art: ArtKey; x: number; y: number; size: number; rotate: number }[] = [
   { art: "manta", x: 2, y: 0, size: 96, rotate: -8 },
@@ -492,6 +603,41 @@ const prizes: { art: ArtKey; x: number; y: number; size: number; rotate: number 
   { art: "moon", x: 38, y: 62, size: 78, rotate: -12 },
   { art: "axolotl", x: 63, y: 44, size: 74, rotate: 8 },
 ];
+function ClawSuccess({ tries, onBack, onAgain }: { tries: number; onBack: () => void; onAgain: () => void }) {
+  const { cost, dailyTries, points } = BALANCE.claw;
+  const [score, setScore] = useState(0);
+  const character = useMountMotion<HTMLImageElement>((el) => {
+    dropIn(el);
+    setTimeout(() => confetti(el, { spread: 170 }), reduced() ? 0 : 500);
+  });
+  useEffect(() => tween(0, points, 700, (v) => setScore(Math.round(v))), [points]);
+  return (
+    <div className="pg-claw-success">
+      <div className="pg-celebration">
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+        <span />
+        <img ref={character} src={artSrc(TARGET)} alt="별숭이" />
+      </div>
+      <div className="pg-success-copy" role="status">
+        <span>뽑았다!</span>
+        <strong>+{score}점</strong>
+        <small>
+          오늘 남은 횟수 {tries} / {dailyTries}
+        </small>
+      </div>
+      <div className="pg-success-actions">
+        <button onClick={onBack}>확인</button>
+        <button disabled={!tries} onClick={onAgain}>
+          한 번 더 · {cost}G
+        </button>
+      </div>
+    </div>
+  );
+}
 function Claw({
   spend,
   onWon,
@@ -506,16 +652,40 @@ function Claw({
   const [phase, setPhase] = useState<Phase>("idle");
   const [tries, setTries] = useState(3);
   const [success, setSuccess] = useState(false);
+  const [slipping, setSlipping] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const busyRef = useRef(false);
+  const arm = useRef<HTMLDivElement>(null);
+  const slip = useRef<HTMLImageElement>(null);
+  const out = useRef<HTMLDivElement>(null);
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
   useEffect(() => onWon(phase === "won"), [phase, onWon]);
+  // The claw swings like a pendulum whenever the carriage moves.
+  useOnChange(x, (before) => {
+    const dir = x > before ? 1 : -1;
+    anim(arm.current, [{ rotate: "0deg" }, { rotate: `${-8 * dir}deg`, offset: 0.3 }, { rotate: `${4 * dir}deg`, offset: 0.65 }, { rotate: "0deg" }], {
+      dur: 620,
+      ease: "inOut",
+      fill: "none",
+    });
+  });
+  useEffect(() => {
+    if (!slipping || !slip.current) return;
+    anim(slip.current, [
+      { translate: "0 0", rotate: "0deg", opacity: 1 },
+      { translate: "6px 150px", rotate: "18deg", opacity: 1, offset: 0.55 },
+      { translate: "10px 120px", rotate: "10deg", opacity: 1, offset: 0.72 },
+      { translate: "12px 150px", rotate: "14deg", opacity: 1, offset: 0.86 },
+      { translate: "12px 150px", rotate: "14deg", opacity: 0 },
+    ], { dur: 900, ease: "inOut" });
+  }, [slipping]);
   const busy = !["idle", "missed", "won"].includes(phase);
   const holding = success && ["up", "carry"].includes(phase);
   function grab() {
     if (busyRef.current || busy || tries <= 0 || phase === "won") return;
     busyRef.current = true;
     const caught = Math.abs(x - 0.38) <= 0.09;
+    const near = !caught && Math.abs(x - 0.38) <= 0.2;
     setSuccess(caught);
     setPhase("down");
     setTries((value) => value - 1);
@@ -524,7 +694,10 @@ function Claw({
       timers.current.push(setTimeout(fn, delay));
     };
     later(() => setPhase("close"), 750);
-    later(() => setPhase("up"), 1100);
+    later(() => {
+      setPhase("up");
+      if (near) setSlipping(true);
+    }, 1100);
     later(() => {
       if (caught) {
         setPhase("carry");
@@ -532,42 +705,28 @@ function Claw({
       }
     }, 1900);
     later(() => {
-      setPhase(caught ? "won" : "missed");
-      busyRef.current = false;
+      setSlipping(false);
+      if (!caught) {
+        setPhase("missed");
+        busyRef.current = false;
+        return;
+      }
+      setPhase("drop");
+      confetti(out.current);
+      toast(`+${points}점`);
     }, 2400);
+    later(() => {
+      if (!caught) return;
+      setPhase("won");
+      busyRef.current = false;
+    }, 3100);
   }
   function reset() {
     setPhase("idle");
     setX(0.32);
     setSuccess(false);
   }
-  if (phase === "won")
-    return (
-      <div className="pg-claw-success">
-        <div className="pg-celebration">
-          <i />
-          <i />
-          <i />
-          <i />
-          <i />
-          <span />
-          <img src={artSrc(TARGET)} alt="별숭이" />
-        </div>
-        <div className="pg-success-copy" role="status">
-          <span>뽑았다!</span>
-          <strong>+{points}점</strong>
-          <small>
-            오늘 남은 횟수 {tries} / {dailyTries}
-          </small>
-        </div>
-        <div className="pg-success-actions">
-          <button onClick={onBack}>확인</button>
-          <button disabled={!tries} onClick={reset}>
-            한 번 더 · {cost}G
-          </button>
-        </div>
-      </div>
-    );
+  if (phase === "won") return <ClawSuccess tries={tries} onBack={onBack} onAgain={reset} />;
   return (
     <>
       <div className="pg-claw-heading">
@@ -588,17 +747,22 @@ function Claw({
           <div className="pg-machine-rail" />
           <div className="pg-claw" style={{ left: `${x * 100}%` }}>
             <div className="pg-claw-cart" />
-            <div className="pg-claw-rope" style={{ height: ["down", "close"].includes(phase) ? 206 : 24 }} />
-            <div className="pg-claw-head">
-              <i />
-              <span style={{ transform: `rotate(${phase === "close" || holding ? -8 : 24}deg)` }} />
-              <span style={{ transform: `rotate(${phase === "close" || holding ? 8 : -24}deg)` }} />
+            <div className="pg-claw-arm" ref={arm}>
+              <div className="pg-claw-rope" style={{ height: ["down", "close"].includes(phase) ? 206 : 24 }} />
+              <div className="pg-claw-head">
+                <i />
+                <span style={{ transform: `rotate(${phase === "close" || holding || slipping ? -8 : 24}deg)` }} />
+                <span style={{ transform: `rotate(${phase === "close" || holding || slipping ? 8 : -24}deg)` }} />
+              </div>
+              {holding && <img className={phase === "carry" ? "carrying" : ""} src={artSrc(TARGET)} alt="" />}
+              {slipping && <img ref={slip} src={artSrc(TARGET)} alt="" />}
             </div>
-            {holding && <img src={artSrc(TARGET)} alt="" />}
           </div>
-          <div className="pg-out">OUT</div>
+          <div className="pg-out" ref={out}>
+            OUT
+          </div>
           {prizes
-            .filter((prize) => !(holding && prize.art === TARGET))
+            .filter((prize) => !((holding || slipping || phase === "drop") && prize.art === TARGET))
             .map((prize) => (
               <img
                 key={prize.art}
@@ -638,7 +802,7 @@ function Claw({
           <Chevron direction="right" size={26} width={2.8} />
         </button>
         <button disabled={busy || !tries} onClick={grab} aria-live="polite">
-          {busy ? "두근두근…" : !tries ? "내일 다시" : phase === "missed" ? "놓쳤어요 · 다시" : "잡기"}
+          {busy ? "두근두근…" : !tries ? "내일 다시" : phase === "missed" ? "아깝다!" : "잡기"}
         </button>
       </div>
     </>

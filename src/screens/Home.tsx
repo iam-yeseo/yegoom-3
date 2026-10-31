@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import type { GameState } from "../../shared/types";
 import { claimToday, useAttendance } from "../attendance";
 import {
@@ -19,6 +20,18 @@ import {
   rankOf,
   weekdayNames,
 } from "../sample";
+import {
+  anim,
+  coinFly,
+  flip,
+  greet,
+  hop,
+  squishJump,
+  toast,
+  useCountUp,
+  useMountMotion,
+  useOnChange,
+} from "../motion";
 
 export interface HomePlayer {
   username: string;
@@ -160,10 +173,19 @@ export function TodayGames({ data, go }: { data: HomeData; go: Go }) {
         title="오늘의 게임"
         right={isEvening() ? `오늘 +${earned}점` : kstDateText()}
       />
-      {rows.map((row) => {
-        const [label, bg, fg] = chips[row.chip];
-        return (
-          <button key={row.path} className="card game-row" onClick={() => go(row.path)}>
+      {rows.map((row) => (
+        <GameRowButton key={row.path} row={row} go={go} />
+      ))}
+    </>
+  );
+}
+/** A game row whose status chip flips when its state changes. */
+function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
+  const [label, bg, fg] = chips[row.chip];
+  const chip = useRef<HTMLSpanElement>(null);
+  useOnChange(label, () => flip(chip.current));
+  return (
+          <button className="card game-row" onClick={() => go(row.path)}>
             <span className="game-row-icon" style={{ background: art[row.icon].tint }}>
               <img className="character" src={artSrc(row.icon)} alt="" />
             </span>
@@ -172,7 +194,7 @@ export function TodayGames({ data, go }: { data: HomeData; go: Go }) {
               <small>{row.sub}</small>
             </span>
             <span className="game-row-side">
-              <span className="chip" style={{ background: bg, color: fg }}>
+              <span className="chip" ref={chip} style={{ background: bg, color: fg }}>
                 {label}
               </span>
               {row.right && (
@@ -180,9 +202,6 @@ export function TodayGames({ data, go }: { data: HomeData; go: Go }) {
               )}
             </span>
           </button>
-        );
-      })}
-    </>
   );
 }
 
@@ -277,8 +296,33 @@ function settleText() {
   return days ? `정산까지 ${days}일` : "오늘 정산";
 }
 
-function AttendanceCard({ data, go }: { data: HomeData; go: Go }) {
+function AttendanceCard({
+  data,
+  go,
+  onClaimed,
+}: {
+  data: HomeData;
+  go: Go;
+  onClaimed: () => void;
+}) {
   const { days, claimed, streak } = useAttendance(data.attendanceKey);
+  const card = useRef<HTMLElement>(null);
+  const claim = (button: HTMLElement) => {
+    const pill = document.querySelector(".room-top .gold");
+    coinFly(button, pill, () => {
+      claimToday(data.attendanceKey);
+      onClaimed();
+      toast(`+${BALANCE.attendanceGold}G 받았어요`);
+    });
+  };
+  useOnChange(claimed, () => {
+    if (!claimed) return;
+    anim(card.current?.querySelector(".week-day.today .node"), [
+      { scale: "1.8", rotate: "-20deg", opacity: 0 },
+      { scale: "1", rotate: "0deg", opacity: 1 },
+    ], { dur: 420, ease: "spring" });
+    hop(document.querySelector(".room-character"));
+  });
   const t = kstParts();
   const monday = new Date(Date.now() - t.weekday * 86_400_000);
   const week = weekdayNames.map((name, i) => {
@@ -294,7 +338,7 @@ function AttendanceCard({ data, go }: { data: HomeData; go: Go }) {
   });
   const reached = week.filter((d) => d.state === "claimed").length;
   return (
-    <section className="card attendance-card">
+    <section className="card attendance-card" ref={card}>
       <div className="attendance-head">
         <button className="attendance-title" onClick={() => go("/attendance")}>
           <strong>출석체크</strong>
@@ -307,7 +351,7 @@ function AttendanceCard({ data, go }: { data: HomeData; go: Go }) {
         {claimed ? (
           <span className="claim-button done">받음</span>
         ) : (
-          <button className="claim-button" onClick={() => claimToday(data.attendanceKey)}>
+          <button className="claim-button" onClick={(e) => claim(e.currentTarget)}>
             <Coin size={24} />
             받기
           </button>
@@ -342,14 +386,18 @@ function AttendanceCard({ data, go }: { data: HomeData; go: Go }) {
   );
 }
 
-function Room({ data, evening }: { data: HomeData; evening: boolean }) {
+function Room({ data, gold, evening }: { data: HomeData; gold: number; evening: boolean }) {
+  const shown = useCountUp(gold);
+  const character = useMountMotion<HTMLImageElement>((el) => {
+    setTimeout(() => greet(el), 300);
+  });
   return (
     <div className={`room ${evening ? "evening" : ""}`}>
       <div className="room-top">
         <span className="room-name">예굼방</span>
         <span className="gold">
           <Coin size={22} />
-          {data.gold.toLocaleString("ko-KR")}
+          {shown.toLocaleString("ko-KR")}
           <span className="sr-only"> 골드</span>
         </span>
       </div>
@@ -375,7 +423,19 @@ function Room({ data, evening }: { data: HomeData; evening: boolean }) {
       </div>
       <div className="room-floor" />
       <div className="room-rug" />
-      <Character username={data.username} className="room-character" />
+      <button
+        className="room-character-button"
+        aria-label="내 캐릭터"
+        data-nopress
+        onClick={(e) => squishJump(e.currentTarget.firstElementChild)}
+      >
+        <span ref={character} className="room-character-wrap">
+          <Character
+            username={data.username}
+            className={`room-character ${evening ? "sleepy" : ""}`}
+          />
+        </span>
+      </button>
       <div className="room-fade" />
     </div>
   );
@@ -383,10 +443,13 @@ function Room({ data, evening }: { data: HomeData; evening: boolean }) {
 
 export function Home({ data, go }: { data: HomeData; go: Go }) {
   const evening = isEvening();
+  // The preview shows the attendance gold; real claims are not credited yet.
+  const [bonus, setBonus] = useState(0);
   const table = standings(data.players);
   const me = table.find((p) => p.username === data.username);
   const top = table[0];
   const max = Math.max(top?.weeklyScore ?? 0, 1);
+  const score = useCountUp(me?.weeklyScore ?? 0);
   const rankLine = !me
     ? ""
     : me.rank === 1
@@ -396,13 +459,13 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
       : `1위 ${top.displayName}까지 ${top.weeklyScore - me.weeklyScore}점`;
   return (
     <div className={`home ${evening ? "evening" : ""}`}>
-      <Room data={data} evening={evening} />
+      <Room data={data} gold={data.gold + bonus} evening={evening} />
       <div className="home-score">
         <div className="home-score-row">
           <div>
             <h1>{data.displayName}</h1>
             <p>
-              <strong>{me?.weeklyScore ?? 0}</strong>
+              <strong>{score}</strong>
               <span>점</span>
             </p>
           </div>
@@ -416,7 +479,11 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
         )}
       </div>
       <div className="home-body">
-        <AttendanceCard data={data} go={go} />
+        <AttendanceCard
+          data={data}
+          go={go}
+          onClaimed={() => data.attendanceKey === "preview" && setBonus(BALANCE.attendanceGold)}
+        />
         <TodayGames data={data} go={go} />
         <SoloGames go={go} />
         <SectionTitle title="상점" right="전체" onClick={() => go("/shop")} />
