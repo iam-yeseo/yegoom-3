@@ -11,10 +11,13 @@ const hash = createHash('sha256');
 for (const file of files) hash.update(await readFile(file));
 const cache = `yegoom3-${hash.digest('hex').slice(0, 12)}`;
 const paths = files.map((file) => file === 'dist/index.html' ? '/' : '/' + file.slice(dir.length + 1));
+const lazySprites = paths.filter((path) => path.startsWith('/characters/sprites/') && !path.endsWith('-idle.webp'));
+const precachePaths = paths.filter((path) => !lazySprites.includes(path));
 await writeFile(join(dir, 'sw.js'), `
 const CACHE = ${JSON.stringify(cache)};
-const FILES = ${JSON.stringify(paths)};
+const FILES = ${JSON.stringify(precachePaths)};
 const STATIC = new Set(FILES);
+const SPRITES = new Set(${JSON.stringify(lazySprites)});
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES)));
 });
@@ -26,6 +29,17 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   // Authentication and game results always require a live server; never queue writes.
   if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
+  if (SPRITES.has(url.pathname)) {
+    event.respondWith(caches.open(CACHE).then(async cache => {
+      const cached = await cache.match(url.pathname);
+      if (cached) return cached;
+      const response = await fetch(request);
+      // A cache write failure must not hide an otherwise loaded sprite.
+      if (response.ok) await cache.put(url.pathname, response.clone()).catch(() => {});
+      return response;
+    }));
+    return;
+  }
   if (request.mode === 'navigate') {
     event.respondWith(fetch(request).catch(() => caches.open(CACHE).then(cache => cache.match('/')).then(response => response || Response.error())));
     return;
@@ -35,4 +49,4 @@ self.addEventListener('fetch', event => {
   }
 });
 `);
-console.log(`PWA precache: ${paths.length} static files, ${cache}`);
+console.log(`PWA precache: ${precachePaths.length} static files, ${lazySprites.length} sprites on demand, ${cache}`);
