@@ -1,8 +1,7 @@
 {
   "id": "/",
-  "name": "예굼방3",
-  "short_name": "예굼방3",
-  "description": "우리만의 작은 아케이드",
+  "name": "예굼방 아케이드 3",
+  "short_name": "예굼방 아케이드 3",
   "lang": "ko",
   "start_url": "/",
   "scope": "/",

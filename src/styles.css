@@ -139,6 +139,7 @@ button svg {
   font-size: 25px;
   font-weight: 900;
   letter-spacing: -1.2px;
+  white-space: nowrap;
 }
 .wordmark > span {
   font-size: 15px;
@@ -994,7 +995,7 @@ button svg {
     width: 210px;
   }
   .desktop-brand .wordmark {
-    font-size: 32px;
+    font-size: 26px;
   }
   .desktop-brand p {
     margin-top: 18px;
