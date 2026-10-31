@@ -155,7 +155,7 @@ function Login({
     <div className="login-page">
       <div className="login-hero">
         <span className="wordmark">
-          예굼방<span>3</span>
+          예굼방 아케이드<span>3</span>
         </span>
         <span className="login-spark spark-one">✦</span>
         <span className="login-spark spark-two">✦</span>
@@ -524,7 +524,7 @@ export default function App() {
     <>
       <aside className="desktop-brand" aria-hidden="true">
         <span className="wordmark">
-          예굼방<span>3</span>
+          예굼방 아케이드<span>3</span>
         </span>
         <p>
           조금 더 가까워지는

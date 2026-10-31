@@ -104,8 +104,8 @@ button svg {
 }
 .app-shell {
   position: relative;
+  /* Phones use the full width; wider screens keep the 390px design column. */
   width: 100%;
-  max-width: 390px;
   min-height: 100dvh;
   margin: 0 auto;
   background: var(--cream);
@@ -139,6 +139,7 @@ button svg {
   font-size: 25px;
   font-weight: 900;
   letter-spacing: -1.2px;
+  white-space: nowrap;
 }
 .wordmark > span {
   font-size: 15px;
@@ -974,6 +975,7 @@ button svg {
 }
 @media (min-width: 600px) {
   .app-shell {
+    max-width: 390px;
     margin: 32px auto;
     min-height: calc(100dvh - 64px);
     border-radius: 28px;
@@ -993,7 +995,7 @@ button svg {
     width: 210px;
   }
   .desktop-brand .wordmark {
-    font-size: 32px;
+    font-size: 26px;
   }
   .desktop-brand p {
     margin-top: 18px;
