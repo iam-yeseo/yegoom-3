@@ -1,4 +1,5 @@
-"""Cut the cream background out of the character art.
+"""이전 임시 아트용, 최종 아트에는 쓰지 않음
+Cut the cream background out of the character art.
 
 The original art (1254px RGB on a cream background) is in the Claude Design
 export, project/assets/. Usage:
