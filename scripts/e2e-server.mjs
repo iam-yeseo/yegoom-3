@@ -37,6 +37,17 @@ const salt = randomBytes(16);
 const passwordHash = `pbkdf2-sha256$100000$${salt.toString('hex')}$${pbkdf2Sync('e2e-only-password-2026', salt, 100000, 32, 'sha256').toString('hex')}`;
 const statements = ['min', 'siwon', 'yeseo', 'admin'].map(username =>
   `INSERT INTO users (id, username, display_name, password_hash, role) VALUES ('e2e-${username}', '${username}', '${username}', '${passwordHash}', '${username === 'admin' ? 'admin' : 'player'}');`);
+// A six-day streak earns the seventh-day reward today. A September record
+// verifies that changing calendar months loads server history rather than the
+// current month's bootstrap days. Legacy browser attendance is never seeded.
+for (const [date, streak] of [
+  ['2026-09-29', 1], ['2026-10-24', 1], ['2026-10-25', 2],
+  ['2026-10-26', 3], ['2026-10-27', 4], ['2026-10-28', 5], ['2026-10-29', 6],
+]) {
+  const createdAt = `${date}T00:00:00.000Z`;
+  statements.push(`INSERT INTO attendance (user_id, date, streak, created_at) VALUES ('e2e-min', '${date}', ${streak}, '${createdAt}');`);
+  statements.push(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('fixture-attendance-${date}', 'e2e-min', 'gold', 100, '출석 보상', 'attendance:${date}:e2e-min', '${createdAt}');`);
+}
 // Four published days plus an empty day exercise the recent-three-round UI.
 // The rows are intentionally unsettled so the real read path generates payouts.
 for (const [game, author, answer, secondGuess] of [

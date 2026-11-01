@@ -1,7 +1,13 @@
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import type { BootstrapResponse } from '../../shared/types';
+
+// Match the isolated Worker fixture; performance/animation timers still run.
+const TEST_NOW = '2026-10-30T00:00:00Z';
+test.beforeEach(async ({ page }) => { await page.clock.setFixedTime(new Date(TEST_NOW)); });
+
 async function login(page: Page, username: string) {
+  await page.clock.setFixedTime(new Date(TEST_NOW));
   await page.goto('/');
   await page.getByLabel('아이디', { exact: true }).fill(username);
   await page.getByLabel('비밀번호', { exact: true }).fill('e2e-only-password-2026');
@@ -88,14 +94,15 @@ async function snapshot(page: Page): Promise<BootstrapResponse> {
   expect(response.status()).toBe(200);
   return response.json();
 }
-async function captureWidths(page: Page, name: string, info: TestInfo) {
+async function captureWidths(page: Page, name: string, info: TestInfo, phase = 1) {
   await mkdir('docs/screenshots', { recursive: true });
+  await expect(page.locator('.fx-toast')).toHaveCount(0);
   for (const width of [390, 560]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.locator('main')).not.toContainText('NaN');
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     await page.evaluate(() => document.fonts.ready);
-    const path = `docs/screenshots/v2-p1-${name}-${width}.png`;
+    const path = phase === 2 ? `docs/screenshots/v2-p2-${name}-${width}.png` : info.outputPath(`${name}-${width}.png`);
     await page.screenshot({ path, fullPage: true, animations: 'disabled' });
     await info.attach(`${name}-${width}px`, { path, contentType: 'image/png' });
   }
@@ -119,10 +126,19 @@ test('preview seconds, history and help work without API access at both target w
   await expect(help).toContainText('10:30:00');
   await expect(help).toContainText('참여 보상 100G');
   await expect(help).toContainText('동점이면 모두');
-  await expect(help.getByRole('row', { name: '60초 이하 25점' })).toBeVisible();
+  await expect(help.getByRole('row', { name: '1분 이내 25점' })).toBeVisible();
+  await expect(help.getByRole('row', { name: '1시간 이내 5점' })).toBeVisible();
+  await expect(help.getByRole('row', { name: '정확히 일치 30점' })).toBeVisible();
+  await captureWidths(page, 'help-wake', info, 2);
   await page.goto('/#/preview/game/offwork');
   await expect(page.locator('.result-list .result-card')).not.toHaveCount(0);
   await captureWidths(page, 'preview-results', info);
+  await page.getByText('게임 방법', { exact: true }).click();
+  await expect(help.getByRole('row', { name: '15초 이내 25점' })).toBeVisible();
+  await page.goto('/#/preview/game/luck');
+  await page.getByText('게임 방법', { exact: true }).click();
+  await expect(help.getByRole('row', { name: '10점 차이 이내 3점' })).toBeVisible();
+  await expect(help.getByRole('row', { name: '정확히 일치 30점' })).toBeVisible();
   // Reduced motion has no indefinitely repeating sprite animations.
   expect(await page.locator('.hero-character').evaluate(element => element.getAnimations().some(animation => animation.effect?.getTiming().iterations === Infinity))).toBe(false);
   for (const route of ['/preview', '/preview/ranking']) {
@@ -291,4 +307,174 @@ test('a delayed bootstrap cannot restore the previous user after logout', async 
   await completed;
   await expect(page.getByRole('button', { name: '예굼방 들어가기' })).toBeVisible();
   expect((await page.request.get('/api/auth/me')).status()).toBe(401);
+});
+
+test('seventh attendance claim waits for the celebration, collapses and loads past months from the server', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await login(page, 'min');
+  const before = await snapshot(page);
+  expect(before.attendance).toMatchObject({ today: '2026-10-30', claimed: false, cycleDay: 7, reward: 500, monthCount: 6 });
+  const card = page.locator('.attendance-card');
+  await expect(card).toContainText('500G');
+  await expect(card.locator('.week-day')).toHaveCount(7);
+  await card.getByRole('button', { name: '받기', exact: true }).click();
+  await expect(page.locator('.fx-coin').first()).toBeVisible();
+  await expect(card.locator('.week-path')).toBeVisible();
+  await expect(page.locator('.room-character')).toHaveAttribute('data-state', 'jump');
+  await expect(card.locator('.week-path')).toBeVisible();
+  const toggle = card.getByRole('button', { name: '오늘 출석 완료 · 7일째', exact: true });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(card.locator('.week-path')).not.toBeVisible();
+  const after = await snapshot(page);
+  expect(after.user.gold).toBe(before.user.gold + 500);
+  expect(after.attendance).toMatchObject({ claimed: true, streak: 7, cycleDay: 7, reward: 500, monthCount: 7 });
+  expect(after.ledger.filter(entry => entry.reason.includes('출석') && entry.createdAt.startsWith('2026-10-30'))).toEqual([
+    expect.objectContaining({ currency: 'gold', amount: 500 }),
+  ]);
+  await expect(page.locator('.room-top .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
+  await captureWidths(page, 'authenticated-home', info, 2);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(card.locator('.week-path')).toBeVisible();
+  await page.reload();
+  await expect(card.getByRole('button', { name: '오늘 출석 완료 · 7일째', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  const duplicate = await page.request.post('/api/me/attendance', { data: {}, headers: { Origin: new URL(page.url()).origin } });
+  expect(duplicate.status()).toBe(200);
+  expect(await duplicate.json()).toMatchObject({ awarded: false, user: { gold: after.user.gold } });
+  await page.goto('/#/attendance');
+  await expect(page.getByRole('heading', { name: '2026년 10월' })).toBeVisible();
+  await expect(page.getByLabel('2026-10-30 출석', { exact: true })).toBeVisible();
+  await expect(page.locator('.streak-node')).toHaveCount(7);
+  await expect(page.locator('.streak-node').last()).toContainText('500');
+  await captureWidths(page, 'authenticated-attendance', info, 2);
+  const previousMonth = page.waitForResponse(response => response.url().includes('/api/me/attendance?month=2026-09'));
+  await page.getByRole('button', { name: '이전 달', exact: true }).click();
+  expect((await previousMonth).status()).toBe(200);
+  await expect(page.getByRole('heading', { name: '2026년 9월' })).toBeVisible();
+  await expect(page.getByLabel('2026-09-29 출석', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('2026-09-28 미출석', { exact: true })).toBeVisible();
+  await page.goto('/#/profile');
+  await expect(page.locator('.profile-summary .stats')).toContainText('7일');
+  await expect(page.locator('.history-row').filter({ hasText: '출석' }).first()).toContainText('+500G');
+});
+
+test('legacy attendance is discarded and a reduced-motion claim pays only the server reward', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/#/preview');
+  await page.evaluate(() => localStorage.setItem('yegoom3:attendance:yeseo', '2026-10-24,2026-10-25,2026-10-26,2026-10-27,2026-10-28,2026-10-29,2026-10-30'));
+  await login(page, 'yeseo');
+  const before = await snapshot(page);
+  expect(before.attendance).toMatchObject({ claimed: false, cycleDay: 1, streak: 1, reward: 100, monthCount: 0 });
+  expect(await page.evaluate(() => localStorage.getItem('yegoom3:attendance:yeseo'))).toBeNull();
+  const card = page.locator('.attendance-card');
+  const paid = page.waitForResponse(response => response.url().endsWith('/api/me/attendance') && response.request().method() === 'POST');
+  await card.getByRole('button', { name: '받기', exact: true }).click();
+  expect((await paid).status()).toBe(200);
+  await expect(card.getByRole('button', { name: '오늘 출석 완료 · 1일째', exact: true })).toHaveAttribute('aria-expanded', 'false', { timeout: 1000 });
+  await expect(page.locator('.fx-coin')).toHaveCount(0);
+  const after = await snapshot(page);
+  expect(after.user.gold).toBe(before.user.gold + 100);
+  expect(after.attendance).toMatchObject({ claimed: true, streak: 1, monthCount: 1 });
+  await page.reload();
+  await expect(card.getByRole('button', { name: '오늘 출석 완료 · 1일째', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  expect((await snapshot(page)).user.gold).toBe(after.user.gold);
+});
+
+test('administrators cannot claim attendance through the screen or the API', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'admin');
+  const before = await snapshot(page);
+  expect(before.attendance.canClaim).toBe(false);
+  const homeClaims = page.locator('.attendance-card button').filter({ hasText: /^받기$/ });
+  expect(await homeClaims.count() === 0 || await homeClaims.first().isDisabled()).toBe(true);
+  await page.goto('/#/attendance');
+  await expect(page.getByRole('heading', { name: '출석 체크', exact: true })).toBeVisible();
+  const claims = page.getByRole('button', { name: /^받기/ });
+  expect(await claims.count() === 0 || await claims.first().isDisabled()).toBe(true);
+  const claim = await page.request.post('/api/me/attendance', { data: {}, headers: { Origin: new URL(page.url()).origin } });
+  expect(claim.status()).toBe(403);
+  expect((await snapshot(page)).user.gold).toBe(before.user.gold);
+});
+
+test('character import runs only for a null server choice and selected characters persist across contexts', async ({ page, browser }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/#/preview');
+  await page.evaluate(() => localStorage.setItem('yegoom3:character:siwon', 'moon'));
+  const imports: unknown[] = [];
+  page.on('request', request => {
+    if (request.url().endsWith('/api/me/character') && request.method() === 'PUT' && request.postDataJSON()?.migrate) imports.push(request.postDataJSON());
+  });
+  await login(page, 'siwon');
+  await expect.poll(async () => (await snapshot(page)).user.character).toBe('moon');
+  expect(imports).toEqual([{ character: 'moon', migrate: true, expectedUserId: 'e2e-siwon' }]);
+  expect(await page.evaluate(() => localStorage.getItem('yegoom3:character:siwon'))).toBeNull();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'siwon', exact: true })).toBeVisible();
+  expect(imports).toHaveLength(1);
+  await page.goto('/#/profile');
+  const bread = page.getByRole('button', { name: /^빵빵/ });
+  await bread.click();
+  await expect(bread).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.profile-character [data-character="bread"]')).toBeVisible();
+  expect((await snapshot(page)).user.character).toBe('bread');
+  await captureWidths(page, 'authenticated-profile', info, 2);
+  const other = await browser.newContext({ reducedMotion: 'reduce' });
+  try {
+    const anotherDevice = await other.newPage();
+    await anotherDevice.goto('/#/preview');
+    await anotherDevice.evaluate(() => localStorage.setItem('yegoom3:character:siwon', 'cat'));
+    let unwantedImport = false;
+    anotherDevice.on('request', request => {
+      if (request.url().endsWith('/api/me/character') && request.method() === 'PUT' && request.postDataJSON()?.migrate) unwantedImport = true;
+    });
+    await login(anotherDevice, 'siwon');
+    await anotherDevice.goto('/#/profile');
+    await expect(anotherDevice.getByRole('button', { name: /^빵빵/ })).toHaveAttribute('aria-pressed', 'true');
+    expect((await snapshot(anotherDevice)).user.character).toBe('bread');
+    expect(await anotherDevice.evaluate(() => localStorage.getItem('yegoom3:character:siwon'))).toBeNull();
+    expect(unwantedImport).toBe(false);
+    await anotherDevice.getByRole('button', { name: '로그아웃', exact: true }).click();
+    await login(anotherDevice, 'min');
+    const data = await snapshot(anotherDevice);
+    expect(data.players.find(player => player.username === 'siwon')?.character).toBe('bread');
+    await anotherDevice.goto('/#/game/luck');
+    const row = anotherDevice.getByRole('region', { name: '최근 결과 기록' }).locator('.result-card').filter({ hasText: 'siwon' }).first();
+    await expect(row.locator('[data-character="bread"]')).toBeVisible();
+    // Duplicate choices are permitted; ownership labels are informational.
+    await anotherDevice.goto('/#/profile');
+    await anotherDevice.getByRole('button', { name: /^빵빵/ }).click();
+    await expect(anotherDevice.getByRole('button', { name: /^빵빵/ })).toHaveAttribute('aria-pressed', 'true');
+    expect((await snapshot(anotherDevice)).user.character).toBe('bread');
+  } finally { await other.close(); }
+});
+
+test('preview attendance and character choices stay local at both target widths', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const requests: string[] = [];
+  await page.route('**/api/**', route => { requests.push(route.request().url()); return route.abort(); });
+  await page.goto('/#/preview');
+  await page.evaluate(() => {
+    const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const midnight = Date.parse(`${today}T00:00:00Z`);
+    const days = Array.from({ length: 6 }, (_, index) => new Date(midnight - (index + 1) * 86400000).toISOString().slice(0, 10));
+    localStorage.setItem('yegoom3:attendance:preview', days.join(','));
+  });
+  await page.reload();
+  const card = page.locator('.attendance-card');
+  await expect(card).toContainText('500G');
+  await card.getByRole('button', { name: '받기', exact: true }).click();
+  await expect(card.getByRole('button', { name: '오늘 출석 완료 · 7일째', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await captureWidths(page, 'preview-home', info, 2);
+  await page.goto('/#/preview/attendance');
+  await expect(page.locator('.claim-big')).toContainText('500');
+  await captureWidths(page, 'preview-attendance', info, 2);
+  await page.goto('/#/preview/profile');
+  const moon = page.getByRole('button', { name: /^달빛/ });
+  await moon.click();
+  await expect(moon).toHaveAttribute('aria-pressed', 'true');
+  await captureWidths(page, 'preview-profile', info, 2);
+  await page.reload();
+  await expect(page.getByRole('button', { name: /^달빛/ })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => localStorage.getItem('yegoom3:character:yeseo'))).toBeNull();
+  expect(requests).toEqual([]);
 });
