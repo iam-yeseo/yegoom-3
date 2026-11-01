@@ -7,11 +7,16 @@ import { readInventory, settleDueLotto, ShopError, shopRoute } from './shop';
 import { CatchmindError, catchmindRoute, readCatchmindImage, readCatchmindSummary } from './catchmind';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
+import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
+import { PhotoError } from './photos';
+import { PROFILE_PHOTO, LUCK_PHOTO } from '../shared/profile';
+import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, getLuckPhotoMetadata } from './luck-photos';
+import { readAnnouncements } from './announcements';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher }
-interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null }
+interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null }
-interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null }
+interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null; photo_version: number | null }
 interface UnsettledRound extends RoundRow { game_id: GameId; round_date: string }
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
@@ -72,8 +77,8 @@ async function requireUser(request: Request, env: Env, now: number): Promise<Use
   return user;
 }
 async function publicUser(db: D1Database, user: UserRow, now: Date): Promise<User> {
-  const balances = await db.prepare("SELECT COALESCE(SUM(CASE WHEN currency = 'gold' THEN amount ELSE 0 END), 0) AS gold, COALESCE(SUM(CASE WHEN currency = 'score' AND week_start = ? THEN amount ELSE 0 END), 0) AS score FROM ledger WHERE user_id = ?").bind(weekStart(now), user.id).first<{ gold: number; score: number }>();
-  return { id: user.id, username: user.username, displayName: user.display_name, role: user.role, gold: balances?.gold ?? 0, weeklyScore: balances?.score ?? 0, character: user.character };
+  const balances = await db.prepare("SELECT COALESCE(SUM(CASE WHEN currency = 'gold' THEN amount ELSE 0 END), 0) AS gold, COALESCE(SUM(CASE WHEN currency = 'score' AND week_start = ? THEN amount ELSE 0 END), 0) AS score, (SELECT CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END FROM users u WHERE u.id = ?) AS photoVersion FROM ledger WHERE user_id = ?").bind(weekStart(now), user.id, user.id).first<{ gold: number; score: number; photoVersion: number | null }>();
+  return { id: user.id, username: user.username, displayName: user.display_name, role: user.role, gold: balances?.gold ?? 0, weeklyScore: balances?.score ?? 0, character: user.character, photoVersion: balances?.photoVersion ?? null };
 }
 async function consumeLoginLimit(db: D1Database, username: string, ip: string, now: number): Promise<void> {
   const bucketKeys = await Promise.all([hashToken(`user:${username}`), hashToken(`ip:${ip}`)]);
@@ -106,7 +111,8 @@ async function login(request: Request, env: Env, now: Date): Promise<Response> {
   return json({ user: await publicUser(env.DB, user, now) }, 200, { 'Set-Cookie': cookie(request, token, SESSION_AGE_SECONDS) });
 }
 async function roundResults(db: D1Database, id: GameId, date: string, answer: string): Promise<GameResult[]> {
-  const rows = (await db.prepare(`SELECT p.player_id, u.username, u.display_name, p.value, u.character
+  const rows = (await db.prepare(`SELECT p.player_id, u.username, u.display_name, p.value, u.character,
+    CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photo_version
     FROM predictions p JOIN users u ON u.id = p.player_id
     WHERE p.game_id = ? AND p.round_date = ? AND u.role = 'player' AND u.username != ?
     ORDER BY p.updated_at, p.player_id`).bind(id, date, GAME_RULES[id].author).all<PredictionRow>()).results;
@@ -117,7 +123,7 @@ async function roundResults(db: D1Database, id: GameId, date: string, answer: st
     const isFirst = difference === closest;
     const participationGold = PREDICTION_REWARDS.participationGold;
     const firstGold = isFirst ? PREDICTION_REWARDS.firstGold : 0;
-    return { playerId: row.player_id, username: row.username, displayName: row.display_name, character: row.character ?? defaultCharacter(row.username),
+    return { playerId: row.player_id, username: row.username, displayName: row.display_name, character: row.character ?? defaultCharacter(row.username), photoVersion: row.photo_version,
       value: row.value, difference, score: predictionPoints(id, difference), isFirst,
       participationGold, firstGold, gold: participationGold + firstGold };
   }).sort((left, right) => left.difference - right.difference);
@@ -154,13 +160,14 @@ async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
   }
 }
 
-async function readHistory(db: D1Database, id: GameId, now: Date): Promise<GameHistoryRound[]> {
+async function readHistory(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameHistoryRound[]> {
   const rounds = (await db.prepare(`SELECT round_date, answer FROM game_rounds
     WHERE game_id = ? AND round_date < ? AND answer IS NOT NULL
     AND (revealed_at IS NOT NULL OR reveal_at <= ?) ORDER BY round_date DESC LIMIT 3`)
     .bind(id, kstDate(now), now.getTime()).all<{ round_date: string; answer: string }>()).results;
   return Promise.all(rounds.map(async round => ({ roundDate: round.round_date, answer: round.answer,
-    results: await roundResults(db, id, round.round_date, round.answer) })));
+    results: await roundResults(db, id, round.round_date, round.answer),
+    photo: id === 'luck' ? await getLuckPhotoMetadata(db, user, round.round_date, true) : null })));
 }
 
 async function readGame(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameState> {
@@ -172,12 +179,14 @@ async function readGame(db: D1Database, user: UserRow, id: GameId, now: Date): P
   const author = user.role === 'player' && user.username === rules.author;
   const prediction = await db.prepare('SELECT value FROM predictions WHERE game_id = ? AND round_date = ? AND player_id = ?').bind(id, date, user.id).first<{ value: string }>();
   const results = revealed ? await roundResults(db, id, date, round!.answer!) : [];
-  const participants = (await db.prepare(`SELECT u.id AS playerId, u.username, u.display_name AS displayName, p.player_id IS NOT NULL AS submitted
+  const participants = (await db.prepare(`SELECT u.id AS playerId, u.username, u.display_name AS displayName, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photoVersion, p.player_id IS NOT NULL AS submitted
     FROM users u LEFT JOIN predictions p ON p.player_id = u.id AND p.game_id = ? AND p.round_date = ?
-    WHERE u.active = 1 AND u.role = 'player' AND u.username != ? ORDER BY u.username`).bind(id, date, rules.author).all<{ playerId: string; username: string; displayName: string; submitted: number }>()).results;
+    WHERE u.active = 1 AND u.role = 'player' AND u.username != ? ORDER BY u.username`).bind(id, date, rules.author).all<{ playerId: string; username: string; displayName: string; photoVersion: number | null; submitted: number }>()).results;
+  const authorName = await db.prepare('SELECT display_name FROM users WHERE username = ?').bind(rules.author).first<string>('display_name');
+  const photo = id === 'luck' ? await getLuckPhotoMetadata(db, user, date, Boolean(revealed)) : null;
   return {
     participants: participants.map(player => ({ ...player, submitted: Boolean(player.submitted) })),
-    id, title: rules.title, authorUsername: rules.author, deadline: rules.deadline, roundDate: date,
+    id, title: rules.title, authorUsername: rules.author, authorDisplayName: authorName ?? rules.author, photo, deadline: rules.deadline, roundDate: date,
     phase: revealed ? 'revealed' : closed ? 'closed' : 'open', hint: round?.hint ?? '',
     prediction: prediction?.value ?? null, answer: revealed || author ? round?.answer ?? null : null,
     answerEntered: round?.answer != null,
@@ -277,9 +286,9 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   // Complete payments before reading balances and weekly rankings in parallel.
   await settlePublishedRounds(env.DB, now);
   await settleDueLotto(env.DB, now);
-  const [viewer, players, games, ledger, dailyScores, attendance, inventory, catchmind, claw, launchGift] = await Promise.all([
+  const [viewer, players, games, ledger, dailyScores, attendance, inventory, catchmind, claw, launchGift, announcements] = await Promise.all([
     publicUser(env.DB, user, now),
-    env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, u.character, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Omit<Player, 'character'> & { character: ArtKey | null }>(),
+    env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, u.character, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photoVersion, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Omit<Player, 'character'> & { character: ArtKey | null }>(),
     Promise.all(GAME_IDS.map(id => readGame(env.DB, user, id, now))),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
     weeklyDailyScores(env.DB, user.id, now),
@@ -288,12 +297,14 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     readCatchmindSummary(env.DB),
     getClawSummary(env.DB, user, now.getTime()),
     getLaunchGiftState(env.DB, user, now),
+    readAnnouncements(env.DB, user.id, now),
   ]);
   return { user: viewer, players: players.results.map(player => ({ ...player, character: player.character ?? defaultCharacter(player.username) })),
-    games, ledger: ledger.results, dailyScores, attendance, inventory, catchmind, claw, launchGift, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    games, ledger: ledger.results, dailyScores, attendance, inventory, catchmind, claw, launchGift, announcements, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId, action: string, now: Date): Promise<Response> {
   const input = await body(request);
+  now = new Date();
   const date = kstDate(now);
   // Reject stale browser tabs explicitly instead of silently carrying yesterday's input into today.
   if (input.roundDate !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
@@ -324,11 +335,17 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
     if (id === 'wake') throw new HttpError(400, 'WAKE_ACTION_REQUIRED', '기상했어요 버튼으로 정답을 공개해 주세요.');
     if (!validValue(id, input.value)) throw new HttpError(400, 'INVALID_VALUE', '정답 값을 확인해 주세요.');
     if (input.hint !== undefined && (typeof input.hint !== 'string' || input.hint.length > 200)) throw new HttpError(400, 'INVALID_HINT', '힌트는 200자 이내로 입력해 주세요.');
+    if (id === 'luck' && !await env.DB.prepare('SELECT 1 FROM luck_photos WHERE round_date = ?').bind(date).first()) {
+      throw new HttpError(400, 'PHOTO_REQUIRED', '증거 사진을 먼저 올려 주세요.');
+    }
     const revealAt = kstTimestamp(date, id === 'luck' ? GAME_RULES.luck.revealTime : input.value);
-    const result = await env.DB.prepare(`INSERT INTO game_rounds (game_id, round_date, answer, hint, reveal_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+    const result = await env.DB.prepare(`INSERT INTO game_rounds (game_id, round_date, answer, hint, reveal_at, updated_at)
+      SELECT ?, ?, ?, ?, ?, ? WHERE (? != 'luck' OR EXISTS (SELECT 1 FROM luck_photos WHERE round_date = ?))
+        AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
       ON CONFLICT(game_id, round_date) DO UPDATE SET answer = excluded.answer, hint = excluded.hint, reveal_at = excluded.reveal_at, updated_at = excluded.updated_at
       WHERE game_rounds.revealed_at IS NULL AND (game_rounds.reveal_at IS NULL OR game_rounds.reveal_at > unixepoch('now') * 1000)`)
-      .bind(id, date, input.value, id === 'luck' ? (input.hint ?? '') : '', revealAt, now.getTime()).run();
+      .bind(id, date, input.value, id === 'luck' ? (input.hint ?? '') : '', revealAt, now.getTime(), id, date,
+        kstTimestamp(date, '00:00:00'), kstTimestamp(date, '00:00:00') + 86_400_000).run();
     if (result.meta.changes === 0) throw new HttpError(409, 'ALREADY_REVEALED', '공개된 정답은 수정할 수 없어요.');
   } else if (action === 'reveal') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
@@ -366,6 +383,36 @@ async function api(request: Request, env: Env): Promise<Response> {
   const user = await requireUser(request, env, now.getTime());
   if (url.pathname === '/api/auth/me' && request.method === 'GET') return json({ user: await publicUser(env.DB, user, now) });
   if (url.pathname === '/api/bootstrap' && request.method === 'GET') return json(await bootstrap(env, user, now));
+  if (url.pathname === '/api/me/profile' || url.pathname === '/api/me/photo') {
+    if (request.method !== 'PUT' && !(url.pathname.endsWith('/photo') && request.method === 'DELETE')) {
+      throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    }
+    const input = request.method === 'DELETE' && !request.body ? {} : await body(request,
+      url.pathname.endsWith('/photo') ? Math.ceil(PROFILE_PHOTO.maxBytes / 3) * 4 + 4096 : 4096);
+    // A different tab can replace the session cookie before this tab refreshes.
+    if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) throw new HttpError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
+    if (url.pathname.endsWith('/profile')) await updateProfile(env.DB, user, input);
+    else if (request.method === 'PUT') await uploadProfilePhoto(env.DB, user, input, new Date());
+    else await deleteProfilePhoto(env.DB, user, new Date());
+    const current = await env.DB.prepare('SELECT * FROM users WHERE id = ? AND active = 1').bind(user.id).first<UserRow>();
+    if (!current) throw new HttpError(401, 'UNAUTHENTICATED', '다시 로그인해 주세요.');
+    return json({ user: await publicUser(env.DB, current, new Date()) });
+  }
+  const profilePhotoMatch = /^\/api\/users\/([^/]+)\/photo$/.exec(url.pathname);
+  if (profilePhotoMatch) {
+    if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return readProfilePhoto(env.DB, user, profilePhotoMatch[1]!, url.searchParams.get('v'));
+  }
+  if (url.pathname === '/api/games/luck/photo') {
+    if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    const input = await body(request, Math.ceil(LUCK_PHOTO.maxBytes / 3) * 4 + 4096);
+    return json(await uploadLuckPhoto(env.DB, user, input, new Date()));
+  }
+  const luckPhotoMatch = /^\/api\/games\/luck\/rounds\/([^/]+)\/photo$/.exec(url.pathname);
+  if (luckPhotoMatch) {
+    if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return readLuckPhoto(env.DB, user, luckPhotoMatch[1]!, url.searchParams.get('v'), now);
+  }
   if (url.pathname === '/api/events/launch-gift') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (user.role !== 'player') throw new HttpError(403, 'CANNOT_CLAIM_GIFT', '플레이어만 런칭 선물을 받을 수 있어요.');
@@ -414,7 +461,7 @@ async function api(request: Request, env: Env): Promise<Response> {
   if (gameReadMatch && isGameId(gameReadMatch[1]!) && request.method === 'GET') {
     await settlePublishedRounds(env.DB, now);
     return gameReadMatch[2] === 'history'
-      ? json({ history: await readHistory(env.DB, gameReadMatch[1], now) })
+      ? json({ history: await readHistory(env.DB, user, gameReadMatch[1], now) })
       : json({ game: await readGame(env.DB, user, gameReadMatch[1], now) });
   }
   const gameMatch = /^\/api\/games\/([^/]+)\/([^/]+)$/.exec(url.pathname);
@@ -427,7 +474,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

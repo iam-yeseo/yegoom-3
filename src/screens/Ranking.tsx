@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Avatar, CharacterSprite, Toolbar, preloadSprites, useCharacter } from "../components/UI";
+import { Avatar, CharacterSprite, Toolbar, preloadSprites, useCharacter, useDisplayNameLookup } from "../components/UI";
 import { kstParts, weekdayNames } from "../sample";
 import { anim, confetti, dropIn, reduced, tween } from "../motion";
 import { standings, type HomePlayer } from "./Home";
@@ -103,6 +103,7 @@ export function Ranking({
   serverTime?: string;
   onBack: () => void;
 }) {
+  const displayNameOf = useDisplayNameLookup();
   const [now, setNow] = useState(() => serverTime ? Date.parse(serverTime) : Date.now());
   useEffect(() => {
     const offset = serverTime ? Date.parse(serverTime) - Date.now() : 0;
@@ -143,7 +144,7 @@ export function Ranking({
                   <span className="podium-rank" style={{ color: style.fg }}>
                     {player.rank}
                   </span>
-                  <span className="podium-name">{player.displayName}</span>
+                  <span className="podium-name">{displayNameOf(player.username, player.displayName)}</span>
                   <strong>
                     <CountFrom value={player.weeklyScore} delay={(3 - Math.min(player.rank, 3)) * 160 + 500} />
                   </strong>
@@ -193,7 +194,7 @@ export function Ranking({
                   {i + 1}
                 </span>
                 <Avatar username={row.username} size={40} />
-                <strong>{row.username}</strong>
+                <strong>{displayNameOf(row.username)}</strong>
                 <b>{row.score}점</b>
               </div>
             ))}

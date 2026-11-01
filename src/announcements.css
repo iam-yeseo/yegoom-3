@@ -1,0 +1,41 @@
+.announcement-region {
+  position: fixed;
+  z-index: 70;
+  top: calc(env(safe-area-inset-top) + 12px);
+  left: 50%;
+  width: min(528px, calc(100% - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.announcement-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid #ffd866;
+  border-radius: 20px;
+  background: #fff4cc;
+  color: var(--text);
+  box-shadow: var(--card-shadow);
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  animation: announcement-enter 200ms ease-out both;
+}
+.announcement-celebration { flex: none; font-size: 26px; }
+.announcement-message { flex: 1; min-width: 0; font-size: 14px; line-height: 1.6; word-break: keep-all; overflow-wrap: anywhere; }
+.announcement-message strong { display: block; color: #94700a; font-weight: 800; }
+.announcement-close { flex: none; color: var(--muted); }
+@keyframes announcement-enter {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes announcement-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* This explicit opacity-only motion survives the global animation opt-out. */
+  .announcement-banner { animation: announcement-fade 200ms ease-out both !important; }
+}

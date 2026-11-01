@@ -8,12 +8,14 @@ import type {
   ShopState,
   CatchmindSummary,
   ClawSummary,
-  LaunchGiftResponse,
+  LaunchGiftResponse, AuthResponse, LuckPhotoResponse,
 } from "../shared/types";
+import { normalizeNickname } from "../shared/profile";
+import { AnnouncementBanner } from "./AnnouncementBanner";
 import { FEATURES } from "../shared/balance";
 import { ApiFailure, api } from "./api";
 import { anim } from "./motion";
-import { CharacterProvider, CharacterSprite, TabBar, tabs, readLegacyCharacter, clearLegacyCharacter, choosePreviewCharacter } from "./components/UI";
+import { ProfileDirectoryProvider, CharacterProvider, CharacterSprite, TabBar, tabs, readLegacyCharacter, clearLegacyCharacter, choosePreviewCharacter } from "./components/UI";
 import { AttendanceProvider, clearLegacyAttendance, usePreviewAttendance } from "./attendance";
 import { defaultCharacter, type ArtKey } from "../shared/characters";
 import { PredictionGame } from "./components/PredictionGame";
@@ -61,6 +63,7 @@ const previewUser: User = {
   id: "preview",
   username: "yeseo",
   displayName: "yeseo",
+  photoVersion: null,
   role: "player",
   gold: previewGold,
   weeklyScore: previewScores.yeseo,
@@ -288,6 +291,8 @@ export default function App() {
   const [bootError, setBootError] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
   const [stockNoticeOpen, setStockNoticeOpen] = useState(false);
+  const [previewProfile, setPreviewProfile] = useState<{ displayName: string; photoVersion: number | null; photoUrl: string | null }>({ displayName: previewUser.displayName, photoVersion: null, photoUrl: null });
+  const previewPhotoCounter = useRef(0);
   const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[] }>({ gold: previewGold, score: 0, ledger: [] });
   const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[] }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [] });
   const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
@@ -463,6 +468,18 @@ export default function App() {
     await refresh();
     return receipt;
   };
+  async function changeProfile(action: (owner: string) => Promise<AuthResponse>) {
+    const owner = data?.user.id;
+    await mutate(async () => {
+      if (activeUserId.current !== owner) throw new ApiFailure(409, "로그인한 계정이 바뀌었어요. 다시 시도해 주세요.");
+      return action(owner!);
+    }, result => {
+      setData(current => current && current.user.id === owner ? { ...current, user: result.user,
+        players: current.players.map(player => player.id === owner ? { ...player, displayName: result.user.displayName, photoVersion: result.user.photoVersion } : player) } : current);
+    });
+    // The saved profile is applied even when a later refresh is unavailable.
+    await refresh();
+  }
   const loadAttendanceMonth = async (month: string) => (await api.attendance(month)).attendance;
   const characterMap: Record<string, ArtKey | null> = {};
   if (data) {
@@ -493,10 +510,16 @@ export default function App() {
   }
   const catchmindReadKey = useRef("");
   const signedIn = !demo && !loading && data !== null;
-  const view = demo ? { ...previewHome(), gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold,
+  const view = demo ? { ...previewHome(), displayName: previewProfile.displayName, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold,
     catchmind: previewCatchmind.summary, claw: previewClaw.summary,
-    players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : player) } : data ? homeData(data) : null;
-  const me = demo ? { ...previewUser, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : data?.user;
+    players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, displayName: previewProfile.displayName, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : player) } : data ? homeData(data) : null;
+  const me = demo ? { ...previewUser, displayName: previewProfile.displayName, photoVersion: previewProfile.photoVersion, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : data?.user;
+  const profileDirectory = demo
+    ? Object.keys(previewScores).map(username => ({ id: username === previewUser.username ? previewUser.id : username, username,
+      displayName: username === previewUser.username ? previewProfile.displayName : username,
+      photoVersion: username === previewUser.username ? previewProfile.photoVersion : null,
+      photoUrl: username === previewUser.username ? previewProfile.photoUrl : null }))
+    : data ? [...data.players.filter(player => player.id !== data.user.id), data.user] : [];
   const tab = tabs.find((t) => t.path === path)?.path;
   let content: React.ReactNode;
   if (!demo && loading) content = <Skeleton />;
@@ -538,7 +561,7 @@ export default function App() {
       <PredictionGame
         key={`demo-${gameId}`}
         game={previewGame(gameId)}
-        user={{ ...me, username: viewer, displayName: viewer }}
+        user={{ ...me, username: viewer, displayName: viewer === me.username ? me.displayName : viewer }}
         serverTime={new Date(`${previewGame(gameId).roundDate}T09:12:36+09:00`).toISOString()}
         demo
         onBack={home}
@@ -562,6 +585,18 @@ export default function App() {
           await (author ? api.answer(gameId, value, hint, game.roundDate) : api.predict(gameId, value, game.roundDate));
           return api.bootstrap();
         }, applyBootstrap)}
+        onPhotoUpload={async image => {
+          const owner = data.user.id;
+          let receipt!: LuckPhotoResponse;
+          await mutate(async () => {
+            if (activeUserId.current !== owner) throw new ApiFailure(409, "로그인한 계정이 바뀌었어요. 다시 시도해 주세요.");
+            receipt = await api.uploadLuckPhoto(game.roundDate, image);
+            return receipt;
+          }, result => setData(current => current?.user.id === owner ? { ...current,
+            games: current.games.map(value => value.id === "luck" && value.roundDate === game.roundDate ? { ...value, photo: result.photo } : value) } : current));
+          await refresh();
+          return receipt.photo;
+        }}
         onReveal={() => mutate(async () => {
           await api.reveal(gameId, game.roundDate);
           return api.bootstrap();
@@ -609,7 +644,7 @@ export default function App() {
     );
   else if (path === "/profile")
     content = (
-      <Profile
+      <Profile key={demo ? "preview" : me.id}
         username={view.username}
         displayName={view.displayName}
         attendanceKey={view.attendanceKey}
@@ -618,6 +653,22 @@ export default function App() {
         ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
         others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
         onBack={home}
+        onDisplayNameChange={async displayName => {
+          if (demo) {
+            const result = normalizeNickname(displayName);
+            if ("error" in result) throw new Error(result.error);
+            if (Object.keys(previewScores).some(username => username !== previewUser.username && username.toLowerCase() === result.value.toLowerCase())) throw new Error("이미 사용 중인 닉네임이에요.");
+            setPreviewProfile(current => ({ ...current, displayName: result.value }));
+          } else await changeProfile(owner => api.updateProfile(displayName, owner));
+        }}
+        onPhotoChange={async photo => {
+          if (demo) setPreviewProfile(current => ({ ...current, photoVersion: ++previewPhotoCounter.current, photoUrl: photo }));
+          else await changeProfile(owner => api.uploadProfilePhoto(photo, owner));
+        }}
+        onPhotoDelete={async () => {
+          if (demo) setPreviewProfile(current => ({ ...current, photoVersion: null, photoUrl: null }));
+          else await changeProfile(api.deleteProfilePhoto);
+        }}
         onCharacterChange={async (character) => {
           if (demo) { choosePreviewCharacter(view.username, character); return; }
           await mutate(async () => {
@@ -657,6 +708,7 @@ export default function App() {
   const screenRef = useScreenTransition(path);
   useStatusBarColor(screenRef, `${path}|${loading}|${!!data}`);
   return (
+    <ProfileDirectoryProvider profiles={profileDirectory} preview={demo}>
     <CharacterProvider characters={characterMap} preview={demo}>
       <AttendanceProvider value={attendanceContext}>
     <ClawProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
@@ -671,7 +723,7 @@ export default function App() {
       onPreviewChange={(summary, gold, score, ledger) => setPreviewClaw({ summary, gold, score, ledger })}>
     <CatchmindProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
       preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
-      viewer={{ id: me?.id ?? "anonymous", username: me?.username ?? "", displayName: me?.displayName ?? "", character: me?.character ?? defaultCharacter(me?.username ?? "") }}
+      viewer={{ id: me?.id ?? "anonymous", username: me?.username ?? "", displayName: me?.displayName ?? "", photoVersion: me?.photoVersion ?? null, character: me?.character ?? defaultCharacter(me?.username ?? "") }}
       transact={transactCatchmind}
       onServerRead={state => {
         const key = `${data?.user.id}:${state.round?.id}:${state.round?.status}:${state.round?.wrongCount}:${state.round?.wordVersion}`;
@@ -720,6 +772,8 @@ export default function App() {
             <button onClick={() => void refresh()}>다시 시도</button>
           </div>
         )}
+        <AnnouncementBanner announcements={data?.announcements ?? []} userId={data?.user.id ?? null} preview={demo}
+          serverTime={new Date(Date.now() + (demo ? 0 : serverClockOffset.current)).toISOString()} />
         <div className="screen" ref={screenRef}>
           {content}
         </div>
@@ -732,5 +786,6 @@ export default function App() {
     </ClawProvider>
       </AttendanceProvider>
     </CharacterProvider>
+    </ProfileDirectoryProvider>
   );
 }

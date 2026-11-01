@@ -1,18 +1,23 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { LedgerEntry } from "../../shared/types";
+import { NICKNAME_MAX, normalizeNickname } from "../../shared/profile";
 import { useAttendance } from "../attendance";
 import {
   CharacterSprite,
+  Avatar,
   Segmented,
   Toolbar,
   art,
   artKeys,
   artSrc,
   useCharacterLookup,
+  useDisplayNameLookup,
+  useProfile,
   type ArtKey,
 } from "../components/UI";
 import { KST, weekdayNames } from "../sample";
 import { anim, pop, reduced, useOnChange } from "../motion";
+import { PhotoPicker } from "../components/PhotoPicker";
 
 /** Picks an icon for a ledger reason by the game it mentions. */
 function reasonIcon(reason: string): ArtKey {
@@ -58,6 +63,9 @@ export function Profile({
   onLogin,
   onLogout,
   onCharacterChange,
+  onDisplayNameChange,
+  onPhotoChange,
+  onPhotoDelete,
 }: {
   username: string;
   displayName: string;
@@ -71,8 +79,43 @@ export function Profile({
   onLogin?: () => void;
   onLogout?: () => Promise<void>;
   onCharacterChange: (character: ArtKey) => Promise<void>;
+  onDisplayNameChange: (displayName: string) => Promise<void>;
+  onPhotoChange: (photo: string) => Promise<void>;
+  onPhotoDelete: () => Promise<void>;
 }) {
   const characterOf = useCharacterLookup();
+  const displayNameOf = useDisplayNameLookup();
+  const profile = useProfile(username);
+  const [nickname, setNickname] = useState(displayName);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [profileMessage, setProfileMessage] = useState("");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
+  const editing = useRef(false);
+  useEffect(() => { setNickname(displayName); }, [displayName]);
+  const saveNickname = async () => {
+    if (editing.current) return;
+    setProfileMessage("");
+    const checked = normalizeNickname(nickname);
+    if ("error" in checked) { setProfileError(checked.error); return; }
+    editing.current = true;
+    setProfileBusy(true);
+    setProfileError("");
+    try { await onDisplayNameChange(checked.value); setNickname(checked.value); setProfileMessage("닉네임을 저장했어요."); }
+    catch (cause) { setProfileError(cause instanceof Error ? cause.message : "닉네임을 저장하지 못했어요."); }
+    finally { editing.current = false; setProfileBusy(false); }
+  };
+  const deletePhoto = async () => {
+    if (editing.current) return;
+    editing.current = true;
+    setProfileBusy(true);
+    setProfileError("");
+    setProfileMessage("");
+    try { await onPhotoDelete(); setProfileMessage("사진을 삭제했어요. 캐릭터로 보여요."); }
+    catch (cause) { setProfileError(cause instanceof Error ? cause.message : "사진을 삭제하지 못했어요."); }
+    finally { editing.current = false; setProfileBusy(false); }
+  };
   const mine = characterOf(username);
   const { monthCount } = useAttendance(attendanceKey);
   const [currency, setCurrency] = useState<"gold" | "score">("gold");
@@ -121,7 +164,7 @@ export function Profile({
   const owners = new Map<ArtKey, string[]>();
   for (const name of others) {
     const key = characterOf(name);
-    owners.set(key, [...(owners.get(key) ?? []), name]);
+    owners.set(key, [...(owners.get(key) ?? []), displayNameOf(name)]);
   }
   const rows = ledger.filter((entry) => entry.currency === currency);
   let lastDate = "";
@@ -154,6 +197,24 @@ export function Profile({
         </div>
       </div>
       <div className="screen-body stack">
+        <section className="card profile-editor" aria-busy={profileBusy}>
+          <h2>프로필</h2>
+          <div className="profile-photo-controls">
+            <Avatar username={username} size={68} />
+            <div>
+              <input ref={photoInput} className="profile-photo-input" type="file" accept="image/*" aria-label="프로필 사진 선택" disabled={profileBusy || busy} onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) { setProfileError(""); setProfileMessage(""); setPhotoFile(file); } }} />
+              <button type="button" disabled={profileBusy || busy} onClick={() => photoInput.current?.click()}>{profile?.photoVersion || profile?.photoUrl ? "사진 바꾸기" : "사진 고르기"}</button>
+              {(profile?.photoVersion || profile?.photoUrl) && <button type="button" disabled={profileBusy || busy} onClick={() => void deletePhoto()}>사진 삭제</button>}
+            </div>
+          </div>
+          <form onSubmit={event => { event.preventDefault(); void saveNickname(); }}>
+            <label className="profile-nickname-label" htmlFor="profile-nickname">닉네임</label>
+            <div className="profile-nickname-row"><input id="profile-nickname" value={nickname} autoComplete="nickname" aria-describedby="profile-nickname-help" disabled={profileBusy || busy} onChange={event => { setNickname(event.target.value); setProfileError(""); setProfileMessage(""); }} /><button className="primary-button" type="submit" disabled={profileBusy || busy}>{profileBusy ? "저장 중…" : "닉네임 저장"}</button></div>
+            <p id="profile-nickname-help" className="profile-nickname-help">한글·영문·숫자로 1~{NICKNAME_MAX}글자. 로그인 아이디는 그대로예요.</p>
+          </form>
+          {profileError && <p className="form-message error" role="alert">{profileError}</p>}
+          {profileMessage && <p className="profile-edit-success" role="status">{profileMessage}</p>}
+        </section>
         <section className="card character-picker" aria-busy={characterBusy}>
           <h2>내 캐릭터</h2>
           <div className="character-grid" ref={grid}>
@@ -252,6 +313,7 @@ export function Profile({
           </button>
         )}
       </div>
+      {photoFile && <PhotoPicker file={photoFile} onClose={() => setPhotoFile(null)} onSave={async photo => { await onPhotoChange(photo); setProfileMessage("프로필 사진을 저장했어요."); }} />}
     </div>
   );
 }

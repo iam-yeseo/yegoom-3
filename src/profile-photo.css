@@ -1,0 +1,30 @@
+.avatar-photo { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.profile-editor { padding: 22px; }
+.profile-editor h2 { margin: 0 0 18px; font-size: 18px; }
+.profile-photo-controls { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.profile-photo-controls > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.profile-photo-controls button { border: 0; border-radius: 12px; padding: 10px 12px; background: #eee8fc; color: #7556c4; font-size: 13px; font-weight: 800; }
+.profile-photo-controls button + button { background: transparent; color: var(--muted); }
+.profile-photo-input { display: none; }
+.profile-nickname-label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 800; }
+.profile-nickname-row { display: flex; align-items: stretch; gap: 8px; }
+.profile-nickname-row input { min-width: 0; flex: 1; width: 100%; padding: 12px; border: 1px solid #eee8fc; border-radius: 12px; background: var(--cream); color: var(--text); font: inherit; }
+.profile-nickname-row button { flex: 0 0 auto; width: auto; padding: 12px 14px; min-height: 44px; border-radius: 12px; font-size: 13px; }
+.profile-editor .profile-nickname-help { color: var(--muted); margin: 8px 0 0; font-size: 12px; line-height: 1.6; word-break: keep-all; }
+.profile-editor .profile-edit-success { color: #2e8c6e; font-size: 13px; margin-bottom: 0; }
+.photo-crop-dialog { width: min(400px, calc(100% - 32px)); max-height: calc(100% - 24px); overflow: auto; padding: 28px 22px 22px; border: 0; border-radius: 26px; background: var(--cream); color: var(--text); box-shadow: var(--card-shadow); text-align: center; }
+.photo-crop-dialog::backdrop { background: rgba(58,51,64,.28); }
+.photo-crop-dialog h2 { font-size: 21px; margin: 6px 0 12px; }
+.photo-crop-dialog p { font-size: 13px; line-height: 1.7; color: var(--muted); }
+.photo-crop-close { position: absolute; top: 7px; right: 7px; width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 26px; }
+.photo-crop-canvas { display: block; width: min(320px, 100%); height: auto; aspect-ratio: 1; margin: 18px auto; border-radius: 16px; background: #eee8fc; touch-action: none; cursor: grab; }
+.photo-crop-canvas:active { cursor: grabbing; }
+.photo-crop-canvas:focus-visible { outline: 3px solid #b9a3f0; outline-offset: 3px; }
+.photo-crop-zoom { display: flex; gap: 10px; align-items: center; font-size: 13px; }
+.photo-crop-zoom input { flex: 1; min-width: 0; accent-color: #7556c4; }
+.photo-crop-zoom output { width: 42px; font-variant-numeric: tabular-nums; text-align: right; }
+.photo-crop-keyboard { display: block; margin: 12px 0 18px; font-size: 11px; color: var(--muted); }
+.photo-crop-actions { display: flex; align-items: center; gap: 10px; }
+.photo-crop-actions > button:first-child { flex: 1; }
+.photo-crop-actions > button:last-child { flex: 2; font-size: 14px; padding-inline: 12px; }
+@media (max-width: 359px) { .photo-crop-dialog { padding-inline: 18px; } .profile-nickname-row button { padding-inline: 10px; } }

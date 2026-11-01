@@ -8,7 +8,7 @@ import type {
 
 const EMPTY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6D1AAAAAASUVORK5CYII=';
 const guessKey = (value: string) => value.replace(/\s/gu, '');
-const person = (username: string): CatchmindPlayer => ({ id: username, username, displayName: username, character: defaultCharacter(username) });
+const person = (username: string): CatchmindPlayer => ({ id: username, username, displayName: username, photoVersion: null, character: defaultCharacter(username) });
 
 /** Render the sample with the same canvas format as a submitted drawing. */
 function sampleDrawing(): string {

@@ -14,6 +14,7 @@ import {
   artSrc,
   preloadSprites,
   useCharacter,
+  useDisplayNameLookup,
   type ArtKey,
   type CharState,
 } from "../components/UI";
@@ -134,12 +135,13 @@ function predictionRow(game: GameState, me: string): GameRow {
     right: GAME_RULES[game.id].deadline,
   };
 }
-function catchmindRow(game: CatchmindSummary, me: string): GameRow {
+type DisplayNameLookup = (username: string, fallback?: string) => string;
+function catchmindRow(game: CatchmindSummary, me: string, displayNameOf: DisplayNameLookup): GameRow {
   const row = { path: "/play/catchmind", name: "캐치마인드", icon: "bread" as const, right: "" };
   if (game.status === "idle") return {
-    ...row, chip: "try", sub: game.turn ? `${game.turn.displayName}의 그리기 차례` : "먼저 그리기를 맡아 보세요",
+    ...row, chip: "try", sub: game.turn ? `${displayNameOf(game.turn.username, game.turn.displayName)}의 그리기 차례` : "먼저 그리기를 맡아 보세요",
   };
-  const drawer = game.drawer?.displayName ?? "출제자";
+  const drawer = game.drawer ? displayNameOf(game.drawer.username, game.drawer.displayName) : "출제자";
   const mine = game.drawer?.username === me;
   if (game.status === "draft") return {
     ...row, chip: mine ? "host" : "open", sub: mine ? "내가 그림 그리는 중" : `${drawer}이 그림 그리는 중`,
@@ -151,16 +153,16 @@ function catchmindRow(game: CatchmindSummary, me: string): GameRow {
   return {
     ...row, chip: "done",
     sub: game.winner
-      ? `${answer} · ${game.winner.username === me ? "내가 맞힘" : `${game.winner.displayName} 정답`} · 다음 출제`
-      : `${answer} · 다음 ${game.turn?.displayName ?? drawer}`,
+      ? `${answer} · ${game.winner.username === me ? "내가 맞힘" : `${displayNameOf(game.winner.username, game.winner.displayName)} 정답`} · 다음 출제`
+      : `${answer} · 다음 ${game.turn ? displayNameOf(game.turn.username, game.turn.displayName) : drawer}`,
     right: game.winner?.username === me ? `+${CATCHMIND_RULES.score}점` : "",
   };
 }
-export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary): GameRow[] {
+export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username): GameRow[] {
   const evening = isEvening();
   return [
     ...games.map((game) => predictionRow(game, me)),
-    catchmindRow(catchmind, me),
+    catchmindRow(catchmind, me, displayNameOf),
     {
       path: "/play/kuji",
       name: "예굼쿠지",
@@ -173,7 +175,8 @@ export function gameRows(games: GameState[], me: string, catchmind: CatchmindSum
 }
 
 export function TodayGames({ data, go }: { data: HomeData; go: Go }) {
-  const rows = gameRows(data.games, data.username, data.catchmind);
+  const displayNameOf = useDisplayNameLookup();
+  const rows = gameRows(data.games, data.username, data.catchmind, displayNameOf);
   // Catchmind rounds can span several days; their result is not today's total.
   const earned = data.games.reduce(
     (sum, game) => sum + (game.phase === "revealed" ? game.results.find(result => result.username === data.username)?.score ?? 0 : 0),
@@ -481,6 +484,7 @@ function Room({ data, gold, evening, jumpRequest, onJumpDone }: {
 }
 
 export function Home({ data, go }: { data: HomeData; go: Go }) {
+  const displayNameOf = useDisplayNameLookup();
   const evening = isEvening();
   const [jumpRequest, setJumpRequest] = useState(0);
   const jumpFinished = useRef<(() => void) | null>(null);
@@ -503,16 +507,16 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
     ? ""
     : me.rank === 1
       ? table[1]
-        ? `2위 ${table[1].displayName}와 ${me.weeklyScore - table[1].weeklyScore}점 차`
+        ? `2위 ${displayNameOf(table[1].username, table[1].displayName)}와 ${me.weeklyScore - table[1].weeklyScore}점 차`
         : "이번 주 1위"
-      : `1위 ${top.displayName}까지 ${top.weeklyScore - me.weeklyScore}점`;
+      : `1위 ${displayNameOf(top.username, top.displayName)}까지 ${top.weeklyScore - me.weeklyScore}점`;
   return (
     <div className={`home ${evening ? "evening" : ""}`}>
       <Room data={data} gold={data.gold} evening={evening} jumpRequest={jumpRequest} onJumpDone={finishJump} />
       <div className="home-score">
         <div className="home-score-row">
           <div>
-            <h1>{data.displayName}</h1>
+            <h1>{displayNameOf(data.username, data.displayName)}</h1>
             <p>
               <strong>{score}</strong>
               <span>점</span>
@@ -549,7 +553,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
                 <Avatar username={player.username} size={46} />
                 <span className="ranking-preview-main">
                   <span>
-                    <strong>{player.displayName}</strong>
+                    <strong>{displayNameOf(player.username, player.displayName)}</strong>
                     {player.username === data.username && <em>나</em>}
                     <b>{player.weeklyScore.toLocaleString("ko-KR")}</b>
                   </span>

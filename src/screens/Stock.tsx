@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Avatar, Character, Coin, Segmented, Toolbar, art, artSrc } from "../components/UI";
+import { Avatar, Character, Coin, Segmented, Toolbar, art, artSrc, useDisplayNameLookup } from "../components/UI";
 import { anim, pop, toast, useCountUp, useMountMotion, useOnChange } from "../motion";
 import { LIMIT, marketOpen, stocks as sampleStocks, type Stock } from "../sample";
 
@@ -122,6 +122,7 @@ function StockRow({ stock, dim, go }: { stock: Stock; dim?: boolean; go: (path: 
 }
 
 export function StockMarket({ gold, onBack, go }: { gold: number; onBack: () => void; go: (path: string) => void }) {
+  const displayNameOf = useDisplayNameLookup();
   const list = useMarket();
   const holdings = list.filter((s) => s.held && s.change !== null);
   const value = useCountUp(holdings.reduce((sum, s) => sum + s.held * s.price, 0));
@@ -154,7 +155,7 @@ export function StockMarket({ gold, onBack, go }: { gold: number; onBack: () => 
               <div className="list-row" key={name}>
                 <span className="plain-rank">{i + 1}</span>
                 <Avatar username={name} size={38} />
-                <strong>{name}</strong>
+                <strong>{displayNameOf(name)}</strong>
                 <b className={upDown(amount)}>{signed(amount)}G</b>
               </div>
             ))}
