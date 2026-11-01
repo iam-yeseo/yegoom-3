@@ -103,6 +103,7 @@ function drawingPng(width = 2, height = 2, decodedBytes?: number): string {
   }
   return `data:image/png;base64,${Buffer.concat([...chunks, ending]).toString('base64')}`;
 }
+const catchmindImagePath = (roundId: string) => `/api/catchmind/rounds/${encodeURIComponent(roundId)}/image`;
 const DRAWING_PNG = drawingPng();
 const DRAWING_WEBP = 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQqMKXp/+BiOh/AAA=';
 const DRAWING_WEBP_LOSSY = 'data:image/webp;base64,UklGRjoAAABXRUJQVlA4IC4AAADQAQCdASoCAAIAAUAmJaACdLoB+AADsAD+rhf/IL1b5tu3/3ZP9sn+2T/4wAAA';
@@ -305,7 +306,9 @@ describe('Worker and D1 integration', () => {
       expect((await request('/api/catchmind/reroll', { method: 'POST', cookie: min.cookie,
         body: { requestId: crypto.randomUUID(), roundId: draft.id, wordVersion: draft.wordVersion } })).status).toBe(409);
       const view = await getCatchmind(min.cookie);
-      expect(view.catchmind.round).toMatchObject({ status: 'open', image: DRAWING_PNG, word: draft.word, publishedAt: `${TODAY}T00:00:00.000Z` });
+      expect(view.catchmind.round).toMatchObject({ status: 'open', image: catchmindImagePath(draft.id), word: draft.word, publishedAt: `${TODAY}T00:00:00.000Z` });
+      const storedImage = await request(catchmindImagePath(draft.id), { cookie: min.cookie });
+      expect(Buffer.from(await storedImage.arrayBuffer())).toEqual(Buffer.from(DRAWING_PNG.split(',')[1]!, 'base64'));
       expect(view.catchmind).toMatchObject({ canPublish: false, canReroll: false, canGuess: false, canEnd: true });
     });
 
@@ -454,7 +457,7 @@ describe('Worker and D1 integration', () => {
       const { cookie } = await login('min');
       const draft = (await catchmindAction('claim', cookie, null)).catchmind.round!;
       const published = await catchmindAction('publish', cookie, draft.id, { wordVersion: draft.wordVersion, image });
-      expect(published.catchmind.round).toMatchObject({ status: 'open', image });
+      expect(published.catchmind.round).toMatchObject({ status: 'open', image: catchmindImagePath(draft.id) });
     });
 
     it('rejects malformed, mismatched, and nonsquare PNG or WebP drawings without publishing', async () => {
@@ -484,7 +487,7 @@ describe('Worker and D1 integration', () => {
       const image = drawingPng(2, 2, 300 * 1024);
       expect(Buffer.from(image.split(',')[1]!, 'base64')).toHaveLength(300 * 1024);
       const published = await catchmindAction('publish', cookie, draft.id, { wordVersion: draft.wordVersion, image });
-      expect(published.catchmind.round).toMatchObject({ status: 'open', image });
+      expect(published.catchmind.round).toMatchObject({ status: 'open', image: catchmindImagePath(draft.id) });
     });
 
     it('keeps a Sunday-published round score in that week when solved after Monday midnight', async () => {
@@ -568,6 +571,138 @@ describe('Worker and D1 integration', () => {
       }
       expect((await getCatchmind(min.cookie)).catchmind.round).toMatchObject({ status: 'open', wrongCount: 0, guesses: [] });
       expect(await ledgerRows()).toEqual([]);
+    });
+  });
+
+  describe('catchmind image delivery', () => {
+    it.each([
+      { image: DRAWING_PNG, mime: 'image/png', format: 'PNG' },
+      { image: DRAWING_WEBP, mime: 'image/webp', format: 'lossless WebP' },
+      { image: DRAWING_WEBP_LOSSY, mime: 'image/webp', format: 'lossy WebP' },
+    ])('serves exact $format bytes with private immutable caching to authenticated viewers', async ({ image, mime }) => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      const admin = await login('admin');
+      const draft = (await catchmindAction('claim', min.cookie, null)).catchmind.round!;
+      const published = await catchmindAction('publish', min.cookie, draft.id, { wordVersion: draft.wordVersion, image });
+      const path = catchmindImagePath(draft.id);
+      expect(published.catchmind.round?.image).toBe(path);
+      const expected = Buffer.from(image.split(',')[1]!, 'base64');
+      for (const cookie of [min.cookie, siwon.cookie, admin.cookie]) {
+        const response = await request(path, { cookie });
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-type')).toBe(mime);
+        expect(response.headers.get('cache-control')).toBe('private, max-age=31536000, immutable');
+        expect(response.headers.get('vary')).toBe('Cookie');
+        expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(expected);
+      }
+    });
+
+    it('returns only a stable image URL from publish, polling, guesses, end, and bootstrap responses', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      const draft = (await catchmindAction('claim', min.cookie, null)).catchmind.round!;
+      const image = drawingPng(2, 2, 300 * 1024);
+      const publish = await request('/api/catchmind/publish', { method: 'POST', cookie: min.cookie,
+        body: { requestId: crypto.randomUUID(), roundId: draft.id, wordVersion: draft.wordVersion, image } });
+      expect(publish.status).toBe(200);
+      const responses = [publish];
+      for (let index = 0; index < 3; index++) responses.push(await request('/api/catchmind', { cookie: siwon.cookie }));
+      responses.push(await request('/api/catchmind/guess', { method: 'POST', cookie: siwon.cookie,
+        body: { requestId: crypto.randomUUID(), roundId: draft.id, answer: `오답-${draft.word}` } }));
+      responses.push(await request('/api/catchmind/end', { method: 'POST', cookie: min.cookie,
+        body: { requestId: crypto.randomUUID(), roundId: draft.id } }));
+      for (const response of responses) {
+        expect(response.status).toBe(200);
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        const text = await response.text();
+        expect(text.includes('data:image/')).toBe(false);
+        expect(text.includes(image.split(',')[1]!)).toBe(false);
+        expect(text.length).toBeLessThan(5000);
+        expect((JSON.parse(text) as CatchmindResponse).catchmind.round?.image).toBe(catchmindImagePath(draft.id));
+      }
+      const bootstrapResponse = await request('/api/bootstrap', { cookie: siwon.cookie });
+      expect(bootstrapResponse.status).toBe(200);
+      const summary = await bootstrapResponse.text();
+      expect(summary.includes('data:image/')).toBe(false);
+      expect(summary.includes(image.split(',')[1]!)).toBe(false);
+      const served = await request(catchmindImagePath(draft.id), { cookie: siwon.cookie });
+      expect(served.status).toBe(200);
+      expect(Buffer.from(await served.arrayBuffer())).toEqual(Buffer.from(image.split(',')[1]!, 'base64'));
+    });
+
+    it('keeps ended round images accessible at their original URL after a different round is published', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      const first = await openCatchmind(min.cookie);
+      const originalPath = first.image!;
+      expect(originalPath).toBe(catchmindImagePath(first.id));
+      expect((await catchmindAction('end', min.cookie, first.id)).catchmind.round?.image).toBe(originalPath);
+      const draft = (await catchmindAction('next', min.cookie, first.id)).catchmind.round!;
+      expect(draft.image).toBeNull();
+      const second = (await catchmindAction('publish', min.cookie, draft.id,
+        { wordVersion: draft.wordVersion, image: DRAWING_WEBP })).catchmind.round!;
+      expect(second.image).toBe(catchmindImagePath(second.id));
+      expect(second.image).not.toBe(originalPath);
+      expect((await getCatchmind(siwon.cookie)).catchmind.round?.image).toBe(second.image);
+      const historical = await request(originalPath, { cookie: siwon.cookie });
+      expect(historical.status).toBe(200);
+      expect(historical.headers.get('content-type')).toBe('image/png');
+      expect(Buffer.from(await historical.arrayBuffer())).toEqual(Buffer.from(DRAWING_PNG.split(',')[1]!, 'base64'));
+      const current = await request(second.image!, { cookie: siwon.cookie });
+      expect(current.status).toBe(200);
+      expect(current.headers.get('content-type')).toBe('image/webp');
+      expect(Buffer.from(await current.arrayBuffer())).toEqual(Buffer.from(DRAWING_WEBP.split(',')[1]!, 'base64'));
+    });
+
+    it('requires a current login and marks missing-image and authentication errors no-store', async () => {
+      const min = await login('min');
+      const missingPath = catchmindImagePath(crypto.randomUUID());
+      const unknown = await request(missingPath, { cookie: min.cookie });
+      expect(unknown.status).toBe(404);
+      expect(unknown.headers.get('cache-control')).toBe('no-store');
+      const draft = (await catchmindAction('claim', min.cookie, null)).catchmind.round!;
+      const absent = await request(catchmindImagePath(draft.id), { cookie: min.cookie });
+      expect(absent.status).toBe(404);
+      expect(absent.headers.get('cache-control')).toBe('no-store');
+      await catchmindAction('publish', min.cookie, draft.id, { wordVersion: draft.wordVersion, image: DRAWING_PNG });
+      for (const path of [catchmindImagePath(draft.id), missingPath]) {
+        const anonymous = await request(path);
+        expect(anonymous.status).toBe(401);
+        expect(anonymous.headers.get('cache-control')).toBe('no-store');
+      }
+      expect((await request('/api/auth/logout', { method: 'POST', cookie: min.cookie, body: {} })).status).toBe(200);
+      const revoked = await request(catchmindImagePath(draft.id), { cookie: min.cookie });
+      expect(revoked.status).toBe(401);
+      expect(revoked.headers.get('cache-control')).toBe('no-store');
+    });
+
+    it('allows only the drawer to retrieve a stored draft image until publication', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      const admin = await login('admin');
+      const draft = (await catchmindAction('claim', min.cookie, null)).catchmind.round!;
+      // Drafts normally have no stored image. Seed one to exercise the route's
+      // authorization boundary independently of the current publish flow.
+      await db.prepare('UPDATE catchmind_rounds SET image = ? WHERE id = ?').bind(DRAWING_PNG, draft.id).run();
+      const path = catchmindImagePath(draft.id);
+      expect((await getCatchmind(min.cookie)).catchmind.round?.image).toBe(path);
+      const owner = await request(path, { cookie: min.cookie });
+      expect(owner.status).toBe(200);
+      expect(Buffer.from(await owner.arrayBuffer())).toEqual(Buffer.from(DRAWING_PNG.split(',')[1]!, 'base64'));
+      for (const cookie of [siwon.cookie, admin.cookie]) {
+        expect((await getCatchmind(cookie)).catchmind.round?.image).toBeNull();
+        const forbidden = await request(path, { cookie });
+        expect(forbidden.status).toBe(403);
+        expect(forbidden.headers.get('cache-control')).toBe('no-store');
+      }
+      await catchmindAction('publish', min.cookie, draft.id, { wordVersion: draft.wordVersion, image: DRAWING_PNG });
+      for (const cookie of [siwon.cookie, admin.cookie]) {
+        const publicImage = await request(path, { cookie });
+        expect(publicImage.status).toBe(200);
+        expect(Buffer.from(await publicImage.arrayBuffer())).toEqual(Buffer.from(DRAWING_PNG.split(',')[1]!, 'base64'));
+      }
     });
   });
 

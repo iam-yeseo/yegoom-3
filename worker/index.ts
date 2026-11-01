@@ -4,7 +4,7 @@ import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
 import { DUMMY_HASH, hashToken, randomToken, verifyPassword } from './crypto';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readInventory, settleDueLotto, ShopError, shopRoute } from './shop';
-import { CatchmindError, catchmindRoute, readCatchmindSummary } from './catchmind';
+import { CatchmindError, catchmindRoute, readCatchmindImage, readCatchmindSummary } from './catchmind';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null }
@@ -370,6 +370,11 @@ async function api(request: Request, env: Env): Promise<Response> {
   if (url.pathname === '/api/me/character') {
     if (request.method === 'PUT') return updateCharacter(request, env, user, now);
     throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+  }
+  const catchmindImageMatch = /^\/api\/catchmind\/rounds\/([^/]+)\/image$/.exec(url.pathname);
+  if (catchmindImageMatch) {
+    if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return readCatchmindImage(env.DB, user, catchmindImageMatch[1]!);
   }
   const catchmindMatch = /^\/api\/catchmind(?:\/([^/]+))?$/.exec(url.pathname);
   if (catchmindMatch) {

@@ -9,7 +9,7 @@ import { randomInt } from './shop';
 interface Actor { id: string; role: 'player' | 'admin' }
 interface RoundRow {
   id: string; number: number; drawer_id: string; word: string; normalized_word: string; word_history: string; rerolls: number;
-  status: 'draft' | 'open' | 'ended'; image: string | null; round_date: string | null; published_at: string | null; ended_at: string | null;
+  status: 'draft' | 'open' | 'ended'; has_image: number; round_date: string | null; published_at: string | null; ended_at: string | null;
   wrong_count: number; winner_id: string | null; end_reason: 'correct' | 'misses' | 'manual' | null;
 }
 interface TurnRow { drawer_id: string | null; round_id: string | null }
@@ -106,10 +106,35 @@ async function player(db: D1Database, id: string | null): Promise<CatchmindPlaye
   return row ? { id: row.id, username: row.username, displayName: row.display_name, character: row.character ?? defaultCharacter(row.username) } : null;
 }
 async function board(db: D1Database): Promise<{ turn: TurnRow; round: RoundRow | null }> {
-  const row = await db.prepare(`SELECT r.*, t.drawer_id AS next_drawer_id, t.round_id AS current_round_id
+  // Polling and mutations need metadata, never the stored base64 image body.
+  const row = await db.prepare(`SELECT r.id, r.number, r.drawer_id, r.word, r.normalized_word, r.word_history, r.rerolls,
+    r.status, r.image IS NOT NULL AS has_image, r.round_date, r.published_at, r.ended_at, r.wrong_count, r.winner_id, r.end_reason,
+    t.drawer_id AS next_drawer_id, t.round_id AS current_round_id
     FROM catchmind_turn t LEFT JOIN catchmind_rounds r ON r.id = t.round_id WHERE t.id = 1`)
     .first<RoundRow & { next_drawer_id: string | null; current_round_id: string | null }>();
   return { turn: { drawer_id: row?.next_drawer_id ?? null, round_id: row?.current_round_id ?? null }, round: row?.id ? row : null };
+}
+export async function readCatchmindImage(db: D1Database, user: Actor, roundId: string): Promise<Response> {
+  const round = await db.prepare('SELECT status, drawer_id, image IS NOT NULL AS has_image FROM catchmind_rounds WHERE id = ?')
+    .bind(roundId).first<Pick<RoundRow, 'status' | 'drawer_id' | 'has_image'>>();
+  if (!round?.has_image) throw new CatchmindError(404, 'IMAGE_NOT_FOUND', '그림을 찾을 수 없어요.');
+  if (round.status === 'draft' && (user.role !== 'player' || round.drawer_id !== user.id)) {
+    throw new CatchmindError(403, 'IMAGE_PRIVATE', '아직 공개되지 않은 그림이에요.');
+  }
+  const row = await db.prepare('SELECT image FROM catchmind_rounds WHERE id = ?').bind(roundId).first<{ image: string | null }>();
+  if (!row?.image) throw new CatchmindError(404, 'IMAGE_NOT_FOUND', '그림을 찾을 수 없어요.');
+  // Publishing validates and writes the image once; there is no draft-image
+  // save endpoint. Retain those exact bytes behind the immutable round URL.
+  const match = /^data:image\/(png|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(row.image);
+  if (!match) throw new Error('Stored catchmind image has an invalid format');
+  const bytes = Uint8Array.from(atob(match[2]!), character => character.charCodeAt(0));
+  return new Response(bytes, { headers: {
+    'Content-Type': `image/${match[1]}`,
+    'Content-Length': String(bytes.byteLength),
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    'Vary': 'Cookie',
+    'X-Content-Type-Options': 'nosniff',
+  } });
 }
 export async function readCatchmindSummary(db: D1Database): Promise<CatchmindSummary> {
   const row = await db.prepare(`SELECT r.id, r.status, r.drawer_id, r.wrong_count, r.winner_id, r.word, t.drawer_id AS next_drawer_id
@@ -130,7 +155,9 @@ async function readState(db: D1Database, user: Actor): Promise<CatchmindState> {
   return {
     turn: next,
     round: round ? { id: round.id, number: round.number, status: round.status, drawer: drawer!, word: author || round.status === 'ended' ? round.word : null,
-      wordVersion: round.rerolls, rerollsLeft: CATCHMIND_RULES.rerolls - round.rerolls, image: round.image, wrongCount: round.wrong_count,
+      wordVersion: round.rerolls, rerollsLeft: CATCHMIND_RULES.rerolls - round.rerolls,
+      image: round.has_image && (round.status !== 'draft' || author) ? `/api/catchmind/rounds/${encodeURIComponent(round.id)}/image` : null,
+      wrongCount: round.wrong_count,
       hint: round.wrong_count >= CATCHMIND_RULES.hintAfter ? { firstCharacter: letters[0]!, length: letters.length } : null,
       winner, endReason: round.end_reason, publishedAt: round.published_at, endedAt: round.ended_at,
       guesses: guesses.map(guess => ({ id: guess.id, answer: guess.answer, correct: Boolean(guess.correct), createdAt: guess.created_at,

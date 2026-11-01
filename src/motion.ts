@@ -379,6 +379,99 @@ export function installPressFeedback() {
   );
 }
 
+let touchEffectInstalled = false;
+/** Small pointer feedback that leaves input, drawing, and scrolling untouched. */
+export function installTouchEffect() {
+  if (touchEffectInstalled) return;
+  touchEffectInstalled = true;
+  const excluded = "input,textarea,select,canvas,[contenteditable],[data-notouchfx]";
+  const active = new Map<HTMLDivElement, { pointerId: number; remove: () => void }>();
+  let lastAt = -Infinity;
+
+  document.addEventListener("pointerdown", event => {
+    if (reduced() || !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+    const path = event.composedPath();
+    if (path.some(node => node instanceof Element && node.closest(excluded))) return;
+    const now = performance.now();
+    if (now - lastAt < 60) return;
+    lastAt = now;
+    if (active.size >= 8) active.values().next().value?.remove();
+
+    const layer = fxLayer();
+    const bounds = layer.getBoundingClientRect();
+    const group = document.createElement("div");
+    group.className = "fx-touch-effect";
+    group.style.left = `${event.clientX - bounds.left - 22}px`;
+    group.style.top = `${event.clientY - bounds.top - 22}px`;
+    const ring = document.createElement("span");
+    ring.className = "fx-touch-ring";
+    group.appendChild(ring);
+    layer.appendChild(group);
+    // A body overlay paints below native dialogs. Promote only this decorative
+    // group, without moving the shared FX layer or changing dialog focus.
+    if ("showPopover" in group && path.some(node => node instanceof HTMLDialogElement && node.matches(":modal"))) {
+      group.setAttribute("popover", "manual");
+      try {
+        group.showPopover();
+        group.style.left = `${event.clientX - 22}px`;
+        group.style.top = `${event.clientY - 22}px`;
+      } catch {
+        group.removeAttribute("popover");
+      }
+    }
+
+    const animations: Animation[] = [];
+    let removed = false;
+    const remove = () => {
+      if (removed) return;
+      removed = true;
+      window.clearTimeout(expiry);
+      active.delete(group);
+      group.remove();
+      animations.forEach(animation => animation.cancel());
+    };
+    // The deadline also removes paused animations if their finish event never fires.
+    const expiry = window.setTimeout(remove, 400);
+    active.set(group, { pointerId: event.pointerId, remove });
+    try {
+      const options: KeyframeAnimationOptions = { duration: 360, easing: ease.out, fill: "both" };
+      const play = (element: Element, frames: Keyframe[]) => {
+        const animation = element.animate(frames, options);
+        animations.push(animation);
+        void animation.finished.then(remove, remove);
+      };
+      play(ring, [
+        { transform: "scale(.2)", opacity: .65 },
+        { transform: "scale(.7)", opacity: .45, offset: .5 },
+        { transform: "scale(1)", opacity: 0 },
+      ]);
+      for (let i = 0; i < 4; i++) {
+        const particle = document.createElement("span");
+        particle.className = "fx-touch-dot";
+        particle.style.background = colors[i];
+        group.appendChild(particle);
+        const angle = i * Math.PI / 2 - Math.PI / 4;
+        // 18px travel + the 2px dot radius stays inside the 44px group.
+        const x = Math.cos(angle) * 18;
+        const y = Math.sin(angle) * 18;
+        play(particle, [
+          { transform: "translate(0, 0) scale(.5)", opacity: .8 },
+          { transform: `translate(${x * .7}px, ${y * .7}px) scale(1)`, opacity: .8, offset: .5 },
+          { transform: `translate(${x}px, ${y}px) scale(.6)`, opacity: 0 },
+        ]);
+      }
+    } catch {
+      remove();
+    }
+  }, { capture: true, passive: true });
+  document.addEventListener("pointercancel", event => {
+    for (const effect of active.values()) if (effect.pointerId === event.pointerId) effect.remove();
+  }, { capture: true, passive: true });
+  reducedQuery?.addEventListener("change", () => {
+    if (reduced()) for (const effect of active.values()) effect.remove();
+  });
+}
+
 /** Runs `fn` with the element after mount (skips when the element is missing). */
 export function useMountMotion<T extends Element>(fn: (el: T) => void, deps: unknown[] = []) {
   const ref = useRef<T>(null);

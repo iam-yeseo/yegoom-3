@@ -141,7 +141,9 @@ export interface CatchmindGuess { id: string; player: CatchmindPlayer; answer: s
 export interface CatchmindRound {
   id: string; number: number; status: 'draft' | 'open' | 'ended';
   drawer: CatchmindPlayer; word: string | null; wordVersion: number; rerollsLeft: number;
-  image: string | null; wrongCount: number; hint: { firstCharacter: string; length: number } | null;
+  /** Authenticated image URL in API responses; offline previews may use a data URL. */
+  image: string | null;
+  wrongCount: number; hint: { firstCharacter: string; length: number } | null;
   winner: CatchmindPlayer | null; endReason: 'correct' | 'misses' | 'manual' | null;
   publishedAt: string | null; endedAt: string | null; guesses: CatchmindGuess[];
 }

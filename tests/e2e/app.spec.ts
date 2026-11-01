@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import type { BootstrapResponse, CatchmindResponse, KujiResponse, LottoPurchaseInput, LottoResponse, ShopState, SpeettoResponse } from '../../shared/types';
 
@@ -120,7 +120,7 @@ async function captureWidths(page: Page, name: string, info: TestInfo, phase = 1
       }));
       for (const layout of layouts) expect(layout).toEqual({ wordBreak: 'keep-all', wordLineCounts: [1, 1] });
     }
-    const path = phase === 4 ? `docs/screenshots/v2-p4-${name}-${width}.png` : info.outputPath(`${name}-${width}.png`);
+    const path = phase === 5 ? `docs/screenshots/v2-p5-${name}-${width}.png` : info.outputPath(`${name}-${width}.png`);
     await page.screenshot({ path, fullPage: !name.endsWith('picker'), animations: 'disabled' });
     await info.attach(`${name}-${width}px`, { path, contentType: 'image/png' });
   }
@@ -1346,4 +1346,392 @@ test('administrators can view catchmind but cannot take a turn or submit a game 
   const after = await snapshot(page);
   expect(after.user.gold).toBe(before.user.gold);
   expect(after.user.weeklyScore).toBe(before.user.weeklyScore);
+});
+
+
+async function pauseTouchEffects(page: Page) {
+  await page.locator('.fx-touch-effect').evaluateAll(groups => {
+    for (const group of groups) for (const animation of group.getAnimations({ subtree: true })) {
+      animation.pause();
+      animation.currentTime = 60;
+    }
+  });
+}
+async function touchPointer(page: Page, options: { selector?: string; x?: number; y?: number; pointerType?: string; button?: number; isPrimary?: boolean; pointerId?: number } = {}) {
+  return page.evaluate(options => {
+    const target = document.querySelector(options.selector ?? 'main')!;
+    const event = new PointerEvent('pointerdown', {
+      bubbles: true, composed: true, cancelable: true, isPrimary: true,
+      pointerType: 'touch', pointerId: 80, button: 0,
+      ...options, clientX: options.x ?? 150, clientY: options.y ?? 250,
+    });
+    const accepted = target.dispatchEvent(event);
+    for (const group of document.querySelectorAll('.fx-touch-effect')) for (const animation of group.getAnimations({ subtree: true })) {
+      animation.pause();
+      animation.currentTime = 120;
+    }
+    return { accepted, prevented: event.defaultPrevented };
+  }, options);
+}
+async function freezeBrowserClock(page: Page) {
+  await page.clock.install({ time: new Date(TEST_NOW) });
+  await page.clock.pauseAt(new Date('2026-10-30T00:00:01Z'));
+}
+
+test('touch feedback uses primary left pointers, respects throttle and bounds, and always cleans up', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await freezeBrowserClock(page);
+  await page.goto('/#/preview');
+  const effects = page.locator('.fx-touch-effect');
+  for (const options of [{ isPrimary: false }, { pointerType: 'mouse', button: 1 }, { pointerType: 'mouse', button: 2 }]) {
+    expect(await touchPointer(page, options)).toEqual({ accepted: true, prevented: false });
+    await expect(effects).toHaveCount(0);
+  }
+  expect(await touchPointer(page, { pointerType: 'mouse', button: 0 })).toEqual({ accepted: true, prevented: false });
+  await expect(effects).toHaveCount(1);
+  await expect(effects.locator('.fx-touch-dot')).toHaveCount(4);
+  await expect(effects.locator('.fx-touch-ring')).toHaveCount(1);
+  const animations = await effects.evaluate(element => element.getAnimations({ subtree: true }).map(animation => ({
+    duration: animation.effect!.getTiming().duration,
+    properties: Array.from(new Set((animation.effect as KeyframeEffect).getKeyframes().flatMap(frame => Object.keys(frame).filter(key => !['offset', 'easing', 'composite', 'computedOffset'].includes(key))))).sort(),
+  })));
+  expect(animations).toHaveLength(5);
+  for (const animation of animations) {
+    expect(Number(animation.duration)).toBeLessThanOrEqual(400);
+    expect(animation.properties).toEqual(['opacity', 'transform']);
+  }
+  const dimensions = await effects.evaluate(element => ({ width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height }));
+  expect(dimensions).toEqual({ width: 44, height: 44 });
+  await touchPointer(page);
+  await expect(effects).toHaveCount(1);
+  await page.clock.runFor(59);
+  await touchPointer(page);
+  await expect(effects).toHaveCount(1);
+  await page.clock.runFor(1);
+  await touchPointer(page);
+  await expect(effects).toHaveCount(2);
+  await page.clock.runFor(400);
+  await expect(effects).toHaveCount(0);
+
+  // A blocked event loop can defer cleanup. Keep timers still while advancing
+  // event time to exercise the memory cap, then restore the browser clock.
+  const capped = await page.evaluate(() => {
+    const original = Object.getOwnPropertyDescriptor(performance, 'now');
+    let now = performance.now();
+    const first: Element[] = [];
+    Object.defineProperty(performance, 'now', { configurable: true, value: () => now });
+    try {
+      for (let index = 0; index < 10; index++) {
+        now += 60;
+        document.querySelector('main')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, isPrimary: true, pointerType: 'touch', pointerId: index + 100, clientX: 80 + index * 5, clientY: 200 }));
+        if (index < 2) first.push(document.querySelectorAll('.fx-touch-effect')[index]);
+        for (const group of document.querySelectorAll('.fx-touch-effect')) for (const animation of group.getAnimations({ subtree: true })) animation.pause();
+      }
+      return { count: document.querySelectorAll('.fx-touch-effect').length, evicted: first.every(element => !element.isConnected) };
+    } finally {
+      if (original) Object.defineProperty(performance, 'now', original);
+      else Reflect.deleteProperty(performance, 'now');
+    }
+  });
+  expect(capped).toEqual({ count: 8, evicted: true });
+  await page.clock.runFor(400);
+  await expect(effects).toHaveCount(0);
+  const cdp = await page.context().newCDPSession(page);
+  const documentObject = await cdp.send('Runtime.evaluate', { expression: 'document' });
+  const listeners = await cdp.send('DOMDebugger.getEventListeners', { objectId: documentObject.result.objectId! });
+  expect(listeners.listeners.some(listener => listener.type === 'pointerdown' && listener.useCapture && listener.passive)).toBe(true);
+  await cdp.detach();
+  expect(await page.locator('.fx-layer').evaluate(element => getComputedStyle(element).pointerEvents)).toBe('none');
+});
+
+test('touch feedback creates no nodes for reduced motion or excluded elements and descendants', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await freezeBrowserClock(page);
+  await page.goto('/#/preview');
+  await touchPointer(page);
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  await expect(page.locator('.fx-layer')).toHaveCount(0);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await touchPointer(page);
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(1);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.evaluate(() => {
+    const fixture = document.createElement('section');
+    fixture.id = 'touch-exclusion-fixture';
+    fixture.innerHTML = '<input id="touch-input"><textarea id="touch-textarea"></textarea><select id="touch-select"><option id="touch-option">옵션</option></select><canvas id="touch-canvas"></canvas><div contenteditable="true" id="touch-editable"><span id="touch-editable-child">편집</span></div><div contenteditable="false" id="touch-static-editable"><span id="touch-static-child">고정</span></div><div data-notouchfx id="touch-excluded"><button id="touch-excluded-button"><svg><path id="touch-svg-path" d="M0 0h10v10Z"></path></svg></button></div>';
+    document.querySelector('main')!.appendChild(fixture);
+    const shadowHost = document.createElement('div');
+    shadowHost.setAttribute('data-notouchfx', '');
+    shadowHost.id = 'touch-shadow-host';
+    const shadow = shadowHost.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<span>shadow child</span>';
+    fixture.appendChild(shadowHost);
+  });
+  for (const id of ['input', 'textarea', 'select', 'option', 'canvas', 'editable', 'editable-child', 'static-editable', 'static-child', 'excluded', 'excluded-button', 'svg-path']) {
+    await page.clock.runFor(60);
+    expect(await touchPointer(page, { selector: `#touch-${id}` })).toEqual({ accepted: true, prevented: false });
+    await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  }
+  await page.clock.runFor(60);
+  await page.evaluate(() => document.querySelector('#touch-shadow-host')!.shadowRoot!.querySelector('span')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, isPrimary: true, pointerType: 'touch', pointerId: 81, clientX: 100, clientY: 100 })));
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  await page.evaluate(() => document.querySelector('#touch-exclusion-fixture')!.remove());
+});
+
+test('touch feedback leaves scrolling and real canvas and picker drags usable', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  const requests: string[] = [];
+  await page.route('**/api/**', route => { requests.push(route.request().url()); return route.abort(); });
+  await page.goto('/#/preview');
+  await page.mouse.wheel(0, 420);
+  await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(200);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  const previousScroll = await page.evaluate(() => scrollY);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 5, y: 700 }] });
+  for (const y of [650, 550, 450, 350]) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 5, y }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(previousScroll);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await cdp.detach();
+  await previewDrawing(page);
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  await page.evaluate(() => {
+    const observed = window as typeof window & { touchEffectAdditions: number };
+    observed.touchEffectAdditions = 0;
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (node instanceof Element) observed.touchEffectAdditions += Number(node.matches('.fx-touch-effect')) + node.querySelectorAll('.fx-touch-effect').length;
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  const before = await canvasPixel(page, .5, .5);
+  await drawStroke(page, [[.2, .5], [.8, .5]]);
+  expect(await canvasPixel(page, .5, .5)).not.toEqual(before);
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  const picker = await openPicker(page);
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  const selection = picker.getByRole('slider', { name: '채도와 명도', exact: true });
+  await picker.locator('.color-picker-sheet').evaluate(element => Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {}))));
+  await selection.click({ trial: true });
+  const box = await selection.boundingBox();
+  await page.mouse.move(box!.x + box!.width * .2, box!.y + box!.height * .2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width * .8, box!.y + box!.height * .7, { steps: 8 });
+  await page.mouse.up();
+  await expect(selection).toHaveAttribute('data-saturation', '80');
+  await expect(selection).toHaveAttribute('data-value', '30');
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  await picker.getByRole('textbox', { name: 'HEX 색상', exact: true }).fill('#123456');
+  await picker.getByRole('textbox', { name: 'HEX 색상', exact: true }).press('Tab');
+  await expect(picker.getByRole('textbox', { name: 'HEX 색상', exact: true })).toHaveValue('#123456');
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as typeof window & { touchEffectAdditions: number }).touchEffectAdditions)).toBe(0);
+  expect(requests).toEqual([]);
+});
+
+for (const mode of ['preview', 'authenticated'] as const) {
+  test(`${mode} touch feedback stays at viewport coordinates across widths and scrolling`, async ({ page }, info) => {
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await freezeBrowserClock(page);
+    const requests: string[] = [];
+    if (mode === 'preview') {
+      await page.route('**/api/**', route => { requests.push(route.request().url()); return route.abort(); });
+      await page.goto('/#/preview');
+    } else await login(page, 'min');
+    await page.clock.runFor(1000);
+    await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+    await mkdir('docs/screenshots', { recursive: true });
+    for (const width of [390, 560, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(() => { scrollTo(0, 0); return document.fonts.ready; });
+      await page.clock.runFor(500);
+      const point = { x: width / 2 + 35, y: 315 };
+      await page.mouse.click(point.x, point.y);
+      await pauseTouchEffects(page);
+      await expect(page.locator('.fx-touch-effect')).toHaveCount(1);
+      const center = await page.locator('.fx-touch-effect').evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      });
+      expect(center).toEqual(point);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+      if (width !== 1440) {
+        const path = `docs/screenshots/v2-p5-${mode}-touch-${width}.png`;
+        await page.screenshot({ path, fullPage: false, animations: 'allow' });
+        await info.attach(`${mode}-touch-${width}px`, { path, contentType: 'image/png' });
+      }
+      await page.clock.runFor(400);
+      await page.evaluate(() => scrollTo(0, 500));
+      expect(await page.evaluate(() => scrollY)).toBeGreaterThan(0);
+      await touchPointer(page, { x: point.x, y: 240 });
+      const scrolledCenter = await page.locator('.fx-touch-effect').evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      });
+      expect(scrolledCenter).toEqual({ x: point.x, y: 240 });
+      await page.clock.runFor(400);
+      await touchPointer(page, { x: width - 1, y: 1 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+      await page.clock.runFor(400);
+      await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+    }
+    if (mode === 'preview') expect(requests).toEqual([]);
+  });
+}
+
+test('catchmind image URLs decode once, stay out of polls and reuse private HTTP cache', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'siwon');
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+  let state = await catchmindState(page);
+  if (!state.round?.image) {
+    const headers = { Origin: new URL(page.url()).origin };
+    if (state.round?.drawer.username && state.round.drawer.username !== 'siwon') {
+      await page.request.post('/api/auth/logout', { data: {}, headers });
+      await login(page, state.round.drawer.username);
+    }
+    if (!state.round) {
+      const claimed = await page.request.post('/api/catchmind/claim', { data: { requestId: crypto.randomUUID(), roundId: null }, headers });
+      expect(claimed.status()).toBe(200);
+      state = (await claimed.json() as CatchmindResponse).catchmind;
+    }
+    const image = await page.evaluate(() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 64;
+      const context = canvas.getContext('2d')!;
+      context.fillStyle = '#FFFDF8';
+      context.fillRect(0, 0, 64, 64);
+      context.fillStyle = '#8FD9C0';
+      context.fillRect(12, 12, 40, 40);
+      return canvas.toDataURL('image/png');
+    });
+    const published = await page.request.post('/api/catchmind/publish', {
+      data: { requestId: crypto.randomUUID(), roundId: state.round!.id, wordVersion: state.round!.wordVersion, image }, headers,
+    });
+    expect(published.status()).toBe(200);
+    state = (await published.json() as CatchmindResponse).catchmind;
+  }
+  const imagePath = state.round!.image!;
+  expect(imagePath).toMatch(/^\/api\/catchmind\/rounds\/[^/]+\/image$/);
+  expect(JSON.stringify(state)).not.toContain('data:image');
+  const imageUrl = new URL(imagePath, page.url()).href;
+  const transfers: { requestId: string; url: string; encodedBytes: number; cached: boolean }[] = [];
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  await cdp.send('Network.setCacheDisabled', { cacheDisabled: false });
+  cdp.on('Network.requestWillBeSent', event => {
+    if (event.request.url === imageUrl) transfers.push({ requestId: event.requestId, url: event.request.url, encodedBytes: -1, cached: false });
+  });
+  cdp.on('Network.requestServedFromCache', event => {
+    const transfer = transfers.find(item => item.requestId === event.requestId);
+    if (transfer) transfer.cached = true;
+  });
+  cdp.on('Network.responseReceived', event => {
+    const transfer = transfers.find(item => item.requestId === event.requestId);
+    if (transfer) transfer.cached ||= Boolean(event.response.fromDiskCache || event.response.fromPrefetchCache);
+  });
+  cdp.on('Network.loadingFinished', event => {
+    const transfer = transfers.find(item => item.requestId === event.requestId);
+    if (transfer) transfer.encodedBytes = event.encodedDataLength;
+  });
+  await freezeBrowserClock(page);
+  const loaded = page.waitForResponse(response => response.url() === imageUrl);
+  await page.goto('/#/play/catchmind');
+  const response = await loaded;
+  expect(response.headers()['content-type']).toMatch(/^image\/(png|webp)/);
+  expect(response.headers()['cache-control']).toContain('private');
+  expect(response.headers()['cache-control']).toContain('immutable');
+  expect(response.headers()['vary']).toContain('Cookie');
+  const picture = page.locator('.pg-picture img');
+  await expect(picture).toHaveAttribute('src', imagePath);
+  await expect.poll(() => picture.evaluate(element => {
+    const image = element as HTMLImageElement;
+    return image.complete && image.naturalWidth > 0 && image.naturalWidth === image.naturalHeight;
+  })).toBe(true);
+  await expect.poll(() => transfers[0]?.encodedBytes ?? -1).toBeGreaterThan(0);
+  const initialBytes = transfers[0].encodedBytes;
+  await captureWidths(page, 'authenticated-image', info, 5);
+  for (let count = 0; count < 3; count++) {
+    const polled = page.waitForResponse(response => new URL(response.url()).pathname === '/api/catchmind' && response.request().method() === 'GET');
+    await page.clock.runFor(5000);
+    const metadata = await (await polled).json() as CatchmindResponse;
+    expect(metadata.catchmind.round?.image).toBe(imagePath);
+    expect(JSON.stringify(metadata)).not.toContain('data:image');
+    await expect(picture).toHaveAttribute('src', imagePath);
+    expect(transfers).toHaveLength(1);
+  }
+  await page.goto('/#/profile');
+  await expect(page.locator('.profile-summary')).toBeVisible();
+  await expect(picture).toHaveCount(0);
+  await page.goto('/#/play/catchmind');
+  await expect.poll(() => picture.evaluate(element => {
+    const image = element as HTMLImageElement;
+    return image.complete && image.naturalWidth > 0 && image.naturalWidth === image.naturalHeight;
+  })).toBe(true);
+  // Force an observable second request with normal HTTP caching, even if the
+  // img remount reused Chromium's decoded-image memory without a request.
+  const cachedRead = await page.evaluate(async path => {
+    const response = await fetch(path, { cache: 'default' });
+    return { status: response.status, size: (await response.arrayBuffer()).byteLength };
+  }, imagePath);
+  expect(cachedRead.status).toBe(200);
+  expect(cachedRead.size).toBeGreaterThan(0);
+  await expect.poll(() => transfers.length).toBeGreaterThan(1);
+  await expect.poll(() => transfers.every(transfer => transfer.encodedBytes >= 0)).toBe(true);
+  expect(transfers.reduce((total, transfer) => total + transfer.encodedBytes, 0)).toBe(initialBytes);
+  expect(transfers.slice(1).some(transfer => transfer.cached)).toBe(true);
+  expect(transfers.slice(1).every(transfer => transfer.encodedBytes === 0)).toBe(true);
+  const cachedUrls = await page.evaluate(async () => (await Promise.all((await caches.keys()).map(async name => (await (await caches.open(name)).keys()).map(request => request.url)))).flat());
+  expect(cachedUrls.some(url => new URL(url).pathname.startsWith('/api/'))).toBe(false);
+  const evidencePath = info.outputPath('catchmind-image-transfers.json');
+  await writeFile(evidencePath, JSON.stringify({ polls: 3, transfers }, null, 2));
+  await info.attach('catchmind-image-transfers', { path: evidencePath, contentType: 'application/json' });
+  await cdp.detach();
+});
+
+test('touch feedback appears above native dialogs without intercepting focus or clicks', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await freezeBrowserClock(page);
+  const requests: string[] = [];
+  await page.route('**/api/**', route => { requests.push(route.request().url()); return route.abort(); });
+  await page.goto('/#/preview/play/kuji');
+  await page.getByRole('button', { name: 'A상 보상 보기', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'A상 보상', exact: true });
+  const heading = dialog.getByRole('heading', { name: 'A상 보상', exact: true });
+  await heading.click({ trial: true });
+  await page.clock.runFor(400);
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  const close = dialog.getByRole('button', { name: '닫기', exact: true });
+  await close.focus();
+  const box = await heading.boundingBox();
+  const point = { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
+  expect(await touchPointer(page, { selector: '.kuji-sheet h2', ...point })).toEqual({ accepted: true, prevented: false });
+  const effect = page.locator('.fx-touch-effect:popover-open');
+  await expect(effect).toHaveCount(1);
+  await expect(dialog).toBeVisible();
+  expect(await close.evaluate(element => document.activeElement === element)).toBe(true);
+  expect(await page.evaluate(point => document.elementFromPoint(point.x, point.y) === document.querySelector('.kuji-sheet h2'), point)).toBe(true);
+  const placement = await effect.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2, width: bounds.width, height: bounds.height, pointerEvents: getComputedStyle(element).pointerEvents, backdropPointerEvents: getComputedStyle(element, '::backdrop').pointerEvents };
+  });
+  expect(placement).toMatchObject({ width: 44, height: 44, pointerEvents: 'none', backdropPointerEvents: 'none' });
+  expect(Math.abs(placement.x - point.x)).toBeLessThanOrEqual(.02);
+  expect(Math.abs(placement.y - point.y)).toBeLessThanOrEqual(.02);
+  const screenshot = info.outputPath('native-dialog-touch.png');
+  await pauseTouchEffects(page);
+  await page.screenshot({ path: screenshot, fullPage: false, animations: 'allow' });
+  await info.attach('native-dialog-touch', { path: screenshot, contentType: 'image/png' });
+  await page.clock.runFor(400);
+  await expect(effect).toHaveCount(0);
+  await close.click();
+  await expect(dialog).toHaveCount(0);
+  await page.clock.runFor(400);
+  await expect(page.locator('.fx-touch-effect')).toHaveCount(0);
+  expect(requests).toEqual([]);
 });
