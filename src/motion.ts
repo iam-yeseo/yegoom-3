@@ -441,7 +441,7 @@ export function installTouchEffect() {
         void animation.finished.then(remove, remove);
       };
       play(ring, [
-        { transform: "scale(.2)", opacity: .65 },
+        { transform: "scale(.2)", opacity: .7 },
         { transform: "scale(.7)", opacity: .45, offset: .5 },
         { transform: "scale(1)", opacity: 0 },
       ]);
@@ -451,7 +451,7 @@ export function installTouchEffect() {
         particle.style.background = colors[i];
         group.appendChild(particle);
         const angle = i * Math.PI / 2 - Math.PI / 4;
-        // 18px travel + the 2px dot radius stays inside the 44px group.
+        // 18px travel + the 3px dot radius stays inside the 44px group.
         const x = Math.cos(angle) * 18;
         const y = Math.sin(angle) * 18;
         play(particle, [

@@ -2187,14 +2187,15 @@ em.delisted {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: radial-gradient(circle, #ff8e7a40 0%, #ff8e7a26 54%, #ff8e7a00 72%);
+  border: 2px solid #FF8E7A;
+  background: transparent;
 }
 .fx-touch-dot {
   position: absolute;
-  left: 20px;
-  top: 20px;
-  width: 4px;
-  height: 4px;
+  left: 19px;
+  top: 19px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
 }
 .fx-coin {

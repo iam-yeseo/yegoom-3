@@ -68,7 +68,7 @@ React + TypeScript + Vite 클라이언트, 별도 Workers API, D1, PWA로 시작
 
 ## 전역 터치 이펙트 — Phase 5 확정
 
-- **표현과 설치:** `src/motion.ts`의 `installTouchEffect()`를 버튼 눌림 피드백과 함께 한 번 설치한다. 기존 `fxLayer()`에서 작은 원과 앱 팔레트 색 점 4개를 표시하며 전체 크기는 최대 44px, 수명은 400ms 이하다. transform·opacity만 움직인다. 기본 대화상자 안에서는 해당 효과만 임시 manual popover로 올려 가려지지 않게 하며 포커스와 클릭은 그대로 통과시킨다.
+- **표현과 설치:** `src/motion.ts`의 `installTouchEffect()`를 버튼 눌림 피드백과 함께 한 번 설치한다. 크림색 바탕의 가시성을 위해 채운 원을 2px 코랄(`#FF8E7A`) 테두리 링으로 바꾸고 시작 불투명도를 0.7로 높였다. 앱 팔레트 색 점 4개는 6px이며 기존 `fxLayer()`에서 전체 크기 최대 44px, 수명 400ms 이하를 유지한다. transform·opacity만 움직인다. 기본 대화상자 안에서는 해당 효과만 임시 manual popover로 올려 가려지지 않게 하며 포커스와 클릭은 그대로 통과시킨다.
 - **입력과 제한:** 주 포인터의 `pointerdown`만 받으며 마우스는 왼쪽 버튼만 허용한다. passive 리스너로 스크롤·드래그를 방해하지 않는다. 60ms 이내 연속 입력을 무시하고 동시에 남는 이펙트는 최대 8개로 제한한다.
 - **제외:** reduced motion에서는 노드를 만들지 않는다. `input`, `textarea`, `select`, `canvas`, `[contenteditable]`, `[data-notouchfx]`와 내부 요소에서도 만들지 않아 입력·그림·피커 조작을 유지한다.
 - **캐치마인드 이미지 보완:** 저장된 data URL은 유지하되 상태 응답의 `image`에는 판 ID별 URL만 넣는다. `GET /api/catchmind/rounds/:id/image`는 로그인과 공개 전 출제자 권한을 검사한 뒤 PNG/WebP 바이트를 반환한다. `Cache-Control: private, max-age=31536000, immutable`로 바뀌지 않는 그림을 브라우저 HTTP 캐시에서 재사용하고 `Vary: Cookie`로 로그인 세션별 캐시를 구분한다. 서비스 워커의 `/api` 캐시 제외 규칙은 그대로 유지한다. 미리보기의 로컬 그림은 서버에 요청하지 않는다.
