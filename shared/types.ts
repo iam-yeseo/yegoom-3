@@ -20,6 +20,16 @@ export interface GameResult {
   displayName: string;
   value: string;
   difference: number;
+  score: number;
+  isFirst: boolean;
+  participationGold: number;
+  firstGold: number;
+  gold: number;
+}
+export interface GameHistoryRound {
+  roundDate: string;
+  answer: string;
+  results: GameResult[];
 }
 export interface GameState {
   id: GameId;
@@ -50,11 +60,13 @@ export interface BootstrapResponse {
   players: Player[];
   games: GameState[];
   ledger: LedgerEntry[];
+  dailyScores: number[];
   serverTime: string;
   timeZone: 'Asia/Seoul';
 }
 export interface AuthResponse { user: User }
 export interface GameResponse { game: GameState }
+export interface HistoryResponse { history: GameHistoryRound[] }
 export interface ApiError { error: { code: string; message: string } }
 export interface GameMutationInput { roundDate: string }
 export interface PredictionInput extends GameMutationInput { value: string }
