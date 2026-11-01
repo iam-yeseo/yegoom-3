@@ -1,4 +1,5 @@
 import type { ArtKey } from './characters';
+import type { KUJI_RULES, SPEETTO_RULES } from './balance';
 
 export type GameId = 'wake' | 'offwork' | 'luck';
 export type Role = 'player' | 'admin';
@@ -67,6 +68,7 @@ export interface BootstrapResponse {
   ledger: LedgerEntry[];
   dailyScores: number[];
   attendance: AttendanceState;
+  inventory: Inventory;
   serverTime: string;
   timeZone: 'Asia/Seoul';
 }
@@ -92,3 +94,43 @@ export interface ApiError { error: { code: string; message: string } }
 export interface GameMutationInput { roundDate: string }
 export interface PredictionInput extends GameMutationInput { value: string }
 export interface AnswerInput extends GameMutationInput { value: string; hint?: string }
+
+export interface Inventory { lottoTickets: number; speettoTickets: number }
+export type ShopKind = 'kuji' | 'lotto' | 'speetto';
+export type ShopPayment = 'gold' | 'ticket';
+export interface ShopState { gold: number; inventory: Inventory; canPurchase: boolean; serverTime: string }
+export type KujiGrade = typeof KUJI_RULES.grades[number]['grade'];
+export interface KujiCell { position: number; grade: KujiGrade | null; buyerId: string | null }
+export interface KujiState {
+  boardId: number;
+  cells: KujiCell[];
+  remaining: number;
+  remainingByGrade: Record<KujiGrade, number>;
+  purchasedToday: number;
+  nextPrice: number;
+}
+export interface KujiPurchaseInput { requestId: string; boardId: number; positions: number[] }
+export interface KujiPurchase {
+  requestId: string; boardId: number; cells: { position: number; grade: KujiGrade }[]; cost: number;
+  reward: { gold: number; score: number; lottoTickets: number; speettoTickets: number }; lastOne: boolean;
+}
+export interface KujiResponse extends ShopState { kuji: KujiState; purchase?: KujiPurchase }
+export interface LottoPurchaseInput { requestId: string; numbers: number[]; payment: ShopPayment }
+export interface LottoTicket {
+  id: string; requestId: string; drawDate: string; numbers: number[]; payment: ShopPayment; cost: number;
+  winningNumbers: number[] | null; matches: number | null; rank: number | null; prize: number | null;
+}
+export interface LottoState {
+  targetDrawDate: string;
+  todayDraw: { date: string; numbers: number[] | null };
+  tickets: LottoTicket[];
+}
+export interface LottoResponse extends ShopState { lotto: LottoState; purchase?: LottoTicket }
+export type SpeettoSymbol = typeof SPEETTO_RULES.characters[number];
+export interface SpeettoPurchaseInput { requestId: string; payment: ShopPayment }
+export interface SpeettoTicket {
+  id: string; requestId: string; cells: SpeettoSymbol[]; won: boolean; prize: number;
+  payment: ShopPayment; cost: number; createdAt: string;
+}
+export interface SpeettoState { tickets: SpeettoTicket[] }
+export interface SpeettoResponse extends ShopState { speetto: SpeettoState; purchase?: SpeettoTicket }

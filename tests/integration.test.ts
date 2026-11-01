@@ -1,10 +1,12 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken } from '../worker/crypto';
-import type { BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User } from '../shared/types';
+import type { BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse } from '../shared/types';
 
 const ORIGIN = 'http://localhost';
 const PASSWORD = 'test-only-password-42!';
@@ -15,7 +17,7 @@ type Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
 
 // Freeze only the compiled test bundle. Production never accepts a clock header
 // or an environment override, and these tests do not depend on the host timezone.
-async function workerAt(instant: string, sqlInstant: string = instant): Promise<string> {
+async function workerAt(instant: string, sqlInstant: string = instant, speettoRoll?: number): Promise<string> {
   const timestamp = Date.parse(instant);
   const result = await build({
     entryPoints: [fileURLToPath(new URL('../worker/index.ts', import.meta.url))],
@@ -28,15 +30,24 @@ async function workerAt(instant: string, sqlInstant: string = instant): Promise<
   });
   // D1 also checks its own clock inside conditional writes, so freeze that SQL
   // expression in the test artifact along with JavaScript. No app source changes.
-  return result.outputFiles[0]!.text.replaceAll("unixepoch('now') * 1000", String(Date.parse(sqlInstant)));
+  let artifact = result.outputFiles[0]!.text.replaceAll("unixepoch('now') * 1000", String(Date.parse(sqlInstant)));
+  if (speettoRoll !== undefined) {
+    // Inject only the compiled test artifact's probability roll. Production has
+    // no random override; shuffles and authentication still use real crypto.
+    const signature = /function randomInt\((\w+)\) \{/;
+    if (!signature.test(artifact)) throw new Error('Compiled shop randomInt function was not found');
+    artifact = artifact.replace(signature, (match, maximum: string) => `${match} if (${maximum} === 100) return ${speettoRoll};`);
+  }
+  return artifact;
 }
 
-function runtime(script: string) {
+function runtime(script: string, persistence?: string) {
   return new Miniflare({
     modules: true,
     script,
     compatibilityDate: '2026-08-06',
     d1Databases: ['DB'],
+    ...(persistence ? { d1Persist: persistence } : {}),
   });
 }
 
@@ -455,6 +466,543 @@ describe('Worker and D1 integration', () => {
       expect(responses.map(response => response.status)).toEqual([200, 200]);
       expect(await db.prepare('SELECT character FROM users WHERE id = ?').bind('min').first('character')).toBe('moon');
       expect((await bootstrap(first.cookie)).user.character).toBe('moon');
+    });
+  });
+
+  async function fund(amount: number, username: Username = 'min', database: Database = db) {
+    const id = crypto.randomUUID();
+    await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+      VALUES (?, ?, 'gold', ?, 'test funding', ?, ?)`)
+      .bind(id, username, amount, `fixture:${id}`, `${TODAY}T00:00:00.000Z`).run();
+  }
+  async function grantTicket(item: 'lotto_ticket' | 'speetto_ticket', amount: number, database: Database = db) {
+    const id = crypto.randomUUID();
+    await database.prepare(`INSERT INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at)
+      VALUES (?, 'min', ?, ?, 'test funding', ?, ?)`)
+      .bind(id, item, amount, `fixture:${id}`, `${TODAY}T00:00:00.000Z`).run();
+  }
+  async function getKuji(cookie: string, instance?: Miniflare) {
+    const response = await request('/api/shop/kuji', { cookie, instance });
+    expect(response.status).toBe(200);
+    return response.json() as Promise<KujiResponse>;
+  }
+  async function positionsFor(boardId: number, grade: string, database: Database = db) {
+    const raw = await database.prepare('SELECT grades FROM kuji_boards WHERE id = ?').bind(boardId).first<string>('grades');
+    return (JSON.parse(raw!) as string[]).flatMap((value, position) => value === grade ? [position] : []);
+  }
+  async function buyKuji(cookie: string, boardId: number, positions: number[], requestId = crypto.randomUUID(), instance?: Miniflare) {
+    const response = await request('/api/shop/kuji', { method: 'POST', cookie, instance, body: { requestId, boardId, positions } });
+    expect(response.status).toBe(200);
+    return response.json() as Promise<KujiResponse>;
+  }
+  async function shop(cookie: string, instance?: Miniflare) {
+    const response = await request('/api/shop', { cookie, instance });
+    expect(response.status).toBe(200);
+    return response.json() as Promise<ShopState>;
+  }
+
+  describe('server shop economy', () => {
+    it('creates one shared 100-ticket kuji board and reveals only sold grades', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      const [first, second] = await Promise.all([getKuji(min.cookie), getKuji(siwon.cookie)]);
+      expect(first.kuji.boardId).toBe(second.kuji.boardId);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_boards').first('count')).toBe(1);
+      expect(first.kuji.cells).toHaveLength(100);
+      expect(first.kuji.cells.every(cell => cell.grade === null && cell.buyerId === null)).toBe(true);
+      expect(first.kuji.remaining).toBe(100);
+      expect(first.kuji.remainingByGrade).toEqual({ A: 1, B: 2, C: 3, D: 6, E: 10, F: 15, G: 25, H: 38 });
+      const grades = JSON.parse((await db.prepare('SELECT grades FROM kuji_boards').first<string>('grades'))!) as string[];
+      expect(Object.fromEntries('ABCDEFGH'.split('').map(grade => [grade, grades.filter(item => item === grade).length])))
+        .toEqual({ A: 1, B: 2, C: 3, D: 6, E: 10, F: 15, G: 25, H: 38 });
+      await fund(1000);
+      await buyKuji(min.cookie, first.kuji.boardId, [7]);
+      const visible = await getKuji(siwon.cookie);
+      expect(visible.kuji.cells[7]).toMatchObject({ position: 7, grade: grades[7], buyerId: 'min' });
+      expect(visible.kuji.cells.filter(cell => cell.grade !== null)).toHaveLength(1);
+      expect(visible.kuji.remaining).toBe(99);
+    });
+
+    it('charges 300G through the fifth ticket and 400G from the sixth in a multi-buy', async () => {
+      const { cookie } = await login('min');
+      await fund(4000);
+      const { kuji } = await getKuji(cookie);
+      const positions = await positionsFor(kuji.boardId, 'H');
+      expect((await buyKuji(cookie, kuji.boardId, positions.slice(0, 4))).purchase?.cost).toBe(1200);
+      const crossed = await buyKuji(cookie, kuji.boardId, positions.slice(4, 7));
+      expect(crossed.purchase?.cost).toBe(1100);
+      expect(crossed.gold).toBe(1700);
+      expect(crossed.kuji).toMatchObject({ purchasedToday: 7, nextPrice: 400 });
+      expect(crossed.inventory.speettoTickets).toBe(7);
+    });
+
+    it('computes concurrent fifth and sixth kuji prices from committed daily purchases', async () => {
+      const { cookie } = await login('min');
+      await fund(3000);
+      const { kuji } = await getKuji(cookie);
+      const positions = await positionsFor(kuji.boardId, 'H');
+      await buyKuji(cookie, kuji.boardId, positions.slice(0, 4));
+      const purchases = await Promise.all(positions.slice(4, 6).map(position => buyKuji(cookie, kuji.boardId, [position])));
+      expect(purchases.map(result => result.purchase?.cost).sort()).toEqual([300, 400]);
+      expect((await shop(cookie)).gold).toBe(1100);
+      expect((await getKuji(cookie)).kuji.purchasedToday).toBe(6);
+    });
+
+    it('rejects an unaffordable kuji multi-buy without claiming or paying any selected cell', async () => {
+      const { cookie } = await login('min');
+      await fund(599);
+      const { kuji } = await getKuji(cookie);
+      const positions = await positionsFor(kuji.boardId, 'H');
+      const response = await request('/api/shop/kuji', { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), boardId: kuji.boardId, positions: positions.slice(0, 2) } });
+      expect(response.status).toBe(409);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_claims').first('count')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(0);
+      expect((await shop(cookie))).toMatchObject({ gold: 599, inventory: { lottoTickets: 0, speettoTickets: 0 } });
+      expect(await ledgerRows()).toHaveLength(1);
+    });
+
+    it('fails the whole kuji selection if one cell was sold', async () => {
+      const { cookie } = await login('min');
+      await fund(2000);
+      const { kuji } = await getKuji(cookie);
+      const [first, second] = await positionsFor(kuji.boardId, 'H');
+      await buyKuji(cookie, kuji.boardId, [first!]);
+      const response = await request('/api/shop/kuji', { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), boardId: kuji.boardId, positions: [first, second] } });
+      expect(response.status).toBe(409);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_claims').first('count')).toBe(1);
+      expect((await shop(cookie))).toMatchObject({ gold: 1700, inventory: { speettoTickets: 1 } });
+    });
+
+    it('serializes overlapping kuji multi-buys with one complete winner', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      await fund(600);
+      await fund(600, 'siwon');
+      const { kuji } = await getKuji(min.cookie);
+      const positions = await positionsFor(kuji.boardId, 'H');
+      const responses = await Promise.all([min.cookie, siwon.cookie].map((cookie, index) => request('/api/shop/kuji', {
+        method: 'POST', cookie, body: { requestId: crypto.randomUUID(), boardId: kuji.boardId, positions: positions.slice(index, index + 2) },
+      })));
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_claims').first('count')).toBe(2);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(1);
+      expect((await Promise.all([shop(min.cookie), shop(siwon.cookie)])).map(state => state.gold).sort()).toEqual([0, 600]);
+    });
+
+    it('prevents concurrent different-cell purchases from overspending the same gold', async () => {
+      const { cookie } = await login('min');
+      await fund(300);
+      const { kuji } = await getKuji(cookie);
+      const positions = await positionsFor(kuji.boardId, 'H');
+      const responses = await Promise.all(positions.slice(0, 2).map(position => request('/api/shop/kuji', {
+        method: 'POST', cookie, body: { requestId: crypto.randomUUID(), boardId: kuji.boardId, positions: [position] },
+      })));
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      expect((await shop(cookie)).gold).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_claims').first('count')).toBe(1);
+    });
+
+    it('pays every kuji grade reward and inventory exactly once', async () => {
+      const { cookie } = await login('min');
+      await fund(10000);
+      const { kuji } = await getKuji(cookie);
+      const expected = [
+        ['A', 100, 10, 0, 0], ['B', 50, 5, 0, 0], ['C', 30, 3, 0, 0], ['D', 10, 1, 0, 0],
+        ['E', 0, 0, 3, 0], ['F', 0, 0, 1, 0], ['G', 0, 0, 0, 3], ['H', 0, 0, 0, 1],
+      ] as const;
+      for (const [grade, gold, score, lottoTickets, speettoTickets] of expected) {
+        const [position] = await positionsFor(kuji.boardId, grade);
+        const result = await buyKuji(cookie, kuji.boardId, [position!]);
+        expect(result.purchase?.reward, grade).toEqual({ gold, score, lottoTickets, speettoTickets });
+      }
+      expect((await shop(cookie))).toMatchObject({ gold: 7490, inventory: { lottoTickets: 4, speettoTickets: 4 } });
+      const view = await bootstrap(cookie);
+      expect(view.user.weeklyScore).toBe(19);
+      const scores = (await ledgerRows()).filter(row => row.currency === 'score');
+      expect(scores.map(row => row.amount).sort((a, b) => a - b)).toEqual([1, 3, 5, 10]);
+      expect(scores.every(row => row.week_start === '2026-10-26')).toBe(true);
+    });
+
+    it('pays last-one once, starts the next shared board, and retains daily pricing across boards', async () => {
+      const { cookie } = await login('min');
+      await fund(50000);
+      const { kuji } = await getKuji(cookie);
+      const requestId = crypto.randomUUID();
+      await buyKuji(cookie, kuji.boardId, Array.from({ length: 99 }, (_, index) => index));
+      const last = await buyKuji(cookie, kuji.boardId, [99], requestId);
+      expect(last.purchase?.lastOne).toBe(true);
+      expect(last.purchase!.reward.gold).toBeGreaterThanOrEqual(1000);
+      const after = await getKuji(cookie);
+      expect(after.kuji.boardId).toBeGreaterThan(kuji.boardId);
+      expect(after.kuji).toMatchObject({ remaining: 100, purchasedToday: 100, nextPrice: 400 });
+      const beforeReplay = await ledgerRows();
+      const replay = await buyKuji(cookie, kuji.boardId, [99], requestId);
+      expect(replay.purchase).toEqual(last.purchase);
+      expect(await ledgerRows()).toEqual(beforeReplay);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_claims WHERE board_id = ?').bind(after.kuji.boardId).first('count')).toBe(0);
+      const [position] = await positionsFor(after.kuji.boardId, 'H');
+      expect((await buyKuji(cookie, after.kuji.boardId, [position!])).purchase?.cost).toBe(400);
+    });
+
+    it('awards last-one once when the final two kuji cells sell concurrently', async () => {
+      const { cookie } = await login('min');
+      await fund(50000);
+      const { kuji } = await getKuji(cookie);
+      const finalPositions = (await positionsFor(kuji.boardId, 'H')).slice(0, 2);
+      await buyKuji(cookie, kuji.boardId, Array.from({ length: 100 }, (_, index) => index).filter(position => !finalPositions.includes(position)));
+      const results = await Promise.all(finalPositions.map(position => buyKuji(cookie, kuji.boardId, [position])));
+      expect(results.map(result => result.purchase?.lastOne).sort()).toEqual([false, true]);
+      expect(results.map(result => result.purchase?.reward.gold).sort((a, b) => Number(a) - Number(b))).toEqual([0, 1000]);
+      expect((await ledgerRows()).filter(row => row.amount === 1000)).toHaveLength(1);
+      const [first, second] = await Promise.all([getKuji(cookie), getKuji(cookie)]);
+      expect(first.kuji.boardId).toBe(second.kuji.boardId);
+      expect(first.kuji.remaining).toBe(100);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_boards').first('count')).toBe(2);
+    });
+
+    it('replays concurrent identical kuji requests once and rejects a reused ID with another payload', async () => {
+      const { cookie } = await login('min');
+      await fund(1000);
+      const { kuji } = await getKuji(cookie);
+      const [first, second] = await positionsFor(kuji.boardId, 'H');
+      const requestId = crypto.randomUUID();
+      const results = await Promise.all([1, 2].map(() => buyKuji(cookie, kuji.boardId, [first!], requestId)));
+      expect(results[0]!.purchase).toEqual(results[1]!.purchase);
+      expect((await shop(cookie))).toMatchObject({ gold: 700, inventory: { speettoTickets: 1 } });
+      expect((await request('/api/shop/kuji', { method: 'POST', cookie,
+        body: { requestId, boardId: kuji.boardId, positions: [second] } })).status).toBe(409);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_claims').first('count')).toBe(1);
+    });
+
+    it('keeps Sunday kuji scores in their game week and resets personal prices on Monday', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-shop-week-'));
+      let instance = runtime(await workerAt('2026-11-01T14:59:59Z'), persistence);
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await fund(3000, 'min', database);
+        const { cookie } = await login('min', instance);
+        const { kuji } = await getKuji(cookie, instance);
+        const [position] = await positionsFor(kuji.boardId, 'A', database);
+        const result = await buyKuji(cookie, kuji.boardId, [position!], crypto.randomUUID(), instance);
+        expect(result.purchase?.reward.score).toBe(10);
+        expect((await ledgerRows(database)).find(row => row.currency === 'score')).toMatchObject({ amount: 10, week_start: '2026-10-26' });
+        await instance.dispose();
+        instance = runtime(await workerAt('2026-11-01T15:00:00Z'), persistence);
+        const monday = await getKuji(cookie, instance);
+        expect(monday.kuji).toMatchObject({ purchasedToday: 0, nextPrice: 300 });
+        const response = await request('/api/bootstrap', { cookie, instance });
+        expect(response.status).toBe(200);
+        const view = await response.json() as BootstrapResponse;
+        expect(view.user.weeklyScore).toBe(0);
+        expect(view.dailyScores).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it.each([
+      { kind: 'kuji', before: '2026-11-01T14:59:59Z', after: '2026-11-01T15:00:00Z' },
+      { kind: 'lotto', before: '2026-10-30T07:59:59Z', after: '2026-10-30T08:00:00Z' },
+    ])('rejects a $kind purchase crossing its SQL time boundary without partial writes', async ({ kind, before, after }) => {
+      const instance = runtime(await workerAt(before, after));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await fund(1000, 'min', database);
+        const { cookie } = await login('min', instance);
+        const input = kind === 'kuji'
+          ? { boardId: (await getKuji(cookie, instance)).kuji.boardId, positions: [0] }
+          : { numbers: [1, 2, 3, 4, 5], payment: 'gold' };
+        const response = await request(`/api/shop/${kind}`, { method: 'POST', cookie, instance, body: { requestId: crypto.randomUUID(), ...input } });
+        expect(response.status).toBe(409);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM kuji_claims').first('count')).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM lotto_tickets').first('count')).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM inventory_ledger').first('count')).toBe(0);
+        expect((await ledgerRows(database)).map(row => row.amount)).toEqual([1000]);
+      } finally { await instance.dispose(); }
+    });
+
+    it('replays an original lotto purchase after the draw cutoff and KST midnight', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-shop-replay-'));
+      let instance = runtime(await workerAt(`${TODAY}T07:59:59Z`), persistence);
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await fund(1000, 'min', database);
+        const { cookie } = await login('min', instance);
+        const body = { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'gold' };
+        const first = await request('/api/shop/lotto', { method: 'POST', cookie, instance, body });
+        expect(first.status).toBe(200);
+        const original = (await first.json() as LottoResponse).purchase!;
+        for (const instant of [`${TODAY}T08:00:00Z`, `${TODAY}T15:00:00Z`]) {
+          await instance.dispose();
+          instance = runtime(await workerAt(instant), persistence);
+          const replay = await request('/api/shop/lotto', { method: 'POST', cookie, instance, body });
+          expect(replay.status).toBe(200);
+          expect((await replay.json() as LottoResponse).purchase).toMatchObject({
+            id: original.id, requestId: original.requestId, drawDate: TODAY, numbers: original.numbers, payment: 'gold', cost: 500,
+          });
+        }
+        const persisted = await instance.getD1Database('DB');
+        expect(await persisted.prepare('SELECT COUNT(*) AS count FROM lotto_tickets').first('count')).toBe(1);
+        expect((await ledgerRows(persisted)).filter(row => row.amount < 0).map(row => row.amount)).toEqual([-500]);
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it.each([
+      ['2026-10-30T07:59:59Z', '2026-10-30'],
+      ['2026-10-30T08:00:00Z', '2026-10-31'],
+      ['2026-10-30T14:59:59Z', '2026-10-31'],
+      ['2026-10-30T15:00:00Z', '2026-10-31'],
+      ['2026-10-31T08:00:00Z', '2026-11-01'],
+    ])('assigns the lotto target using server KST at %s', async (instant, drawDate) => {
+      const instance = runtime(await workerAt(instant));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await fund(500, 'min', database);
+        const { cookie } = await login('min', instance);
+        const response = await request('/api/shop/lotto', { method: 'POST', cookie, instance,
+          body: { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'gold', drawDate: '2099-01-01' } });
+        expect(response.status).toBe(200);
+        const result = await response.json() as LottoResponse;
+        expect(result.purchase).toMatchObject({ drawDate, cost: 500, payment: 'gold' });
+        expect(result.gold).toBe(0);
+      } finally { await instance.dispose(); }
+    });
+
+    it('creates the 17:00 lotto draw once across concurrent reads', async () => {
+      const instance = runtime(await workerAt(`${TODAY}T08:00:00Z`));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        const responses = await Promise.all(['/api/shop/lotto', '/api/shop/lotto', '/api/bootstrap'].map(path => request(path, { cookie, instance })));
+        expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
+        const views = await Promise.all(responses.slice(0, 2).map(response => response.json() as Promise<LottoResponse>));
+        expect(views[0]!.lotto.todayDraw).toEqual(views[1]!.lotto.todayDraw);
+        const numbers = views[0]!.lotto.todayDraw.numbers!;
+        expect(new Set(numbers).size).toBe(5);
+        expect(numbers.every(value => Number.isInteger(value) && value >= 1 && value <= 25)).toBe(true);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM lotto_draws WHERE date = ?').bind(TODAY).first('count')).toBe(1);
+      } finally { await instance.dispose(); }
+    });
+
+    it.each([1, 4])('settles due lotto before bootstrap reads gold with %i initial readers and never pays twice', async readers => {
+      const { cookie } = await login('min');
+      await fund(500);
+      const purchaseResponse = await request('/api/shop/lotto', { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'gold' } });
+      expect(purchaseResponse.status).toBe(200);
+      const purchase = (await purchaseResponse.json() as LottoResponse).purchase!;
+      expect((await ledgerRows()).reduce((sum, row) => sum + row.amount, 0)).toBe(0);
+      await db.prepare('UPDATE lotto_tickets SET draw_date = ? WHERE id = ?').bind('2026-10-29', purchase.id).run();
+      await db.prepare('INSERT INTO lotto_draws (date, numbers, created_at) VALUES (?, ?, ?)')
+        .bind('2026-10-29', JSON.stringify([1, 2, 3, 4, 5]), '2026-10-29T08:00:00.000Z').run();
+
+      // Bootstrap is the first endpoint to encounter the due winning ticket.
+      // Each response must include the payout in both the balance and ledger.
+      const views = await Promise.all(Array.from({ length: readers }, () => bootstrap(cookie)));
+      for (const view of views) {
+        expect(view.user.gold).toBe(5000);
+        expect(view.ledger.filter(row => row.currency === 'gold' && row.amount === 5000)).toHaveLength(1);
+        expect(view.attendance).toMatchObject({ today: TODAY, claimed: false, canClaim: true });
+        expect(view.inventory).toEqual({ lottoTickets: 0, speettoTickets: 0 });
+      }
+      const settled = await db.prepare('SELECT matches, rank, prize, settled_at FROM lotto_tickets WHERE id = ?')
+        .bind(purchase.id).first<{ matches: number; rank: number; prize: number; settled_at: string | null }>();
+      expect(settled).toMatchObject({ matches: 5, rank: 1, prize: 5000 });
+      expect(settled?.settled_at).not.toBeNull();
+      const afterFirstRead = await ledgerRows();
+      expect(afterFirstRead.filter(row => row.reference === `lotto:prize:${purchase.id}`)).toHaveLength(1);
+      for (let index = 0; index < 3; index++) expect((await bootstrap(cookie)).user.gold).toBe(5000);
+      expect(await ledgerRows()).toEqual(afterFirstRead);
+    });
+
+    it('settles all lotto match counts and ranks exactly once from a historical draw', async () => {
+      const { cookie } = await login('min');
+      await fund(3000);
+      const picks = [[1, 2, 3, 4, 5], [1, 2, 3, 4, 6], [1, 2, 3, 6, 7], [1, 2, 6, 7, 8], [1, 6, 7, 8, 9], [6, 7, 8, 9, 10]];
+      for (const numbers of picks) {
+        expect((await request('/api/shop/lotto', { method: 'POST', cookie,
+          body: { requestId: crypto.randomUUID(), numbers, payment: 'gold' } })).status).toBe(200);
+      }
+      await db.prepare("UPDATE lotto_tickets SET draw_date = '2026-10-29'").run();
+      await db.prepare('INSERT INTO lotto_draws (date, numbers, created_at) VALUES (?, ?, ?)')
+        .bind('2026-10-29', JSON.stringify([1, 2, 3, 4, 5]), '2026-10-29T08:00:00.000Z').run();
+      await bootstrap(cookie);
+      const response = await request('/api/shop/lotto', { cookie });
+      expect(response.status).toBe(200);
+      const result = await response.json() as LottoResponse;
+      expect(result.gold).toBe(9500);
+      expect(result.lotto.tickets.map(ticket => [ticket.matches, ticket.rank, ticket.prize]).sort((a, b) => Number(b[0]) - Number(a[0])))
+        .toEqual([[5, 1, 5000], [4, 2, 3000], [3, 3, 1000], [2, 4, 500], [1, null, 0], [0, null, 0]]);
+      const ledger = await ledgerRows();
+      await Promise.all([bootstrap(cookie), request('/api/shop/lotto', { cookie }), bootstrap(cookie)]);
+      expect(await ledgerRows()).toEqual(ledger);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM lotto_tickets WHERE settled_at IS NOT NULL').first('count')).toBe(6);
+    });
+
+    it('draws and settles missed past lotto dates on the first later request', async () => {
+      const { cookie } = await login('min');
+      await fund(1500);
+      for (const date of ['2026-10-25', '2026-10-27', '2026-10-29']) {
+        const response = await request('/api/shop/lotto', { method: 'POST', cookie,
+          body: { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'gold' } });
+        expect(response.status).toBe(200);
+        const { purchase } = await response.json() as LottoResponse;
+        await db.prepare('UPDATE lotto_tickets SET draw_date = ? WHERE id = ?').bind(date, purchase!.id).run();
+      }
+      await bootstrap(cookie);
+      const draws = await db.prepare('SELECT date FROM lotto_draws ORDER BY date').all<{ date: string }>();
+      expect(draws.results.map(draw => draw.date)).toEqual(['2026-10-25', '2026-10-27', '2026-10-29']);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM lotto_tickets WHERE settled_at IS NOT NULL').first('count')).toBe(3);
+      const before = await ledgerRows();
+      await bootstrap(cookie);
+      expect(await ledgerRows()).toEqual(before);
+    });
+
+    it('allows more than five daily lotto purchases and deduplicates retried requests', async () => {
+      const { cookie } = await login('min');
+      await fund(6000);
+      for (let index = 0; index < 11; index++) {
+        expect((await request('/api/shop/lotto', { method: 'POST', cookie,
+          body: { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'gold' } })).status).toBe(200);
+      }
+      const body = { requestId: crypto.randomUUID(), numbers: [6, 7, 8, 9, 10], payment: 'gold' };
+      const responses = await Promise.all([1, 2].map(() => request('/api/shop/lotto', { method: 'POST', cookie, body })));
+      expect(responses.map(response => response.status)).toEqual([200, 200]);
+      const results = await Promise.all(responses.map(response => response.json() as Promise<LottoResponse>));
+      expect(results[0]!.purchase).toEqual(results[1]!.purchase);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM lotto_tickets').first('count')).toBe(12);
+      expect((await shop(cookie)).gold).toBe(0);
+    });
+
+    it.each(['lotto', 'speetto'] as const)('requires sufficient %s gold or tickets and consumes one ticket atomically', async kind => {
+      const { cookie } = await login('min');
+      const input = kind === 'lotto' ? { numbers: [1, 2, 3, 4, 5] } : {};
+      for (const payment of ['gold', 'ticket']) {
+        expect((await request(`/api/shop/${kind}`, { method: 'POST', cookie,
+          body: { requestId: crypto.randomUUID(), payment, ...input } })).status).toBe(409);
+      }
+      await grantTicket(kind === 'lotto' ? 'lotto_ticket' : 'speetto_ticket', 1);
+      const responses = await Promise.all([1, 2].map(() => request(`/api/shop/${kind}`, { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), payment: 'ticket', ...input } })));
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      const result = await responses.find(response => response.status === 200)!.json() as LottoResponse | SpeettoResponse;
+      expect(result.purchase).toMatchObject({ payment: 'ticket', cost: 0 });
+      expect(result.inventory[kind === 'lotto' ? 'lottoTickets' : 'speettoTickets']).toBe(0);
+      expect(await db.prepare('SELECT SUM(amount) AS total FROM inventory_ledger').first('total')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(1);
+      await expect(db.prepare('UPDATE inventory_ledger SET amount = 999').run()).rejects.toThrow('append-only');
+      await expect(db.prepare('DELETE FROM inventory_ledger').run()).rejects.toThrow('append-only');
+    });
+
+    it.each([0, 9, 10, 99])('uses the 10 percent speetto boundary for roll %s and persists prepaid outcomes', async roll => {
+      const instant = `${TODAY}T00:00:00Z`;
+      const instance = runtime(await workerAt(instant, instant, roll));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const payment = roll === 9 ? 'ticket' : 'gold';
+        if (payment === 'ticket') await grantTicket('speetto_ticket', 1, database);
+        else await fund(300, 'min', database);
+        const { cookie } = await login('min', instance);
+        const body = { requestId: crypto.randomUUID(), payment };
+        const response = await request('/api/shop/speetto', { method: 'POST', cookie, instance, body });
+        expect(response.status).toBe(200);
+        const result = await response.json() as SpeettoResponse;
+        expect(result.purchase).toMatchObject({ won: roll < 10, prize: roll < 10 ? 1500 : 0, payment, cost: payment === 'ticket' ? 0 : 300 });
+        expect(result.inventory.speettoTickets).toBe(0);
+        expect(result.gold).toBe(roll < 10 ? 1500 : 0);
+        const cells = result.purchase!.cells;
+        expect(cells).toHaveLength(3);
+        const counts = [...new Set(cells)].map(value => cells.filter(cell => cell === value).length);
+        expect(Math.max(...counts) >= 3).toBe(roll < 10);
+        const replay = await request('/api/shop/speetto', { method: 'POST', cookie, instance, body });
+        expect(replay.status).toBe(200);
+        expect((await replay.json() as SpeettoResponse).purchase).toEqual(result.purchase);
+        const saved = await request('/api/shop/speetto', { cookie, instance });
+        expect((await saved.json() as SpeettoResponse).speetto.tickets[0]).toEqual(result.purchase);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(1);
+        expect((await ledgerRows(database)).filter(row => row.amount === 1500)).toHaveLength(roll < 10 ? 1 : 0);
+      } finally { await instance.dispose(); }
+    });
+
+    it('deduplicates concurrent speetto requests into one debit and one persistent outcome', async () => {
+      const { cookie } = await login('min');
+      await fund(300);
+      const body = { requestId: crypto.randomUUID(), payment: 'gold' };
+      const responses = await Promise.all([1, 2].map(() => request('/api/shop/speetto', { method: 'POST', cookie, body })));
+      expect(responses.map(response => response.status)).toEqual([200, 200]);
+      const results = await Promise.all(responses.map(response => response.json() as Promise<SpeettoResponse>));
+      expect(results[0]!.purchase).toEqual(results[1]!.purchase);
+      expect((await shop(cookie)).gold).toBe(results[0]!.purchase!.prize);
+      expect((await ledgerRows()).filter(row => row.amount < 0).map(row => row.amount)).toEqual([-300]);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(1);
+    });
+
+    it('does not let a winning speetto prize fund its own purchase', async () => {
+      const instant = `${TODAY}T00:00:00Z`;
+      const instance = runtime(await workerAt(instant, instant, 0));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        const response = await request('/api/shop/speetto', { method: 'POST', cookie, instance,
+          body: { requestId: crypto.randomUUID(), payment: 'gold' } });
+        expect(response.status).toBe(409);
+        expect(await ledgerRows(database)).toEqual([]);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(0);
+      } finally { await instance.dispose(); }
+    });
+
+    it('rejects reuse of a successful request ID for another shop product', async () => {
+      const { cookie } = await login('min');
+      await fund(1000);
+      const requestId = crypto.randomUUID();
+      expect((await request('/api/shop/lotto', { method: 'POST', cookie,
+        body: { requestId, numbers: [1, 2, 3, 4, 5], payment: 'gold' } })).status).toBe(200);
+      expect((await request('/api/shop/speetto', { method: 'POST', cookie, body: { requestId, payment: 'gold' } })).status).toBe(409);
+      expect((await shop(cookie)).gold).toBe(500);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(1);
+    });
+
+    it('enforces shop authentication, Origin, administrator and input validation boundaries', async () => {
+      const min = await login('min');
+      const admin = await login('admin');
+      const { kuji } = await getKuji(min.cookie);
+      const inputs = {
+        kuji: { boardId: kuji.boardId, positions: [0] },
+        lotto: { numbers: [1, 2, 3, 4, 5], payment: 'gold' },
+        speetto: { payment: 'gold' },
+      };
+      for (const kind of ['kuji', 'lotto', 'speetto'] as const) {
+        const body = { requestId: crypto.randomUUID(), ...inputs[kind] };
+        expect((await request(`/api/shop/${kind}`)).status).toBe(401);
+        expect((await request(`/api/shop/${kind}`, { method: 'POST', body })).status).toBe(401);
+        expect((await request(`/api/shop/${kind}`, { method: 'POST', body, cookie: admin.cookie })).status).toBe(403);
+        expect((await request(`/api/shop/${kind}`, { method: 'POST', body, cookie: min.cookie, origin: null })).status).toBe(403);
+        for (const requestId of [null, '', 1, 'x'.repeat(129)]) {
+          expect((await request(`/api/shop/${kind}`, { method: 'POST', cookie: min.cookie, body: { ...body, requestId } })).status).toBe(400);
+        }
+      }
+      for (const numbers of [[], [1, 2, 3, 4], [1, 1, 2, 3, 4], [0, 1, 2, 3, 4], [1, 2, 3, 4, 26], [1, 2, 3, 4, 5.5], ['1', 2, 3, 4, 5]]) {
+        expect((await request('/api/shop/lotto', { method: 'POST', cookie: min.cookie,
+          body: { requestId: crypto.randomUUID(), numbers, payment: 'gold' } })).status).toBe(400);
+      }
+      for (const positions of [[], [0, 0], [-1], [100], [0.5], ['0']]) {
+        expect((await request('/api/shop/kuji', { method: 'POST', cookie: min.cookie,
+          body: { requestId: crypto.randomUUID(), boardId: kuji.boardId, positions } })).status).toBe(400);
+      }
+      for (const kind of ['lotto', 'speetto']) {
+        expect((await request(`/api/shop/${kind}`, { method: 'POST', cookie: min.cookie,
+          body: { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'free' } })).status).toBe(400);
+      }
+      expect(await ledgerRows()).toEqual([]);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(0);
     });
   });
 

@@ -3,6 +3,7 @@ import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, PREDICTION_REWA
 import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
 import { DUMMY_HASH, hashToken, randomToken, verifyPassword } from './crypto';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
+import { readInventory, settleDueLotto, ShopError, shopRoute } from './shop';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null }
@@ -271,16 +272,18 @@ async function updateCharacter(request: Request, env: Env, user: UserRow, now: D
 async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapResponse> {
   // Complete payments before reading balances and weekly rankings in parallel.
   await settlePublishedRounds(env.DB, now);
-  const [viewer, players, games, ledger, dailyScores, attendance] = await Promise.all([
+  await settleDueLotto(env.DB, now);
+  const [viewer, players, games, ledger, dailyScores, attendance, inventory] = await Promise.all([
     publicUser(env.DB, user, now),
     env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, u.character, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Omit<Player, 'character'> & { character: ArtKey | null }>(),
     Promise.all(GAME_IDS.map(id => readGame(env.DB, user, id, now))),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
     weeklyDailyScores(env.DB, user.id, now),
     readAttendance(env.DB, user, now),
+    readInventory(env.DB, user.id),
   ]);
   return { user: viewer, players: players.results.map(player => ({ ...player, character: player.character ?? defaultCharacter(player.username) })),
-    games, ledger: ledger.results, dailyScores, attendance, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    games, ledger: ledger.results, dailyScores, attendance, inventory, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId, action: string, now: Date): Promise<Response> {
   const input = await body(request);
@@ -365,6 +368,11 @@ async function api(request: Request, env: Env): Promise<Response> {
     if (request.method === 'PUT') return updateCharacter(request, env, user, now);
     throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
   }
+  if (url.pathname === '/api/shop' || url.pathname.startsWith('/api/shop/')) {
+    if (request.method === 'POST' && user.role !== 'player') throw new HttpError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');
+    const input = request.method === 'POST' ? await body(request) : undefined;
+    return json(await shopRoute(env.DB, user, url.pathname, request.method, input, new Date()));
+  }
   const gameReadMatch = /^\/api\/games\/([^/]+)(?:\/(history))?$/.exec(url.pathname);
   if (gameReadMatch && isGameId(gameReadMatch[1]!) && request.method === 'GET') {
     await settlePublishedRounds(env.DB, now);
@@ -382,7 +390,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof ShopError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }
