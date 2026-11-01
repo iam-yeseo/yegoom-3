@@ -7,7 +7,9 @@ import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken } from '../worker/crypto';
-import type { BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
+import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
+import { getClawState, getClawSummary, playClaw } from '../worker/claw';
+import type { ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
 const ORIGIN = 'http://localhost';
 const PASSWORD = 'test-only-password-42!';
@@ -108,6 +110,43 @@ const DRAWING_PNG = drawingPng();
 const DRAWING_WEBP = 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQqMKXp/+BiOh/AAA=';
 const DRAWING_WEBP_LOSSY = 'data:image/webp;base64,UklGRjoAAABXRUJQVlA4IC4AAADQAQCdASoCAAIAAUAmJaACdLoB+AADsAD+rhf/IL1b5tu3/3ZP9sn+2T/4wAAA';
 const NONSQUARE_WEBP = 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAQAAAAdQqMKXp/+BiOh/AAA=';
+
+/** Observe real D1 metadata without adding diagnostic headers to production APIs. */
+function measuredClawDatabase(database: Database, now: number) {
+  const queries: { sql: string; rowsRead: number; rowsWritten: number }[] = [];
+  const originals = new WeakMap<object, { statement: ReturnType<Database['prepare']>; sql: string }>();
+  const record = (sql: string, result: { meta: { rows_read?: number; rows_written?: number } }) => {
+    expect(result.meta.rows_read).toBeTypeOf('number');
+    queries.push({ sql, rowsRead: result.meta.rows_read!, rowsWritten: result.meta.rows_written ?? 0 });
+  };
+  const wrap = (statement: ReturnType<Database['prepare']>, sql: string): D1PreparedStatement => {
+    const wrapped = {
+      bind: (...values: unknown[]) => wrap(statement.bind(...values), sql),
+      async all() { const result = await statement.all(); record(sql, result); return result; },
+      async run() { const result = await statement.run(); record(sql, result); return result; },
+      async first(column?: string) {
+        // first() discards D1 meta; all() executes the same indexed SQL and exposes it.
+        const result = await statement.all<Record<string, unknown>>(); record(sql, result);
+        return column ? result.results[0]?.[column] ?? null : result.results[0] ?? null;
+      },
+    } as unknown as D1PreparedStatement;
+    originals.set(wrapped, { statement, sql });
+    return wrapped;
+  };
+  const binding = {
+    prepare(sql: string) {
+      // Mirror workerAt's isolated SQL clock for direct calls to the same module.
+      return wrap(database.prepare(sql.replaceAll("unixepoch('now') * 1000", String(now))), sql);
+    },
+    async batch(statements: D1PreparedStatement[]) {
+      const originalsForBatch = statements.map(statement => originals.get(statement)!);
+      const results = await database.batch(originalsForBatch.map(item => item.statement));
+      results.forEach((result, index) => record(originalsForBatch[index]!.sql, result));
+      return results;
+    },
+  } as unknown as D1Database;
+  return { binding, queries, reset() { queries.length = 0; }, rowsRead() { return queries.reduce((total, query) => total + query.rowsRead, 0); } };
+}
 
 describe('Worker and D1 integration', () => {
   let worker: Miniflare;
@@ -221,6 +260,423 @@ describe('Worker and D1 integration', () => {
       { wordVersion: draft.wordVersion, image: DRAWING_PNG }, instance);
     return published.catchmind.round!;
   }
+
+  async function getClaw(cookie: string, instance?: Miniflare) {
+    const response = await request('/api/claw', { cookie, instance });
+    expect(response.status).toBe(200);
+    return response.json() as Promise<ClawResponse>;
+  }
+  async function clawPlay(cookie: string, version: number, extra: Partial<ClawPlayInput> = {}, instance?: Miniflare) {
+    const response = await request('/api/claw/play', { method: 'POST', cookie, instance,
+      body: { requestId: crypto.randomUUID(), version, x: .05, stop: null, ...extra } });
+    expect(response.status).toBe(200);
+    return response.json() as Promise<ClawResponse>;
+  }
+  async function seedClawBoard(database: Database, board: Board, counter = 0) {
+    await database.prepare('UPDATE claw_accounts SET board_json = ?, power_counter = ?, next_play_at = 0 WHERE user_id = ?')
+      .bind(JSON.stringify(board), counter, 'min').run();
+  }
+
+  describe('server claw machine', () => {
+    it('creates a private 30-doll machine and keeps bootstrap wallet summaries small and config-free', async () => {
+      const { cookie } = await login('min');
+      const view = await bootstrap(cookie);
+      expect(view.claw).toMatchObject({ coins: 5, freeCoins: 5, purchasedCoins: 0, isAdmin: false });
+      expect(view.claw).not.toHaveProperty('board');
+      expect(await db.prepare('SELECT board_json FROM claw_accounts WHERE user_id = ?').bind('min').first('board_json')).toBeNull();
+      const state = await getClaw(cookie);
+      expect(state).toMatchObject({ freeCoins: 5, purchasedCoins: 0, generation: 1, version: 0, nextPlayAt: 0 });
+      expect(state.board).toHaveLength(30);
+      expect(new Set(state.board.map(doll => doll.id)).size).toBe(30);
+      expect(state.board.every(doll => doll.type >= 1 && doll.type <= 11)).toBe(true);
+      expect(state.nextGrantAt).toBe(Date.parse(`${TODAY}T03:00:00Z`));
+      expect((await getClaw(cookie)).board).toEqual(state.board);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_accounts').first('count')).toBe(1);
+      for (const payload of [state, view.claw]) {
+        expect(JSON.stringify(payload)).not.toMatch(/payout.?every|weak.?pickup|weak.?carry|power.?counter/i);
+      }
+    });
+
+    it('replaces free coins at KST 09:00 without carrying missed grants and keeps purchased coins', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-claw-grant-'));
+      let instance = runtime(await workerAt('2026-10-29T23:59:59Z'), persistence); // 08:59:59 KST
+      try {
+        let database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        let { cookie } = await login('min', instance);
+        await getClaw(cookie, instance);
+        await database.prepare('UPDATE claw_accounts SET free_coins = 2, purchased_coins = 7 WHERE user_id = ?').bind('min').run();
+        expect(await getClaw(cookie, instance)).toMatchObject({ freeCoins: 2, purchasedCoins: 7, nextGrantAt: Date.parse('2026-10-30T00:00:00Z') });
+        for (const instant of ['2026-10-30T00:00:00Z', '2026-11-06T00:00:00Z']) {
+          await instance.dispose();
+          instance = runtime(await workerAt(instant), persistence);
+          database = await instance.getD1Database('DB');
+          ({ cookie } = await login('min', instance));
+          const views = await Promise.all([getClaw(cookie, instance), getClaw(cookie, instance)]);
+          expect(views.every(view => view.freeCoins === 5 && view.purchasedCoins === 7 && view.coins === 12)).toBe(true);
+          await database.prepare('UPDATE claw_accounts SET free_coins = 1 WHERE user_id = ?').bind('min').run();
+          expect((await getClaw(cookie, instance)).freeCoins).toBe(1);
+        }
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it('spends free coins first and never reduces purchased coins on a refill', async () => {
+      const { cookie } = await login('min');
+      let state = await getClaw(cookie);
+      await db.prepare('UPDATE claw_accounts SET free_coins = 1, purchased_coins = 2 WHERE user_id = ?').bind('min').run();
+      state = await clawPlay(cookie, state.version);
+      expect(state).toMatchObject({ freeCoins: 0, purchasedCoins: 2, coins: 2 });
+      await db.prepare('UPDATE claw_accounts SET next_play_at = 0 WHERE user_id = ?').bind('min').run();
+      state = await clawPlay(cookie, state.version);
+      expect(state).toMatchObject({ freeCoins: 0, purchasedCoins: 1, coins: 1 });
+      await db.prepare('UPDATE claw_accounts SET last_grant_slot = last_grant_slot - 1 WHERE user_id = ?').bind('min').run();
+      expect(await getClaw(cookie)).toMatchObject({ freeCoins: 5, purchasedCoins: 1, coins: 6 });
+    });
+
+    it.each([1, 5] as const)('buys %s coins once across repeated and concurrent identical requests', async quantity => {
+      const { cookie } = await login('min');
+      await fund(1000);
+      const body = { requestId: crypto.randomUUID(), quantity };
+      const responses = await Promise.all(Array.from({ length: 3 }, () => request('/api/claw/coins', { method: 'POST', cookie, body })));
+      expect(responses.every(response => response.status === 200)).toBe(true);
+      const views = await Promise.all(responses.map(response => response.json() as Promise<ClawResponse>));
+      expect(views.every(view => view.purchasedCoins === quantity)).toBe(true);
+      expect(views[0]!.purchase).toEqual({ ...body, cost: quantity * 100 });
+      expect((await request('/api/claw/coins', { method: 'POST', cookie, body })).status).toBe(200);
+      expect((await getClaw(cookie)).purchasedCoins).toBe(quantity);
+      expect((await ledgerRows()).filter(row => row.amount < 0).map(row => row.amount)).toEqual([-quantity * 100]);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_coin_purchases').first('count')).toBe(1);
+      expect((await bootstrap(cookie)).user.gold).toBe(1000 - quantity * 100);
+    });
+
+    it('rejects invalid quantities, insufficient gold and reused purchase IDs with a different quantity', async () => {
+      const { cookie } = await login('min');
+      for (const quantity of [0, 2, 4, 6, -1, 1.5, '1', null]) {
+        expect((await request('/api/claw/coins', { method: 'POST', cookie, body: { requestId: crypto.randomUUID(), quantity } })).status).toBe(400);
+      }
+      await fund(99);
+      const requestId = crypto.randomUUID();
+      expect((await request('/api/claw/coins', { method: 'POST', cookie, body: { requestId, quantity: 1 } })).status).toBe(409);
+      expect((await getClaw(cookie)).purchasedCoins).toBe(0);
+      expect((await ledgerRows()).filter(row => row.amount < 0)).toEqual([]);
+      await fund(1);
+      expect((await request('/api/claw/coins', { method: 'POST', cookie, body: { requestId, quantity: 1 } })).status).toBe(200);
+      expect((await request('/api/claw/coins', { method: 'POST', cookie, body: { requestId, quantity: 5 } })).status).toBe(409);
+      expect((await bootstrap(cookie)).user.gold).toBe(0);
+    });
+
+    it('allows only one of two different purchases to spend the last 100G', async () => {
+      const { cookie } = await login('min');
+      await fund(100);
+      const responses = await Promise.all(Array.from({ length: 2 }, () => request('/api/claw/coins', { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), quantity: 1 } })));
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      expect((await getClaw(cookie)).purchasedCoins).toBe(1);
+      expect((await bootstrap(cookie)).user.gold).toBe(0);
+      expect((await ledgerRows()).filter(row => row.amount < 0).map(row => row.amount)).toEqual([-100]);
+    });
+
+    it('rolls back a coin receipt and wallet increment when the gold debit fails', async () => {
+      const { cookie } = await login('min');
+      await fund(100);
+      await db.prepare(`CREATE TRIGGER reject_claw_debit BEFORE INSERT ON ledger
+        WHEN NEW.amount < 0 BEGIN SELECT RAISE(ABORT, 'test debit failure'); END;`).run();
+      const body = { requestId: crypto.randomUUID(), quantity: 1 };
+      expect((await request('/api/claw/coins', { method: 'POST', cookie, body })).status).toBe(500);
+      expect((await getClaw(cookie)).purchasedCoins).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_coin_purchases').first('count')).toBe(0);
+      expect((await bootstrap(cookie)).user.gold).toBe(100);
+      await db.prepare('DROP TRIGGER reject_claw_debit').run();
+      expect((await request('/api/claw/coins', { method: 'POST', cookie, body })).status).toBe(200);
+      expect((await getClaw(cookie)).purchasedCoins).toBe(1);
+    });
+
+    it('requires login and lets admins inspect a demo while rejecting purchases and plays', async () => {
+      for (const path of ['/api/claw', '/api/claw/coins', '/api/claw/play']) {
+        expect((await request(path, path === '/api/claw' ? {} : { method: 'POST', body: {} })).status).toBe(401);
+      }
+      const { cookie } = await login('admin');
+      const demo = await getClaw(cookie);
+      expect(demo).toMatchObject({ isAdmin: true, coins: 0, freeCoins: 0, purchasedCoins: 0 });
+      expect(demo.board).toHaveLength(30);
+      expect((await getClaw(cookie)).board).toEqual(demo.board);
+      expect((await request('/api/claw/coins', { method: 'POST', cookie, body: { requestId: crypto.randomUUID(), quantity: 1 } })).status).toBe(403);
+      expect((await request('/api/claw/play', { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), version: 0, x: .5, stop: null } })).status).toBe(403);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_accounts WHERE user_id = ?').bind('admin').first('count')).toBe(0);
+      expect(await ledgerRows()).toEqual([]);
+      expect(JSON.stringify(demo)).not.toMatch(/payout.?every|weak.?pickup|weak.?carry|power.?counter/i);
+    });
+
+    it('validates request IDs, version, x and stop before spending a coin', async () => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      const valid = { requestId: crypto.randomUUID(), version: state.version, x: .5, stop: null };
+      const invalid = [{ x: .049 }, { x: .951 }, { x: '0.5' }, { x: null }, { stop: 47.99 }, { stop: 420.01 },
+        { stop: '48' }, { requestId: 'short' }, { requestId: 'a'.repeat(81) }, { requestId: 'bad id with spaces' },
+        { version: -1 }, { version: .5 }, { version: Number.MAX_SAFE_INTEGER + 1 }];
+      for (const extra of invalid) {
+        expect((await request('/api/claw/play', { method: 'POST', cookie, body: { ...valid, ...extra } })).status).toBe(400);
+      }
+      expect(await getClaw(cookie)).toMatchObject({ freeCoins: 5, version: state.version, board: state.board });
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_plays').first('count')).toBe(0);
+    });
+
+    it('accepts the original play input boundaries and rounds a manual stop to two decimals', async () => {
+      const { cookie } = await login('min');
+      let state = await getClaw(cookie);
+      for (const [x, stop] of [[.05, 48], [.95, 420], [.5, 48.126]] as const) {
+        state = await clawPlay(cookie, state.version, { x, stop });
+        expect(state.result).toMatchObject({ x, stop: Number(stop.toFixed(2)) });
+        await db.prepare('UPDATE claw_accounts SET next_play_at = 0 WHERE user_id = ?').bind('min').run();
+      }
+    });
+
+    it('replays simultaneous identical plays from one receipt without another coin or version change', async () => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      const body = { requestId: crypto.randomUUID(), version: state.version, x: .05, stop: null };
+      const responses = await Promise.all(Array.from({ length: 3 }, () => request('/api/claw/play', { method: 'POST', cookie, body })));
+      expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
+      const views = await Promise.all(responses.map(response => response.json() as Promise<ClawResponse>));
+      expect(views.every(view => JSON.stringify(view.result) === JSON.stringify(views[0]!.result))).toBe(true);
+      const retry = await clawPlay(cookie, state.version, body);
+      expect(retry.result).toEqual(views[0]!.result);
+      expect(retry).toMatchObject({ freeCoins: 4, version: state.version + 1, replayed: true });
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_plays').first('count')).toBe(1);
+    });
+
+    it('allows only one of two different plays on the same version', async () => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      const responses = await Promise.all(Array.from({ length: 2 }, () => request('/api/claw/play', { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), version: state.version, x: .05, stop: null } })));
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      expect(await getClaw(cookie)).toMatchObject({ freeCoins: 4, version: state.version + 1 });
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_plays').first('count')).toBe(1);
+    });
+
+    it('rejects a stale version, a cooldown and zero coins without modifying the machine', async () => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      const played = await clawPlay(cookie, state.version);
+      for (const version of [state.version, played.version]) {
+        expect((await request('/api/claw/play', { method: 'POST', cookie,
+          body: { requestId: crypto.randomUUID(), version, x: .05, stop: null } })).status).toBe(409);
+      }
+      await db.prepare('UPDATE claw_accounts SET next_play_at = 0, free_coins = 0, purchased_coins = 0 WHERE user_id = ?').bind('min').run();
+      expect((await request('/api/claw/play', { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), version: played.version, x: .05, stop: null } })).status).toBe(409);
+      expect(await getClaw(cookie)).toMatchObject({ version: played.version, board: played.board, coins: 0 });
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_plays').first('count')).toBe(1);
+    });
+
+    it('rejects a play when the SQL write crosses the free-coin slot boundary', async () => {
+      const instance = runtime(await workerAt('2026-10-29T23:59:59Z', '2026-10-30T00:00:00Z'));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        const state = await getClaw(cookie, instance);
+        const response = await request('/api/claw/play', { method: 'POST', cookie, instance,
+          body: { requestId: crypto.randomUUID(), version: state.version, x: .05, stop: null } });
+        expect(response.status).toBe(409);
+        expect(await getClaw(cookie, instance)).toMatchObject({ coins: 5, version: state.version, board: state.board });
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM claw_plays').first('count')).toBe(0);
+        expect(await ledgerRows(database)).toEqual([]);
+      } finally { await instance.dispose(); }
+    });
+
+    it('accepts a new play at the exact cooldown boundary and rejects a reused receipt with changed inputs', async () => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      const body = { requestId: crypto.randomUUID(), version: state.version, x: .05, stop: null };
+      const first = await clawPlay(cookie, state.version, body);
+      expect(first.nextPlayAt).toBe(Date.parse(`${TODAY}T00:00:06Z`));
+      for (const extra of [{ x: .06 }, { stop: 48 }, { version: first.version }]) {
+        expect((await request('/api/claw/play', { method: 'POST', cookie, body: { ...body, ...extra } })).status).toBe(409);
+      }
+      await db.prepare('UPDATE claw_accounts SET next_play_at = ? WHERE user_id = ?')
+        .bind(Date.parse(`${TODAY}T00:00:00Z`), 'min').run();
+      const second = await clawPlay(cookie, first.version);
+      expect(second).toMatchObject({ freeCoins: 3, version: first.version + 1 });
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_plays').first('count')).toBe(2);
+    });
+
+    it('makes exactly the configured coin strong and resets its counter even when it misses', async () => {
+      const { cookie } = await login('min');
+      let state = await getClaw(cookie);
+      await db.prepare('UPDATE claw_config SET payout_every = 3 WHERE id = 1').run();
+      for (const [index, strong] of [false, false, true, false].entries()) {
+        state = await clawPlay(cookie, state.version);
+        expect(state.result).toMatchObject({ caught: false, grip: { strong } });
+        if (strong) expect(state.result!.grip).toEqual({ strong: true, pickup: 1, carry: 1 });
+        expect(await db.prepare('SELECT power_counter FROM claw_accounts WHERE user_id = ?').bind('min').first('power_counter')).toBe((index + 1) % 3);
+        await db.prepare('UPDATE claw_accounts SET next_play_at = 0 WHERE user_id = ?').bind('min').run();
+      }
+    });
+
+    it.each([{ seed: 1, x: .23, count: 1 }, { seed: 3, x: .71, count: 2 }])('pays $count real simulated prizes once in gold and weekly score', async ({ seed, x, count }) => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      await db.prepare('UPDATE claw_config SET payout_every = 1 WHERE id = 1').run();
+      await seedClawBoard(db, createBoard(1, seed));
+      const body = { requestId: crypto.randomUUID(), x, stop: null };
+      const played = await clawPlay(cookie, state.version, body);
+      expect(played.result).toMatchObject({ caught: true, points: count, gold: count * 10, clearBonus: 0, clearGold: 0 });
+      expect(played.result!.prizes).toHaveLength(count);
+      expect(played.board).toHaveLength(30 - count);
+      expect(await db.prepare('SELECT power_counter FROM claw_accounts WHERE user_id = ?').bind('min').first('power_counter')).toBe(0);
+      const ledger = await ledgerRows();
+      expect(ledger).toHaveLength(2);
+      expect(ledger.find(row => row.currency === 'score')).toMatchObject({ amount: count, week_start: '2026-10-26' });
+      expect(ledger.find(row => row.currency === 'gold')).toMatchObject({ amount: count * 10 });
+      expect(ledger.every(row => row.reference.startsWith(`claw:doll:${played.result!.playId}`))).toBe(true);
+      expect((await clawPlay(cookie, state.version, body)).result).toEqual(played.result);
+      expect(await ledgerRows()).toEqual(ledger);
+      expect((await bootstrap(cookie)).user).toMatchObject({ gold: count * 10, weeklyScore: count });
+    });
+
+    it('pays the final doll plus CLEAR once and prepares the next 30-doll generation', async () => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      await db.prepare('UPDATE claw_config SET payout_every = 1 WHERE id = 1').run();
+      await seedClawBoard(db, [{ id: '1-1', type: 1, x: .5, y: .8, radius: 32, angle: 0 }]);
+      const body = { requestId: crypto.randomUUID(), x: .5, stop: null };
+      const played = await clawPlay(cookie, state.version, body);
+      expect(played.result).toMatchObject({ caught: true, points: 6, gold: 310, clearBonus: 5, clearGold: 300 });
+      expect(played).toMatchObject({ generation: 2, version: state.version + 1, freeCoins: 4 });
+      expect(played.board).toHaveLength(30);
+      expect(played.board.every(doll => doll.id.startsWith('2-'))).toBe(true);
+      const ledger = await ledgerRows();
+      expect(ledger.filter(row => row.currency === 'gold').map(row => row.amount).sort((a, b) => a - b)).toEqual([10, 300]);
+      expect(ledger.filter(row => row.currency === 'score').map(row => row.amount).sort((a, b) => a - b)).toEqual([1, 5]);
+      expect(ledger.filter(row => row.reference.startsWith(`claw:clear:${played.result!.playId}`))).toHaveLength(2);
+      expect((await clawPlay(cookie, state.version, body)).result).toEqual(played.result);
+      expect(await ledgerRows()).toEqual(ledger);
+    });
+
+    it('rolls back the receipt, coin, board and score if a simulated prize gold reward fails', async () => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      await db.prepare('UPDATE claw_config SET payout_every = 1 WHERE id = 1').run();
+      const board = createBoard(1, 1);
+      await seedClawBoard(db, board);
+      await db.prepare(`CREATE TRIGGER reject_claw_reward BEFORE INSERT ON ledger
+        WHEN NEW.currency = 'gold' AND NEW.reference LIKE 'claw:doll:%'
+        BEGIN SELECT RAISE(ABORT, 'test prize failure'); END;`).run();
+      const body = { requestId: crypto.randomUUID(), version: state.version, x: .23, stop: null };
+      expect((await request('/api/claw/play', { method: 'POST', cookie, body })).status).toBe(500);
+      expect(await getClaw(cookie)).toMatchObject({ freeCoins: 5, version: state.version, board });
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_plays').first('count')).toBe(0);
+      expect(await ledgerRows()).toEqual([]);
+      await db.prepare('DROP TRIGGER reject_claw_reward').run();
+      expect((await request('/api/claw/play', { method: 'POST', cookie, body })).status).toBe(200);
+      expect((await getClaw(cookie)).freeCoins).toBe(4);
+    });
+
+    it.each([{ instant: '2026-11-01T14:59:59Z', week: '2026-10-26' }, { instant: '2026-11-01T15:00:00Z', week: '2026-11-02' }])(
+      'uses the KST play week at $instant', async ({ instant, week }) => {
+        const instance = runtime(await workerAt(instant));
+        try {
+          const database = await instance.getD1Database('DB');
+          await provision(database, migration, passwordHash);
+          const { cookie } = await login('min', instance);
+          const state = await getClaw(cookie, instance);
+          await database.prepare('UPDATE claw_config SET payout_every = 1 WHERE id = 1').run();
+          await seedClawBoard(database, createBoard(1, 1));
+          await clawPlay(cookie, state.version, { x: .23 }, instance);
+          expect((await ledgerRows(database)).find(row => row.currency === 'score')).toMatchObject({ amount: 1, week_start: week });
+        } finally { await instance.dispose(); }
+      });
+
+    it.each([0, 1])('uses injected random=%s for the weak grip jitter bounds without exposing configuration', async random => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      const observed = measuredClawDatabase(db, Date.parse(`${TODAY}T00:00:00Z`));
+      const played = await playClaw(observed.binding, { id: 'min', role: 'player' },
+        { requestId: crypto.randomUUID(), version: state.version, x: .05, stop: null }, Date.parse(`${TODAY}T00:00:00Z`), () => random);
+      expect(played.result!.grip).toEqual({ strong: false, pickup: random === 0 ? .405 : .495, carry: random === 0 ? .27 : .33 });
+      expect(JSON.stringify(played)).not.toMatch(/payout.?every|weak.?pickup|weak.?carry|power.?counter/i);
+    });
+
+    it('resets the counter after a weak-claw prize, independently of the guaranteed strong turn', async () => {
+      const { cookie } = await login('min');
+      const state = await getClaw(cookie);
+      await db.prepare('UPDATE claw_config SET payout_every = 50, weak_pickup = 100, weak_carry = 100 WHERE id = 1').run();
+      await seedClawBoard(db, createBoard(1, 1), 4);
+      const now = Date.parse(`${TODAY}T00:00:00Z`);
+      const observed = measuredClawDatabase(db, now);
+      const played = await playClaw(observed.binding, { id: 'min', role: 'player' },
+        { requestId: crypto.randomUUID(), version: state.version, x: .23, stop: null }, now, () => .5);
+      expect(played.result).toMatchObject({ caught: true, grip: { strong: false, pickup: 1, carry: 1 } });
+      expect(await db.prepare('SELECT power_counter FROM claw_accounts WHERE user_id = ?').bind('min').first('power_counter')).toBe(0);
+    });
+
+    it('serves machine reads, bootstrap and stored retries without running simulateAttempt again', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-claw-replay-'));
+      let instance = runtime(script, persistence);
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        const state = await getClaw(cookie, instance);
+        const body = { requestId: crypto.randomUUID(), version: state.version, x: .05, stop: null };
+        const first = await clawPlay(cookie, state.version, body, instance);
+        await instance.dispose();
+        const signature = /(function simulateAttempt\([\s\S]*?\) \{)/;
+        expect(script).toMatch(signature);
+        instance = runtime(script.replace(signature, '$1 throw new Error("Unexpected claw simulation on a read or retry");'), persistence);
+        expect((await getClaw(cookie, instance)).board).toEqual(first.board);
+        expect((await request('/api/bootstrap', { cookie, instance })).status).toBe(200);
+        const retried = await clawPlay(cookie, state.version, body, instance);
+        expect(retried.result).toEqual(first.result);
+        expect(retried).toMatchObject({ replayed: true, freeCoins: 4, version: first.version });
+        const persisted = await instance.getD1Database('DB');
+        expect(await persisted.prepare('SELECT COUNT(*) AS count FROM claw_plays').first('count')).toBe(1);
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it('keeps machine and bootstrap-summary D1 reads bounded to the requesting account', async () => {
+      const { cookie } = await login('min');
+      await getClaw(cookie);
+      const other = await login('siwon');
+      await getClaw(other.cookie);
+      await db.prepare('UPDATE claw_accounts SET free_coins = 1, last_grant_slot = last_grant_slot - 1 WHERE user_id = ?').bind('siwon').run();
+      const now = Date.parse(`${TODAY}T00:00:00Z`);
+      const observed = measuredClawDatabase(db, now);
+      const user = { id: 'min', role: 'player' as const };
+      await getClawState(observed.binding, user, now);
+      const machineRowsRead = observed.rowsRead();
+      const machineQueries = [...observed.queries];
+      observed.reset();
+      await getClawSummary(observed.binding, user, now);
+      const summaryRowsRead = observed.rowsRead();
+      const summaryQueries = [...observed.queries];
+      for (const queries of [machineQueries, summaryQueries]) {
+        expect(queries.length).toBeGreaterThan(0);
+        expect(queries.every(query => !/SUM\(|claw_plays|claw_coin_purchases|FROM users/i.test(query.sql))).toBe(true);
+        expect(queries.every(query => /user_id\s*=\s*\?/i.test(query.sql))).toBe(true);
+      }
+      expect(await db.prepare('SELECT free_coins FROM claw_accounts WHERE user_id = ?').bind('siwon').first('free_coins')).toBe(1);
+      expect(machineRowsRead).toBeLessThanOrEqual(12);
+      expect(summaryRowsRead).toBeLessThanOrEqual(12);
+      console.log(`Claw D1 meta rows_read: GET machine=${machineRowsRead}, bootstrap claw summary=${summaryRowsRead} (authenticated module calls; existing bootstrap queries excluded)`);
+    });
+
+    it('enforces config ranges and nonnegative balances at the database boundary', async () => {
+      const { cookie } = await login('min');
+      await getClaw(cookie);
+      expect(await db.prepare('SELECT payout_every, weak_pickup, weak_carry FROM claw_config WHERE id = 1').first())
+        .toEqual({ payout_every: 10, weak_pickup: 45, weak_carry: 30 });
+      for (const [column, values] of [['payout_every', [0, 51]], ['weak_pickup', [4, 101]], ['weak_carry', [4, 101]]] as const) {
+        for (const value of values) await expect(db.prepare(`UPDATE claw_config SET ${column} = ? WHERE id = 1`).bind(value).run()).rejects.toThrow();
+      }
+      for (const column of ['free_coins', 'purchased_coins']) {
+        await expect(db.prepare(`UPDATE claw_accounts SET ${column} = -1 WHERE user_id = ?`).bind('min').run()).rejects.toThrow();
+      }
+    });
+  });
 
   describe('server catchmind rounds', () => {
     it('lets only one concurrent claimant take the shared drawing turn', async () => {
@@ -2092,5 +2548,32 @@ describe('Worker and D1 integration', () => {
     } finally {
       await atDeadline.dispose();
     }
+  });
+});
+
+
+describe('claw simulation CPU budget', () => {
+  it('keeps the p99 of 300 random simulations below 40ms', () => {
+    // Seeded random coverage is repeatable; generation and fixture creation are
+    // outside the timer because only POST play's simulateAttempt is budgeted.
+    let seed = 0x6c6177;
+    const random = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 0x100000000);
+    const cases = Array.from({ length: 300 }, (_, index) => ({
+      board: createBoard(index + 1, Math.floor(random() * 0x100000000)),
+      input: { x: .05 + random() * .9, stop: index % 3 ? null : 48 + random() * 372,
+        pickup: index % 10 ? .405 + random() * .09 : 1, carry: index % 10 ? .27 + random() * .06 : 1 },
+    }));
+    for (const item of cases.slice(0, 20)) simulateAttempt(item.board, item.input);
+    const timings = cases.map(item => {
+      const started = performance.now();
+      const result = simulateAttempt(item.board, item.input);
+      const elapsed = performance.now() - started;
+      expect(result.frames).toBeNull();
+      return elapsed;
+    }).sort((a, b) => a - b);
+    const median = (timings[149]! + timings[150]!) / 2;
+    const p99 = timings[Math.ceil(timings.length * .99) - 1]!;
+    console.log(`Claw simulation CPU (300, Node elapsed time): median=${median.toFixed(3)}ms, p99=${p99.toFixed(3)}ms`);
+    expect(p99).toBeLessThanOrEqual(40);
   });
 });
