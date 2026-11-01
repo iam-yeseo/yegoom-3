@@ -4,6 +4,8 @@ import type {
   AttendanceState,
   GameId,
   User,
+  LedgerEntry,
+  ShopState,
 } from "../shared/types";
 import { ApiFailure, api } from "./api";
 import { anim } from "./motion";
@@ -27,6 +29,8 @@ import { Profile } from "./screens/Profile";
 import { Ranking } from "./screens/Ranking";
 import { Lotto, ShopMain, Speetto } from "./screens/Shop";
 import { StockDetail, StockMarket } from "./screens/Stock";
+import { Kuji } from "./screens/Kuji";
+import { ShopProvider } from "./shop";
 
 function navigate(path: string) {
   window.location.hash = path;
@@ -269,8 +273,12 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [bootError, setBootError] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
+  const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[] }>({ gold: previewGold, score: 0, ledger: [] });
   const demo = route.startsWith("/preview");
   const previewAttendance = usePreviewAttendance(demo);
+  useEffect(() => {
+    if (demo) setPreviewShop({ gold: previewGold, score: 0, ledger: [] });
+  }, [demo]);
   // A refresh may commit only while its generation is current. Mutations
   // invalidate older reads and pause polling until their state is applied.
   const requestGeneration = useRef(0);
@@ -421,9 +429,22 @@ export default function App() {
   const attendanceContext = !demo && data ? {
     attendance: data.attendance, claim: claimAttendance, loadMonth: loadAttendanceMonth, preview: false,
   } : previewAttendance;
+  async function transactShop<T>(action: () => Promise<T>): Promise<T> {
+    if (demo) return action();
+    let receipt!: T;
+    await mutate(async () => { receipt = await action(); return receipt; }, (result) => {
+      const balances = result as T & ShopState;
+      setData(current => current ? { ...current, user: { ...current.user, gold: balances.gold }, inventory: balances.inventory } : current);
+    });
+    // A successful purchase remains successful if this follow-up read fails.
+    // The receipt already carries current funds; refresh reports its own error.
+    await refresh();
+    return receipt;
+  }
   const signedIn = !demo && !loading && data !== null;
-  const view = demo ? { ...previewHome(), gold: previewGold + previewAttendance.goldBonus } : data ? homeData(data) : null;
-  const me = demo ? { ...previewUser, gold: previewGold + previewAttendance.goldBonus } : data?.user;
+  const view = demo ? { ...previewHome(), gold: previewShop.gold + previewAttendance.goldBonus,
+    players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, weeklyScore: player.weeklyScore + previewShop.score } : player) } : data ? homeData(data) : null;
+  const me = demo ? { ...previewUser, gold: previewShop.gold + previewAttendance.goldBonus, weeklyScore: previewUser.weeklyScore + previewShop.score } : data?.user;
   const tab = tabs.find((t) => t.path === path)?.path;
   let content: React.ReactNode;
   if (!demo && loading) content = <Skeleton />;
@@ -456,6 +477,7 @@ export default function App() {
       </>
     );
   else if (!view || !me) content = null;
+  else if (play === "kuji") content = <Kuji onBack={home} />;
   else if (play)
     content = (
       <PreviewGames
@@ -550,7 +572,7 @@ export default function App() {
         attendanceKey={view.attendanceKey}
         gold={me.gold}
         weeklyScore={me.weeklyScore}
-        ledger={demo ? previewLedger(previewAttendance.attendance) : (data?.ledger ?? [])}
+        ledger={demo ? [...previewShop.ledger, ...previewLedger(previewAttendance.attendance)] : (data?.ledger ?? [])}
         others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
         onBack={home}
         onCharacterChange={async (character) => {
@@ -594,6 +616,17 @@ export default function App() {
   return (
     <CharacterProvider characters={characterMap} preview={demo}>
       <AttendanceProvider value={attendanceContext}>
+    <ShopProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
+      preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
+      previewGoldBonus={previewAttendance.goldBonus}
+      previewAttendanceDate={previewAttendance.attendance.today}
+      initial={{ gold: demo ? previewGold : me?.gold ?? 0, inventory: data?.inventory ?? { lottoTickets: 0, speettoTickets: 0 },
+        canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
+      transact={transactShop}
+      onServerRead={state => {
+        if (data && (state.gold !== data.user.gold || state.inventory.lottoTickets !== data.inventory.lottoTickets || state.inventory.speettoTickets !== data.inventory.speettoTickets)) void refresh();
+      }}
+      onPreviewChange={(state, ledger, score) => setPreviewShop({ gold: state.gold - previewAttendance.goldBonus, ledger: [...ledger], score })}>
       <aside className="desktop-brand" aria-hidden="true">
         <span className="wordmark">
           예굼방 아케이드<span>3</span>
@@ -626,6 +659,7 @@ export default function App() {
         </div>
         {showTabs && <TabBar active={tab ?? "/"} onNavigate={go} />}
       </main>
+    </ShopProvider>
       </AttendanceProvider>
     </CharacterProvider>
   );

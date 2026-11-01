@@ -48,6 +48,31 @@ for (const [date, streak] of [
   statements.push(`INSERT INTO attendance (user_id, date, streak, created_at) VALUES ('e2e-min', '${date}', ${streak}, '${createdAt}');`);
   statements.push(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('fixture-attendance-${date}', 'e2e-min', 'gold', 100, '출석 보상', 'attendance:${date}:e2e-min', '${createdAt}');`);
 }
+// Test-only spending money and coupons; production has no automatic grants.
+for (const username of ['min', 'siwon', 'yeseo']) {
+  statements.push(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('fixture-gold-${username}', 'e2e-${username}', 'gold', 10000, '브라우저 테스트 시작 골드', 'fixture:gold:${username}', '2026-10-23T00:00:00.000Z');`);
+  for (const item of ['lotto_ticket', 'speetto_ticket']) {
+    statements.push(`INSERT INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at) VALUES ('fixture-${item}-${username}', 'e2e-${username}', '${item}', 2, '브라우저 테스트 이용권', 'fixture:${item}:${username}', '2026-10-23T00:00:00.000Z');`);
+  }
+}
+// A complete, valid board makes browser reward assertions and screenshots
+// deterministic. Production board creation still uses crypto randomness.
+const kujiFixtureGrades = ['A', 'E', ...[
+  ['B', 2], ['C', 3], ['D', 6], ['E', 9], ['F', 15], ['G', 25], ['H', 38],
+].flatMap(([grade, count]) => Array(count).fill(grade))];
+statements.push(`INSERT INTO kuji_boards (id, grades, created_at) VALUES (1, '${JSON.stringify(kujiFixtureGrades)}', '2026-10-30T00:00:00.000Z');`);
+// An overdue winning lotto ticket exercises real settlement and historical
+// results. The owned speetto fixture was already paid when it was purchased.
+const lottoFixture = '00000000-0000-4000-8000-000000000002';
+const speettoFixture = '00000000-0000-4000-8000-000000000001';
+const fixtureNumbers = [1, 2, 3, 4, 5];
+statements.push(`INSERT INTO lotto_draws (date, numbers, created_at) VALUES ('2026-10-29', '${JSON.stringify(fixtureNumbers)}', '2026-10-29T08:00:00.000Z');`);
+statements.push(`INSERT INTO shop_purchases (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome) VALUES ('${lottoFixture}', 'e2e-yeseo', 'fixture-lotto-yeseo', 'lotto', '${JSON.stringify({ numbers: fixtureNumbers, payment: 'gold' })}', 'gold', 500, '2026-10-29', '2026-10-29T00:00:00.000Z', '${JSON.stringify({ drawDate: '2026-10-29', numbers: fixtureNumbers })}');`);
+statements.push(`INSERT INTO lotto_tickets (id, draw_date, numbers) VALUES ('${lottoFixture}', '2026-10-29', '${JSON.stringify(fixtureNumbers)}');`);
+statements.push(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('fixture-lotto-cost', 'e2e-yeseo', 'gold', -500, '데일리 로또 구매', 'buy:lotto:e2e-yeseo:fixture-lotto-yeseo', '2026-10-29T00:00:00.000Z');`);
+statements.push(`INSERT INTO shop_purchases (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome) VALUES ('${speettoFixture}', 'e2e-siwon', 'fixture-speetto-siwon', 'speetto', '${JSON.stringify({ payment: 'gold' })}', 'gold', 300, '2026-10-29', '2026-10-29T00:00:00.000Z', '${JSON.stringify({ cells: ['cat', 'cat', 'cat'], won: true, prize: 1500 })}');`);
+statements.push(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('fixture-speetto-cost', 'e2e-siwon', 'gold', -300, '스피또 구매', 'buy:speetto:e2e-siwon:fixture-speetto-siwon', '2026-10-29T00:00:00.000Z');`);
+statements.push(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('fixture-speetto-prize', 'e2e-siwon', 'gold', 1500, '스피또 당첨', 'speetto:prize:${speettoFixture}', '2026-10-29T00:00:00.000Z');`);
 // Four published days plus an empty day exercise the recent-three-round UI.
 // The rows are intentionally unsettled so the real read path generates payouts.
 for (const [game, author, answer, secondGuess] of [

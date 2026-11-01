@@ -2463,3 +2463,37 @@ em.ring::after {
 .attendance .streak-node small { font-size: 12px; line-height: 1.3; text-align: center; white-space: nowrap; }
 .attendance .hero-number-row > .subtle-note { max-width: 150px; text-align: right; }
 .claim-button:disabled, .claim-big:disabled { opacity: .65; }
+
+/* Phase 3 shop cards keep the existing palette and typography. */
+.shop-tile .solo-text strong { word-break: keep-all; }
+.inventory-card { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; }
+.inventory-card h2 { font-size: 14px; color: #7c7383; }
+.inventory-card p { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; }
+.inventory-card strong { color: #7556c4; white-space: nowrap; }
+.shop-purchase-actions { display: flex; flex-direction: column; gap: 10px; }
+.shop-purchase-actions .primary-button { font-size: 16px; }
+.shop-purchase-actions .secondary-button:disabled { color: #ada4b3; background: #f1ece6; }
+.shop-error { text-align: center; }
+.lotto-target { margin: 0; padding: 0 20px 18px; color: #3b7fb3; font-size: 13px; }
+.lotto .screen-body, .speetto .screen-body { padding-bottom: 28px; }
+.lotto-draw { overflow: hidden; padding-top: 20px; }
+.lotto-draw .draw { padding-left: 12px; padding-right: 12px; }
+.lotto-draw .draw > div { gap: 6px; width: 100%; justify-content: center; }
+.lotto-draw .draw i { width: min(52px, 17%); height: auto; aspect-ratio: 1; flex-shrink: 0; }
+.lotto-tickets { display: flex; flex-direction: column; gap: 12px; }
+.lotto-tickets > h2 { padding: 2px 4px; font-size: 16px; }
+.ticket-date { font-size: 12px; color: #7c7383; margin: 0; }
+.shop-rules { padding: 18px; font-size: 13px; line-height: 1.7; }
+.shop-rules summary { cursor: pointer; font-weight: 800; }
+.shop-rules p { margin-top: 12px; color: #7c7383; }
+.shop-rules table { width: 100%; border-collapse: collapse; margin-top: 12px; text-align: left; }
+.shop-rules td, .shop-rules th { padding: 7px 0; border-bottom: 1px solid #f3eee8; }
+.scratch-ticket-number { max-width: 50%; overflow-wrap: anywhere; font-size: 12px; }
+.scratch-result.lost { color: #7c7383; }
+.speetto-history { padding: 18px; display: flex; flex-direction: column; gap: 8px; }
+.speetto-history h2 { font-size: 16px; margin-bottom: 4px; }
+.speetto-history button { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border-radius: 14px; background: #f6f1eb; font-size: 13px; text-align: left; }
+.speetto-history button[aria-pressed="true"] { background: #ffe6df; }
+@media (prefers-reduced-motion: reduce) {
+  .scratch-area canvas { transition-duration: 180ms; }
+}
