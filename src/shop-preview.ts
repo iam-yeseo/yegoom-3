@@ -22,8 +22,9 @@ const drawNumbers = () => shuffled(Array.from({ length: LOTTO_RULES.maxNumber },
 
 /** A single offline preview visit owns its purchases. Nothing is sent to an API
  * or imported into a real account; the shared economy rules still apply. */
-export function createShopPreview(initialGold: number, initialAttendanceBonus = 0) {
+export function createShopPreview(initialGold: number, initialAttendanceBonus = 0, initialAttendanceDate = kstDate(new Date())) {
   let attendanceBonus = initialAttendanceBonus;
+  let attendanceDate = initialAttendanceDate;
   let gold = initialGold + attendanceBonus;
   let score = 0;
   const inventory: Inventory = { lottoTickets: 2, speettoTickets: 2 };
@@ -206,7 +207,12 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   return { read, buyKuji, buyLotto, buySpeetto,
     // Attendance owns its preview record. Only reconcile its cash here so
     // claiming attendance after a purchase never resets or duplicates spending.
-    setAttendanceBonus(next: number) { gold += next - attendanceBonus; attendanceBonus = next; },
+    setAttendanceBonus(next: number, date: string) {
+      if (date !== attendanceDate) { attendanceDate = date; attendanceBonus = 0; }
+      // A new day may earn another reward; it must not revoke money already
+      // received (and possibly spent) on the previous day.
+      if (next > attendanceBonus) { gold += next - attendanceBonus; attendanceBonus = next; }
+    },
     get ledger() { return structuredClone(ledger); },
     get score() { return score; },
   };

@@ -619,6 +619,7 @@ export default function App() {
     <ShopProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
       preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
       previewGoldBonus={previewAttendance.goldBonus}
+      previewAttendanceDate={previewAttendance.attendance.today}
       initial={{ gold: demo ? previewGold : me?.gold ?? 0, inventory: data?.inventory ?? { lottoTickets: 0, speettoTickets: 0 },
         canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
       transact={transactShop}
