@@ -2,6 +2,61 @@
    shop. Values follow the Claude Design files (Yegoom Arcade Home,
    Yegoom Ranking & Me, Yegoom Stock & Shop). */
 
+/* Catchmind drawing tools and its native-dialog color sheet. */
+.drawing-workspace { display: flex; flex-direction: column; gap: 14px; }
+.drawing-workspace canvas { touch-action: none; }
+.drawing-tools { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.drawing-tool-row, .drawing-width-row { display: flex; align-items: center; gap: 6px; }
+.drawing-tool-row button, .drawing-width-row button {
+  min-width: 42px; height: 44px; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 14px; background: #f8f4ef; color: #7c7383; font-size: 12px; font-weight: 700;
+}
+.drawing-tool-row button[aria-pressed="true"], .drawing-width-row button[aria-pressed="true"] { background: #eee8fc; color: #7556c4; }
+.drawing-tools button:disabled { opacity: .45; }
+.drawing-tool-row .drawing-color-button { margin-left: auto; gap: 7px; background: #fff9ee; }
+.drawing-color-button > span { width: 28px; height: 28px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(58,51,64,.1); }
+.drawing-width-row > button > span { display: block; border-radius: 50%; background: currentColor; }
+.drawing-width-row .drawing-undo { margin-left: auto; }
+.drawing-tools button:focus-visible, .color-picker-sheet button:focus-visible, .color-picker-sheet input:focus-visible, .color-picker-sv:focus-visible {
+  outline: 3px solid #b9a3f0; outline-offset: 3px;
+}
+.color-picker-dialog {
+  position: fixed; inset: auto 0 0; width: min(100%, var(--app-width)); max-width: 100%; max-height: calc(100% - 20px);
+  margin: 0 auto; padding: 0; border: 0; border-radius: 28px 28px 0 0; overflow-y: auto; color: var(--text); background: transparent;
+}
+.color-picker-dialog::backdrop { background: rgba(58,51,64,.28); }
+.color-picker-sheet { display: flex; flex-direction: column; gap: 18px; padding: 20px 24px calc(24px + env(safe-area-inset-bottom)); background: var(--cream); }
+.color-picker-heading { display: flex; align-items: center; justify-content: space-between; }
+.color-picker-heading h2 { font-size: 20px; font-weight: 800; }
+.color-picker-heading button { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; background: #f6f1eb; color: var(--muted); }
+.color-picker-sv {
+  position: relative; height: 176px; flex-shrink: 0; border-radius: 18px; touch-action: none; cursor: crosshair;
+  background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
+}
+.color-picker-handle {
+  position: absolute; width: 22px; height: 22px; border: 3px solid #fff; border-radius: 50%; transform: translate(-50%, -50%);
+  box-shadow: 0 1px 5px rgba(58,51,64,.35); pointer-events: none;
+}
+.color-picker-slider { display: flex; flex-direction: column; gap: 8px; }
+.color-picker-slider label { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; font-weight: 700; }
+.color-picker-slider input { appearance: none; -webkit-appearance: none; width: 100%; height: 22px; margin: 0; border: 0; border-radius: 999px; touch-action: none; cursor: pointer; }
+.color-picker-slider input::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 26px; height: 26px; border: 3px solid #fff; border-radius: 50%; background: transparent; box-shadow: 0 1px 5px rgba(58,51,64,.35); }
+.color-picker-slider input::-moz-range-thumb { width: 20px; height: 20px; border: 3px solid #fff; border-radius: 50%; background: transparent; box-shadow: 0 1px 5px rgba(58,51,64,.35); }
+.color-picker-hue { background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+.color-picker-alpha { background: linear-gradient(to right, transparent, var(--picked-color)), repeating-conic-gradient(#e7e1da 0% 25%, #fff 0% 50%) 0 / 12px 12px; }
+.color-picker-slider input:disabled { opacity: .4; cursor: default; }
+.color-picker-slider small, .color-picker-swatches small { color: var(--faint); font-size: 12px; }
+.color-picker-hex { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 16px; background: #fff; }
+.color-picker-preview { width: 28px; height: 28px; border-radius: 9px; flex: none; }
+.color-picker-hex label { font-size: 12px; font-weight: 800; color: var(--faint); }
+.color-picker-hex input { min-width: 0; width: 100%; border: 0; background: none; color: var(--text); font: inherit; font-weight: 700; text-align: right; }
+.color-picker-hex input[aria-invalid="true"] { color: var(--coral); }
+.color-picker-swatches { display: flex; gap: 14px; align-items: center; min-height: 34px; }
+.color-picker-swatches button { width: 34px; height: 34px; flex: none; border-radius: 50%; }
+.color-picker-swatches button[aria-pressed="true"] { box-shadow: 0 0 0 3px #fff9ee, 0 0 0 5px var(--swatch-color); }
+.color-picker-recents { display: flex; flex-direction: column; gap: 12px; }
+.color-picker-recents > span { color: var(--muted); font-size: 13px; font-weight: 700; }
+
 .app-shell.with-tabs {
   padding-bottom: calc(78px + env(safe-area-inset-bottom));
 }

@@ -26,6 +26,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   let attendanceBonus = initialAttendanceBonus;
   let attendanceDate = initialAttendanceDate;
   let gold = initialGold + attendanceBonus;
+  let gameGoldBonus = 0;
   let score = 0;
   const inventory: Inventory = { lottoTickets: 2, speettoTickets: 2 };
   const ledger: LedgerEntry[] = [];
@@ -205,6 +206,10 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     return speetto(now, purchase);
   }
   return { read, buyKuji, buyLotto, buySpeetto,
+    setGameGoldBonus(next: number) {
+      gold += next - gameGoldBonus;
+      gameGoldBonus = next;
+    },
     // Attendance owns its preview record. Only reconcile its cash here so
     // claiming attendance after a purchase never resets or duplicates spending.
     setAttendanceBonus(next: number, date: string) {

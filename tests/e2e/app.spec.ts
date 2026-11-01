@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises';
-import { expect, test, type Page, type TestInfo } from '@playwright/test';
-import type { BootstrapResponse, KujiResponse, LottoPurchaseInput, LottoResponse, ShopState, SpeettoResponse } from '../../shared/types';
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
+import type { BootstrapResponse, CatchmindResponse, KujiResponse, LottoPurchaseInput, LottoResponse, ShopState, SpeettoResponse } from '../../shared/types';
 
 // Match the isolated Worker fixture; performance/animation timers still run.
 const TEST_NOW = '2026-10-30T00:00:00Z';
@@ -120,8 +120,8 @@ async function captureWidths(page: Page, name: string, info: TestInfo, phase = 1
       }));
       for (const layout of layouts) expect(layout).toEqual({ wordBreak: 'keep-all', wordLineCounts: [1, 1] });
     }
-    const path = phase === 3 ? `docs/screenshots/v2-p3-${name}-${width}.png` : info.outputPath(`${name}-${width}.png`);
-    await page.screenshot({ path, fullPage: true, animations: 'disabled' });
+    const path = phase === 4 ? `docs/screenshots/v2-p4-${name}-${width}.png` : info.outputPath(`${name}-${width}.png`);
+    await page.screenshot({ path, fullPage: !name.endsWith('picker'), animations: 'disabled' });
     await info.attach(`${name}-${width}px`, { path, contentType: 'image/png' });
   }
 }
@@ -842,4 +842,508 @@ test('a shop read refreshes home and profile after a purchase by another HTTP cl
   await page.goto('/#/profile');
   await expect(page.locator('.profile-summary .stats')).toContainText(receipt.gold.toLocaleString('ko-KR'));
   await expect(page.locator('.history-row').filter({ hasText: '데일리 로또 구매' }).first()).toContainText('500G');
+});
+
+
+async function catchmindState(page: Page) {
+  const response = await page.request.get('/api/catchmind');
+  expect(response.status()).toBe(200);
+  return (await response.json() as CatchmindResponse).catchmind;
+}
+function catchmindResponse(page: Page, action: string) {
+  return page.waitForResponse(response => new URL(response.url()).pathname === `/api/catchmind/${action}` && response.request().method() === 'POST');
+}
+async function canvasPoint(page: Page, x: number, y: number) {
+  const box = await page.getByLabel('그림 그리는 캔버스', { exact: true }).boundingBox();
+  expect(box).not.toBeNull();
+  return { x: box!.x + box!.width * x, y: box!.y + box!.height * y };
+}
+async function drawStroke(page: Page, points: [number, number][]) {
+  await page.getByLabel('그림 그리는 캔버스', { exact: true }).scrollIntoViewIfNeeded();
+  const first = await canvasPoint(page, ...points[0]);
+  await page.mouse.move(first.x, first.y);
+  await page.mouse.down();
+  for (const [x, y] of points.slice(1)) {
+    const point = await canvasPoint(page, x, y);
+    await page.mouse.move(point.x, point.y, { steps: 8 });
+  }
+  await page.mouse.up();
+}
+async function clickCanvas(page: Page, x: number, y: number) {
+  await page.getByLabel('그림 그리는 캔버스', { exact: true }).scrollIntoViewIfNeeded();
+  const point = await canvasPoint(page, x, y);
+  await page.mouse.click(point.x, point.y);
+}
+async function canvasPixel(page: Page, x: number, y: number) {
+  return page.getByLabel('그림 그리는 캔버스', { exact: true }).evaluate((element, point) => {
+    const canvas = element as HTMLCanvasElement;
+    return Array.from(canvas.getContext('2d')!.getImageData(Math.floor(canvas.width * point.x), Math.floor(canvas.height * point.y), 1, 1).data);
+  }, { x, y });
+}
+async function openPicker(page: Page) {
+  await page.getByRole('button', { name: '색상 고르기', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '색상 고르기', exact: true });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+async function setDrawingColor(page: Page, hex: string) {
+  const dialog = await openPicker(page);
+  await dialog.getByRole('textbox', { name: 'HEX 색상', exact: true }).fill(hex);
+  await dialog.getByRole('button', { name: '색상 선택 닫기', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+}
+async function sliderArrow(slider: Locator, key: string, count = 1) {
+  await slider.focus();
+  for (let index = 0; index < count; index++) await slider.press(key);
+}
+async function guessCatchmind(page: Page, answer: string) {
+  await page.getByRole('textbox', { name: '캐치마인드 정답', exact: true }).fill(answer);
+  await page.getByRole('button', { name: '정답', exact: true }).click();
+}
+async function previewDrawing(page: Page) {
+  await page.goto('/#/preview/play/catchmind');
+  await guessCatchmind(page, '선 인 장');
+  await expect(page.locator('.pg-winner')).toBeVisible();
+  await page.getByRole('button', { name: '다음 그림 그리기', exact: true }).click();
+  await expect(page.getByLabel('그림 그리는 캔버스', { exact: true })).toBeVisible();
+}
+
+
+test('catchmind preview keeps hints, rewards, drawing tools and color selection local', async ({ page }, info) => {
+  test.setTimeout(90000);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const requests: string[] = [];
+  await page.route('**/api/**', route => { requests.push(route.request().url()); return route.abort(); });
+  await page.addInitScript(() => localStorage.setItem('yegoom3:preview:character:yeseo', 'cat'));
+  await page.goto('/#/preview');
+  const beforeScore = Number(await page.locator('.home-score strong').first().innerText());
+  await page.goto('/#/preview/play/catchmind');
+  const beforeGold = await displayedGold(page, '.game-toolbar .gold');
+  await guessCatchmind(page, '브라우저 오답');
+  await expect(page.locator('.pg-hint')).toContainText('선');
+  await captureWidths(page, 'preview-hint', info, 4);
+  await guessCatchmind(page, '선 인 장');
+  await expect(page.locator('.pg-winner')).toContainText('3점');
+  await expect(page.locator('.pg-winner')).toContainText('5G');
+  await expect(page.locator('.pg-winner [data-character="cat"]')).toBeVisible();
+  await expect(page.locator('.pg-next-player [data-character="cat"]')).toBeVisible();
+  await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5).toLocaleString('ko-KR'));
+  await captureWidths(page, 'preview-result', info, 4);
+  await page.goto('/#/preview');
+  await expect(page.locator('.room-top .gold')).toContainText((beforeGold + 5).toLocaleString('ko-KR'));
+  await expect(page.locator('.home-score strong').first()).toHaveText(String(beforeScore + 3));
+  await page.goto('/#/preview/profile');
+  const rewardRows = page.locator('.history-row').filter({ hasText: '캐치마인드 정답' });
+  await expect(rewardRows).toHaveCount(1);
+  await expect(rewardRows).toContainText('+5G');
+  await page.getByRole('tab', { name: '점수', exact: true }).click();
+  await expect(rewardRows).toHaveCount(1);
+  await expect(rewardRows).toContainText('+3점');
+  await page.goto('/#/preview/shop/lotto');
+  await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5).toLocaleString('ko-KR'));
+  await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
+  await page.getByRole('button', { name: '골드로 1장 사기 · 500G', exact: true }).click();
+  await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5 - 500).toLocaleString('ko-KR'));
+  await page.goto('/#/preview');
+  await expect(page.locator('.room-top .gold')).toContainText((beforeGold + 5 - 500).toLocaleString('ko-KR'));
+  await expect(page.locator('.home-score strong').first()).toHaveText(String(beforeScore + 3));
+  await page.goto('/#/preview/play/catchmind');
+  await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5 - 500).toLocaleString('ko-KR'));
+  await page.getByRole('button', { name: '다음 그림 그리기', exact: true }).click();
+  const canvas = page.getByLabel('그림 그리는 캔버스', { exact: true });
+  await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-notouchfx');
+  expect(await canvas.evaluate(element => getComputedStyle(element).touchAction)).toBe('none');
+  expect(await canvas.evaluate(element => {
+    const image = element as HTMLCanvasElement;
+    return image.width === image.height;
+  })).toBe(true);
+  const background = await canvasPixel(page, .05, .05);
+  expect(background).toEqual([255, 253, 248, 255]);
+  for (const name of ['펜', '지우개', '채우기']) {
+    const tool = page.getByRole('button', { name, exact: true });
+    await expect(tool.locator('svg')).toHaveCount(1);
+    await expect(tool).toHaveText('');
+  }
+
+  let picker = await openPicker(page);
+  await expect(picker).toHaveAttribute('data-notouchfx');
+  const selection = picker.getByRole('slider', { name: '채도와 명도', exact: true });
+  expect(await selection.evaluate(element => getComputedStyle(element).touchAction)).toBe('none');
+  await picker.getByRole('textbox', { name: 'HEX 색상', exact: true }).fill('#FF0000');
+  await picker.getByRole('textbox', { name: 'HEX 색상', exact: true }).press('Tab');
+  const box = await selection.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width * .25, box!.y + box!.height * .25);
+  await page.mouse.down();
+  await expect(selection).toHaveAttribute('data-saturation', '25');
+  await expect(selection).toHaveAttribute('data-value', '75');
+  await page.mouse.move(box!.x + box!.width * .75, box!.y + box!.height * .75, { steps: 5 });
+  await page.mouse.up();
+  await expect(selection).toHaveAttribute('data-saturation', '75');
+  await expect(selection).toHaveAttribute('data-value', '25');
+  await selection.press('ArrowRight');
+  await selection.press('ArrowUp');
+  await expect(selection).toHaveAttribute('data-saturation', '76');
+  await expect(selection).toHaveAttribute('data-value', '26');
+  const hue = picker.getByRole('slider', { name: '색상', exact: true });
+  await sliderArrow(hue, 'Home');
+  await sliderArrow(hue, 'ArrowRight', 2);
+  await expect(hue).toHaveValue('2');
+  const alpha = picker.getByRole('slider', { name: /^불투명도/ });
+  await sliderArrow(alpha, 'Home');
+  await sliderArrow(alpha, 'ArrowRight', 50);
+  await expect(alpha).toHaveValue('50');
+  const hex = picker.getByRole('textbox', { name: 'HEX 색상', exact: true });
+  await hex.fill('#123456');
+  await hex.press('Tab');
+  await expect(hex).toHaveValue('#123456');
+  await expect(selection).toHaveAttribute('data-saturation', '79');
+  await expect(selection).toHaveAttribute('data-value', '34');
+  await picker.getByRole('button', { name: '민트 선택', exact: true }).click();
+  await expect(hex).toHaveValue('#8FD9C0');
+  await expect(selection).toHaveAttribute('data-saturation', '34');
+  await expect(selection).toHaveAttribute('data-value', '85');
+  const recentHexes = ['#102030', '#203040', '#304050', '#405060', '#506070', '#607080'];
+  for (const color of recentHexes) {
+    await hex.fill(color);
+    await hex.press('Tab');
+  }
+  const recent = picker.getByRole('group', { name: '최근 색상', exact: true });
+  await expect(recent.getByRole('button')).toHaveCount(5);
+  await expect(recent.getByRole('button', { name: '최근 색상 #102030', exact: true })).toHaveCount(0);
+  await expect(recent.getByRole('button').first()).toHaveAttribute('aria-label', '최근 색상 #607080');
+  await recent.getByRole('button', { name: '최근 색상 #203040', exact: true }).click();
+  await expect(hex).toHaveValue('#203040');
+  await page.keyboard.press('Escape');
+  await expect(picker).toHaveCount(0);
+  picker = await openPicker(page);
+  await expect(picker.getByRole('textbox', { name: 'HEX 색상', exact: true })).toHaveValue('#203040');
+  await expect(picker.getByRole('slider', { name: /^불투명도/ })).toHaveValue('50');
+  await page.mouse.click(2, 2);
+  await expect(picker).toHaveCount(0);
+
+  await setDrawingColor(page, '#FF0000');
+  await page.getByRole('button', { name: '펜 두께 3', exact: true }).click();
+  await drawStroke(page, [[.2, .3], [.8, .3]]);
+  const red = await canvasPixel(page, .53, .3);
+  expect(red[0]).toBe(255);
+  expect(red[1]).toBeGreaterThanOrEqual(125);
+  expect(red[1]).toBeLessThanOrEqual(128);
+  expect(red[2]).toBeGreaterThanOrEqual(123);
+  expect(red[2]).toBeLessThanOrEqual(125);
+  expect(red[3]).toBe(255);
+  await page.getByRole('button', { name: '지우개', exact: true }).click();
+  await expect(page.getByRole('button', { name: '지우개', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await drawStroke(page, [[.4, .3], [.6, .3]]);
+  expect(await canvasPixel(page, .53, .3)).toEqual(background);
+  await page.getByRole('button', { name: '한 획 되돌리기', exact: true }).click();
+  expect(await canvasPixel(page, .53, .3)).toEqual(red);
+
+  await page.getByRole('button', { name: '펜', exact: true }).click();
+  picker = await openPicker(page);
+  await picker.getByRole('textbox', { name: 'HEX 색상', exact: true }).fill('#5E6A8A');
+  await sliderArrow(picker.getByRole('slider', { name: /^불투명도/ }), 'End');
+  await picker.getByRole('button', { name: '색상 선택 닫기', exact: true }).click();
+  await drawStroke(page, [[.2, .4], [.8, .4], [.8, .8], [.2, .8], [.2, .4]]);
+  picker = await openPicker(page);
+  await picker.getByRole('button', { name: '민트 선택', exact: true }).click();
+  await sliderArrow(picker.getByRole('slider', { name: /^불투명도/ }), 'Home');
+  await sliderArrow(picker.getByRole('slider', { name: /^불투명도/ }), 'ArrowRight', 50);
+  await picker.getByRole('button', { name: '색상 선택 닫기', exact: true }).click();
+  await page.getByRole('button', { name: '채우기', exact: true }).click();
+  await clickCanvas(page, .5, .6);
+  expect(await canvasPixel(page, .5, .6)).toEqual([143, 217, 192, 255]);
+  expect(await canvasPixel(page, .05, .6)).toEqual(background);
+  await page.getByRole('button', { name: '한 획 되돌리기', exact: true }).click();
+  expect(await canvasPixel(page, .5, .6)).toEqual(background);
+  await clickCanvas(page, .5, .6);
+  const beforeClear = await canvas.evaluate(element => (element as HTMLCanvasElement).toDataURL());
+  await page.getByRole('button', { name: '전체 지우기', exact: true }).click();
+  expect(await canvasPixel(page, .5, .6)).toEqual(background);
+  await expect(page.getByRole('button', { name: '그림 올리기', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '한 획 되돌리기', exact: true }).click();
+  expect(await canvas.evaluate(element => (element as HTMLCanvasElement).toDataURL())).toBe(beforeClear);
+  await expect(page.getByRole('button', { name: '그림 올리기', exact: true })).toBeEnabled();
+  await captureWidths(page, 'preview-drawing', info, 4);
+  picker = await openPicker(page);
+  await expect(picker.getByRole('slider', { name: /^불투명도/ })).toBeDisabled();
+  await expect(picker).toContainText('채우기는 불투명');
+  await captureWidths(page, 'preview-picker', info, 4);
+  await picker.getByRole('button', { name: '색상 선택 닫기', exact: true }).click();
+  await expect(picker).toHaveCount(0);
+  expect(await page.locator('main').evaluate(element => element.getAnimations({ subtree: true }).some(animation => animation.effect?.getTiming().iterations === Infinity))).toBe(false);
+  expect(requests).toEqual([]);
+});
+
+
+test('real catchmind keeps prompts private, publishes a square drawing and pays the first correct player', async ({ page, browser }, info) => {
+  test.setTimeout(90000);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'min');
+  await page.goto('/#/play/catchmind');
+  await page.getByRole('button', { name: '그리기 맡기', exact: true }).click();
+  await expect(page.locator('.pg-prompt strong')).not.toHaveText('불러오는 중');
+  let state = await catchmindState(page);
+  expect(state.round).toMatchObject({ status: 'draft', drawer: { username: 'min' }, rerollsLeft: 3 });
+  const other = await browser.newContext({ reducedMotion: 'reduce' });
+  try {
+    const guesser = await other.newPage();
+    await login(guesser, 'yeseo');
+    await guesser.goto('/#/play/catchmind');
+    await expect(guesser.getByRole('heading', { name: 'min이 그림을 그리고 있어요', exact: true })).toBeVisible();
+    for (const remaining of [3, 2, 1]) {
+      const changed = catchmindResponse(page, 'reroll');
+      await page.getByRole('button', { name: `제시어 바꾸기 (${remaining}회 남음)`, exact: true }).click();
+      expect((await changed).status()).toBe(200);
+      await expect(page.getByRole('button', { name: `제시어 바꾸기 (${remaining - 1}회 남음)`, exact: true })).toBeVisible();
+    }
+    await expect(page.getByRole('button', { name: '제시어 바꾸기 (0회 남음)', exact: true })).toBeDisabled();
+    state = await catchmindState(page);
+    const word = state.round!.word!;
+    expect(word.length).toBeGreaterThan(0);
+    await expect(page.locator('.pg-prompt strong')).toHaveText(word);
+    const secret = await catchmindState(guesser);
+    expect(secret.round).toMatchObject({ status: 'draft', word: null });
+    expect(JSON.stringify(secret)).not.toContain(JSON.stringify(word));
+    await expect(guesser.locator('.pg-prompt')).toHaveCount(0);
+    await expect(guesser.getByLabel('그림 그리는 캔버스', { exact: true })).toHaveCount(0);
+
+    await page.getByRole('button', { name: '펜 두께 3', exact: true }).click();
+    await drawStroke(page, [[.25, .2], [.75, .2], [.75, .75], [.25, .75], [.25, .2]]);
+    await setDrawingColor(page, '#8FD9C0');
+    await page.getByRole('button', { name: '채우기', exact: true }).click();
+    await clickCanvas(page, .5, .5);
+    await captureWidths(page, 'authenticated-drawing', info, 4);
+    await page.getByRole('button', { name: '펜', exact: true }).click();
+    const picker = await openPicker(page);
+    await captureWidths(page, 'authenticated-picker', info, 4);
+    await picker.getByRole('button', { name: '색상 선택 닫기', exact: true }).click();
+    const published = catchmindResponse(page, 'publish');
+    await page.getByRole('button', { name: '그림 올리기', exact: true }).click();
+    const publishResponse = await published;
+    expect(publishResponse.status()).toBe(200);
+    const payload = publishResponse.request().postDataJSON() as { image: string; wordVersion: number };
+    expect(payload.image).toMatch(/^data:image\/(png|webp);base64,/);
+    expect(Buffer.from(payload.image.split(',')[1], 'base64').byteLength).toBeLessThanOrEqual(300 * 1024);
+    expect(payload.wordVersion).toBe(state.round!.wordVersion);
+    await expect(page.getByLabel('그림 그리는 캔버스', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: '캐치마인드 정답', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '그림 올리기', exact: true })).toHaveCount(0);
+    await guesser.reload();
+    const picture = guesser.getByRole('img', { name: 'min이 그린 그림', exact: true });
+    await expect(picture).toBeVisible();
+    await expect.poll(() => picture.evaluate(element => {
+      const image = element as HTMLImageElement;
+      return image.complete && image.naturalWidth > 0 && image.naturalWidth === image.naturalHeight;
+    })).toBe(true);
+    expect((await catchmindState(guesser)).round?.word).toBeNull();
+    const before = await snapshot(guesser);
+    for (const answer of ['첫 오답', '두 번째 오답', '세 번째 오답']) {
+      const guessed = catchmindResponse(guesser, 'guess');
+      await guessCatchmind(guesser, answer);
+      expect((await guessed).status()).toBe(200);
+      await expect(guesser.getByRole('list', { name: '모두의 답', exact: true })).toContainText(answer);
+    }
+    await expect(guesser.locator('.pg-hint')).toHaveAttribute('aria-label', `첫 글자 힌트: ${Array.from(word)[0]}, ${Array.from(word).length}글자`);
+    expect((await catchmindState(guesser)).round).toMatchObject({ word: null, wrongCount: 3 });
+    await captureWidths(guesser, 'authenticated-hint', info, 4);
+    const winningAttempts: { requestId: string; answer: string }[] = [];
+    let discardWinningResponse = true;
+    await guesser.route('**/api/catchmind/guess', async route => {
+      winningAttempts.push(route.request().postDataJSON());
+      const response = await route.fetch();
+      if (discardWinningResponse) { discardWinningResponse = false; await route.abort('failed'); }
+      else await route.fulfill({ response });
+    });
+    await guessCatchmind(guesser, ` ${Array.from(word).join(' ')} `);
+    await expect(guesser.getByRole('button', { name: '처리 결과 다시 확인', exact: true })).toBeVisible();
+    // The server already paid; navigation/reload must retain the same request identity.
+    await guesser.goto('/#/profile');
+    await guesser.goto('/#/play/catchmind');
+    await guesser.reload();
+    await expect(guesser.locator('.pg-winner')).toContainText('yeseo');
+    const retried = catchmindResponse(guesser, 'guess');
+    await guesser.getByRole('button', { name: '처리 결과 다시 확인', exact: true }).click();
+    expect((await retried).status()).toBe(200);
+    expect(winningAttempts).toHaveLength(2);
+    expect(winningAttempts[1]).toEqual(winningAttempts[0]);
+    await expect(guesser.getByRole('button', { name: '처리 결과 다시 확인', exact: true })).toHaveCount(0);
+    await expect(guesser.getByRole('list', { name: '모두의 답', exact: true }).getByRole('listitem')).toHaveCount(4);
+    await expect(guesser.locator('.pg-winner')).toContainText('yeseo');
+    await expect(guesser.locator('.pg-winner')).toContainText('+3점');
+    await expect(guesser.locator('.pg-winner')).toContainText('+5G');
+    const after = await snapshot(guesser);
+    expect(after.user.gold).toBe(before.user.gold + 5);
+    expect(after.user.weeklyScore).toBe(before.user.weeklyScore + 3);
+    const ended = await catchmindState(guesser);
+    expect(ended.round).toMatchObject({ status: 'ended', word, endReason: 'correct', winner: { username: 'yeseo' } });
+    expect(ended.turn?.username).toBe('yeseo');
+    await expect(guesser.locator('.game-toolbar .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
+    await captureWidths(guesser, 'authenticated-result', info, 4);
+    await page.reload();
+    await expect(page.locator('.pg-winner')).toContainText('yeseo');
+    await expect(page.getByRole('button', { name: '다음 그림 그리기', exact: true })).toHaveCount(0);
+    await guesser.goto('/#/profile');
+    await expect(guesser.locator('.history-row').filter({ hasText: '캐치마인드' }).first()).toContainText('+5G');
+    await guesser.getByRole('tab', { name: '점수', exact: true }).click();
+    await expect(guesser.locator('.history-row').filter({ hasText: '캐치마인드' }).first()).toContainText('+3점');
+    await guesser.goto('/#/play/catchmind');
+    await guesser.getByRole('button', { name: '다음 그림 그리기', exact: true }).click();
+    await expect(guesser.locator('.pg-prompt strong')).toBeVisible();
+    expect((await catchmindState(guesser)).round).toMatchObject({ status: 'draft', drawer: { username: 'yeseo' }, rerollsLeft: 3 });
+  } finally { await other.close(); }
+});
+
+test('six misses and a manual end keep the drawer turn without awarding gold or points', async ({ page, browser }) => {
+  test.setTimeout(60000);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'yeseo');
+  await page.goto('/#/play/catchmind');
+  await expect(page.getByLabel('그림 그리는 캔버스', { exact: true })).toBeVisible();
+  await drawStroke(page, [[.25, .25], [.75, .75]]);
+  await page.getByRole('button', { name: '그림 올리기', exact: true }).click();
+  await expect(page.getByRole('img', { name: 'yeseo이 그린 그림', exact: true })).toBeVisible();
+  const other = await browser.newContext({ reducedMotion: 'reduce' });
+  try {
+    const guesser = await other.newPage();
+    await login(guesser, 'min');
+    await guesser.goto('/#/play/catchmind');
+    const before = await snapshot(guesser);
+    const drawerBefore = await snapshot(page);
+    for (let count = 1; count <= 6; count++) {
+      const guessed = catchmindResponse(guesser, 'guess');
+      await guessCatchmind(guesser, `정답 아닌 문장 ${count}`);
+      expect((await guessed).status()).toBe(200);
+      await expect(guesser.getByRole('list', { name: '모두의 답', exact: true }).getByRole('listitem')).toHaveCount(count);
+      if (count === 2) await expect(guesser.locator('.pg-hint')).toHaveCount(0);
+      if (count === 3) await expect(guesser.locator('.pg-hint')).toBeVisible();
+    }
+    await expect(guesser.locator('.pg-ended')).toContainText('아무도 맞히지 못했어요');
+    await expect(guesser.getByRole('textbox', { name: '캐치마인드 정답', exact: true })).toHaveCount(0);
+    const ended = await catchmindState(guesser);
+    expect(ended.round).toMatchObject({ status: 'ended', endReason: 'misses', wrongCount: 6, winner: null });
+    expect(ended.turn?.username).toBe('yeseo');
+    const after = await snapshot(guesser);
+    expect(after.user.gold).toBe(before.user.gold);
+    expect(after.user.weeklyScore).toBe(before.user.weeklyScore);
+    await page.reload();
+    await page.getByRole('button', { name: '다음 그림 그리기', exact: true }).click();
+    await expect(page.locator('.pg-prompt strong')).toBeVisible();
+    await drawStroke(page, [[.25, .75], [.75, .25]]);
+    await page.getByRole('button', { name: '그림 올리기', exact: true }).click();
+    await expect(page.getByRole('img', { name: 'yeseo이 그린 그림', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '이번 판 끝내기', exact: true }).click();
+    const confirmation = page.getByRole('dialog', { name: '이번 판을 끝낼까요?', exact: true });
+    await confirmation.getByRole('button', { name: '취소', exact: true }).click();
+    await expect(confirmation).not.toBeVisible();
+    expect((await catchmindState(page)).round?.status).toBe('open');
+    await page.getByRole('button', { name: '이번 판 끝내기', exact: true }).click();
+    await confirmation.getByRole('button', { name: '판 종료', exact: true }).click();
+    await expect(page.locator('.pg-ended')).toContainText('출제자가 판을 마쳤어요');
+    const manual = await catchmindState(page);
+    expect(manual.round).toMatchObject({ status: 'ended', endReason: 'manual', winner: null });
+    expect(manual.turn?.username).toBe('yeseo');
+    const drawerAfter = await snapshot(page);
+    expect(drawerAfter.user.gold).toBe(drawerBefore.user.gold);
+    expect(drawerAfter.user.weeklyScore).toBe(drawerBefore.user.weeklyScore);
+  } finally { await other.close(); }
+});
+
+
+test('color picker releases active drags across closing and canvas rerenders, including touch input', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const requests: string[] = [];
+  await page.route('**/api/**', route => { requests.push(route.request().url()); return route.abort(); });
+  await previewDrawing(page);
+  let picker = await openPicker(page);
+  let selection = picker.getByRole('slider', { name: '채도와 명도', exact: true });
+  let box = await selection.boundingBox();
+  await page.mouse.move(box!.x + box!.width * .3, box!.y + box!.height * .4);
+  await page.mouse.down();
+  const chosen = await picker.getByRole('textbox', { name: 'HEX 색상', exact: true }).inputValue();
+  await page.keyboard.press('Escape');
+  await expect(picker).toHaveCount(0);
+  await page.mouse.move(5, 5);
+  await page.mouse.up();
+  picker = await openPicker(page);
+  await expect(picker.getByRole('textbox', { name: 'HEX 색상', exact: true })).toHaveValue(chosen);
+  await picker.getByRole('button', { name: '색상 선택 닫기', exact: true }).click();
+  await page.getByRole('button', { name: '제시어 바꾸기 (3회 남음)', exact: true }).click();
+  await expect(page.getByRole('button', { name: '제시어 바꾸기 (2회 남음)', exact: true })).toBeVisible();
+  picker = await openPicker(page);
+  await expect(picker.getByRole('textbox', { name: 'HEX 색상', exact: true })).toHaveValue('#5E6A8A');
+  selection = picker.getByRole('slider', { name: '채도와 명도', exact: true });
+  box = await selection.boundingBox();
+  const session = await page.context().newCDPSession(page);
+  await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box!.x + box!.width * .2, y: box!.y + box!.height * .2 }] });
+  await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: box!.x + box!.width * .8, y: box!.y + box!.height * .7 }] });
+  await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(selection).toHaveAttribute('data-saturation', '80');
+  await expect(selection).toHaveAttribute('data-value', '30');
+  await session.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await session.detach();
+  await picker.getByRole('button', { name: '색상 선택 닫기', exact: true }).click();
+  expect(requests).toEqual([]);
+});
+
+test('catchmind polls every five visible seconds and stops while hidden or after leaving', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'siwon');
+  await page.clock.install({ time: new Date(TEST_NOW) });
+  await page.clock.pauseAt(new Date('2026-10-30T00:00:01Z'));
+  let requests = 0;
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/catchmind' && request.method() === 'GET') requests++;
+  });
+  const initial = page.waitForResponse(response => new URL(response.url()).pathname === '/api/catchmind' && response.request().method() === 'GET');
+  await page.goto('/#/play/catchmind');
+  await initial;
+  await expect(page.locator('.cm-round-label')).toBeVisible();
+  const first = requests;
+  await page.clock.runFor(4999);
+  expect(requests).toBe(first);
+  const next = page.waitForResponse(response => new URL(response.url()).pathname === '/api/catchmind' && response.request().method() === 'GET');
+  await page.clock.runFor(1);
+  await next;
+  expect(requests).toBe(first + 1);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.clock.runFor(15000);
+  expect(requests).toBe(first + 1);
+  const resumed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/catchmind' && response.request().method() === 'GET');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await resumed;
+  expect(requests).toBe(first + 2);
+  await page.goto('/#/profile');
+  await expect(page.locator('.profile-summary')).toBeVisible();
+  await page.clock.runFor(10000);
+  expect(requests).toBe(first + 2);
+});
+
+test('administrators can view catchmind but cannot take a turn or submit a game action', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'admin');
+  await page.goto('/#/play/catchmind');
+  await expect(page.locator('main')).toContainText('운영자 계정은 게임에 참여하지 않아요.');
+  for (const name of ['그리기 맡기', '다음 그림 그리기', '이번 판 끝내기', '그림 올리기']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+  await expect(page.getByRole('textbox', { name: '캐치마인드 정답', exact: true })).toHaveCount(0);
+  const before = await snapshot(page);
+  const state = await catchmindState(page);
+  const claim = await page.request.post('/api/catchmind/claim', {
+    data: { requestId: crypto.randomUUID(), roundId: state.round?.id ?? null },
+    headers: { Origin: new URL(page.url()).origin },
+  });
+  expect(claim.status()).toBe(403);
+  const after = await snapshot(page);
+  expect(after.user.gold).toBe(before.user.gold);
+  expect(after.user.weeklyScore).toBe(before.user.weeklyScore);
 });
