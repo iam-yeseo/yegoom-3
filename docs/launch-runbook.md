@@ -2,7 +2,15 @@
 
 2026-11-02 KST 00:00 런칭 직전에 운영자가 한 번 실행한다. 이 문서를 추가한 PR에서는 운영 DB 초기화, 머지, 배포를 실행하지 않았다. 초기화는 계정과 로그인 세션을 유지하고 모든 게임·골드·점수·출석·구매 기록을 비운다.
 
-현재 PR A에는 마이그레이션이 없다. PR A를 머지한 뒤 PR B를 진행하며, 최종 런칭 초기화에는 PR B에서 `announcements`, `luck_photos` 삭제를 추가한 스크립트를 사용한다. PR B의 `user_photos`와 사용자 프로필 정보는 보존 대상이다. 운영 DB에 필요한 마이그레이션이 모두 적용된 최신 배포와 같은 리비전에서 실행한다.
+PR B에는 추가형 `0007_launch_profiles.sql`이 필요하다. 머지 전에 운영자가 `npm run db:migrate:remote`를 실행한다. 이 npm 명령은 먼저 읽기 전용 닉네임 점검을 실행하며, 활성 사용자의 대소문자 무시 중복이나 NFC·공백 정규화가 필요한 값이 있으면 마이그레이션을 시작하지 않는다. 기존 값은 자동으로 바꾸지 않는다. 독립 점검 명령은 다음과 같다.
+
+```bash
+npm run launch:profiles:preflight:remote
+```
+
+이번 개발 환경은 Cloudflare 인증 토큰이 없어 운영 중복 조회를 완료하지 못했다. 운영자는 인증된 환경에서 위 점검을 통과한 뒤 마이그레이션 → PR 머지·배포 순서로 반영한다. 로컬에서는 중복이 있는 경우 마이그레이션의 유니크 인덱스 생성이 실패하고 전체가 롤백되는 것을 검증한다.
+
+초기화는 `announcements`, `luck_photos`까지 지우고 `user_photos`와 사용자 프로필·사진 버전은 보존한다. `0007`까지 적용된 최신 배포와 같은 리비전에서 실행한다.
 
 1. 플레이어가 접속하지 않는 런칭 전 시간에 시작하고, 검증을 마칠 때까지 앱을 열거나 출석·구매 요청을 보내지 않는다. 인증된 Cloudflare 운영자 계정과 레포의 `yegoom-db` 설정을 확인한다. 백업 지점을 조회해 출력된 **bookmark를 별도로 메모**한다.
 
@@ -22,8 +30,8 @@
 
 3. 출력된 확인 결과를 읽는다. 원격 `--file`은 import 요약만 출력하므로 스크립트가 파일 끝의 읽기 전용 SELECT를 다시 실행해 보여 준다.
 
-   - `cleared_table`의 17개 행에서 `remaining`이 모두 **0**이어야 한다.
-   - `users`, `sessions`, `d1_migrations`, `claw_config`의 `rows_kept`는 초기화 전과 같아야 한다. 스크립트는 이 네 테이블의 행·컬럼을 수정하지 않는다.
+   - `cleared_table`의 19개 행에서 `remaining`이 모두 **0**이어야 한다.
+   - `users`, `sessions`, `d1_migrations`, `claw_config`, `user_photos`의 `rows_kept`는 초기화 전과 같아야 한다. 스크립트는 이 다섯 테이블의 행·컬럼을 수정하지 않는다.
    - `catchmind_turn`은 `id = 1` 행이 남고 `drawer_id`, `round_id`가 모두 `NULL`이어야 한다.
    - `restored_append_only_triggers`는 **4**여야 한다. 뒤에 출력되는 `ledger_no_update`, `ledger_no_delete`, `inventory_no_update`, `inventory_no_delete` 정의가 각각 수정·삭제를 `RAISE(ABORT, ...)`로 거절해야 한다.
 
