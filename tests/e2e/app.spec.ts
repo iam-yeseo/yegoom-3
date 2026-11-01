@@ -1,9 +1,11 @@
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
-import type { BootstrapResponse } from '../../shared/types';
+import type { BootstrapResponse, KujiResponse, LottoPurchaseInput, LottoResponse, ShopState, SpeettoResponse } from '../../shared/types';
 
 // Match the isolated Worker fixture; performance/animation timers still run.
 const TEST_NOW = '2026-10-30T00:00:00Z';
+const SAVED_LOTTO_ID = '00000000-0000-4000-8000-000000000002';
+const SAVED_SPEETTO_ID = '00000000-0000-4000-8000-000000000001';
 test.beforeEach(async ({ page }) => { await page.clock.setFixedTime(new Date(TEST_NOW)); });
 
 async function login(page: Page, username: string) {
@@ -102,7 +104,23 @@ async function captureWidths(page: Page, name: string, info: TestInfo, phase = 1
     await expect(page.locator('main')).not.toContainText('NaN');
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     await page.evaluate(() => document.fonts.ready);
-    const path = phase === 2 ? `docs/screenshots/v2-p2-${name}-${width}.png` : info.outputPath(`${name}-${width}.png`);
+    if (width === 390) {
+      const titles = page.locator('.shop-tile strong').filter({ hasText: /^데일리 로또$/ });
+      const layouts = await titles.evaluateAll(elements => elements.map(element => {
+        const text = element.firstChild;
+        if (!text || text.nodeType !== Node.TEXT_NODE) throw new Error('Daily lotto title must have readable text');
+        const wordLineCounts = ['데일리', '로또'].map(word => {
+          const start = text.textContent!.indexOf(word);
+          const range = document.createRange();
+          range.setStart(text, start);
+          range.setEnd(text, start + word.length);
+          return Array.from(range.getClientRects()).filter(rect => rect.width > 0).length;
+        });
+        return { wordBreak: getComputedStyle(element).wordBreak, wordLineCounts };
+      }));
+      for (const layout of layouts) expect(layout).toEqual({ wordBreak: 'keep-all', wordLineCounts: [1, 1] });
+    }
+    const path = phase === 3 ? `docs/screenshots/v2-p3-${name}-${width}.png` : info.outputPath(`${name}-${width}.png`);
     await page.screenshot({ path, fullPage: true, animations: 'disabled' });
     await info.attach(`${name}-${width}px`, { path, contentType: 'image/png' });
   }
@@ -332,7 +350,7 @@ test('seventh attendance claim waits for the celebration, collapses and loads pa
     expect.objectContaining({ currency: 'gold', amount: 500 }),
   ]);
   await expect(page.locator('.room-top .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
-  await captureWidths(page, 'authenticated-home', info, 2);
+  await captureWidths(page, 'authenticated-home', info, 3);
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(card.locator('.week-path')).toBeVisible();
@@ -464,7 +482,7 @@ test('preview attendance and character choices stay local at both target widths'
   await expect(card).toContainText('500G');
   await card.getByRole('button', { name: '받기', exact: true }).click();
   await expect(card.getByRole('button', { name: '오늘 출석 완료 · 7일째', exact: true })).toHaveAttribute('aria-expanded', 'false');
-  await captureWidths(page, 'preview-home', info, 2);
+  await captureWidths(page, 'preview-home', info, 3);
   await page.goto('/#/preview/attendance');
   await expect(page.locator('.claim-big')).toContainText('500');
   await captureWidths(page, 'preview-attendance', info, 2);
@@ -477,4 +495,349 @@ test('preview attendance and character choices stay local at both target widths'
   await expect(page.getByRole('button', { name: /^달빛/ })).toHaveAttribute('aria-pressed', 'true');
   expect(await page.evaluate(() => localStorage.getItem('yegoom3:character:yeseo'))).toBeNull();
   expect(requests).toEqual([]);
+});
+
+async function displayedGold(page: Page, selector: string) {
+  const text = await page.locator(selector).innerText();
+  const value = Number(text.match(/[0-9][0-9,]*/)?.[0].replaceAll(',', ''));
+  expect(Number.isFinite(value)).toBe(true);
+  return value;
+}
+
+async function shopSnapshot<T extends ShopState>(page: Page, kind = ''): Promise<T> {
+  const response = await page.request.get(`/api/shop${kind ? `/${kind}` : ''}`);
+  expect(response.status()).toBe(200);
+  return response.json();
+}
+async function chooseLottoNumbers(page: Page, numbers: number[]) {
+  const selected = page.locator('.balls button[aria-pressed="true"]');
+  while (await selected.count()) await selected.first().click();
+  for (const number of numbers) await page.getByRole('button', { name: `번호 ${number}`, exact: true }).click();
+  await expect(page.locator('.balls button[aria-pressed="true"]')).toHaveCount(5);
+}
+function purchaseResponse(page: Page, kind: string) {
+  return page.waitForResponse(response => new URL(response.url()).pathname === `/api/shop/${kind}` && response.request().method() === 'POST');
+}
+
+test('shop previews run purchases and grade dialogs without API access at both target widths', async ({ page }, info) => {
+  test.setTimeout(60000);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const requests: string[] = [];
+  await page.route('**/api/**', route => { requests.push(route.request().url()); return route.abort(); });
+  await page.goto('/#/preview/shop');
+  await expect(page.locator('.inventory-card')).toContainText('데일리 로또 이용권');
+  await expect(page.getByText('데일리 로또', { exact: true })).toBeVisible();
+  await captureWidths(page, 'preview-shop', info, 3);
+  await page.goto('/#/preview/play/kuji');
+  await expect(page.getByRole('group', { name: '쿠지판 100장' }).getByRole('button')).toHaveCount(100);
+  await expect(page.locator('.pg-kuji-heading')).toContainText('남은 쿠지');
+  await expect(page.locator('main')).not.toContainText('남은 칸');
+  await page.getByRole('button', { name: '라스트원 보상 보기', exact: true }).click();
+  const last = page.getByRole('dialog', { name: '라스트원 보상', exact: true });
+  await expect(last).toContainText('1,000G');
+  await page.keyboard.press('Escape');
+  await expect(last).toHaveCount(0);
+  await captureWidths(page, 'preview-kuji', info, 3);
+  await page.locator('.pg-kuji-board button:not(:disabled)').first().click();
+  await page.getByRole('button', { name: /^1장 뽑기/ }).click();
+  await expect(page.getByRole('dialog', { name: '뽑은 쿠지', exact: true })).toContainText('받은 보상');
+  await page.getByRole('dialog', { name: '뽑은 쿠지', exact: true }).getByRole('button', { name: '닫기', exact: true }).click();
+  await page.goto('/#/preview/shop/lotto');
+  await expect(page.getByRole('heading', { name: '데일리 로또', exact: true })).toBeVisible();
+  await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
+  const beforeGold = await displayedGold(page, '.game-toolbar .gold');
+  await page.getByRole('button', { name: '골드로 1장 사기 · 500G', exact: true }).click();
+  await expect(page.locator('.lotto-tickets .ticket').first()).toContainText('추첨 대기');
+  await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold - 500).toLocaleString('ko-KR'));
+  await page.goto('/#/preview');
+  await expect(page.locator('.room-top .gold')).toContainText((beforeGold - 500).toLocaleString('ko-KR'));
+  const attendance = page.locator('.attendance-card');
+  const reward = Number((await attendance.locator('.attendance-title small').innerText()).match(/\+(\d+)G/)![1]);
+  await attendance.getByRole('button', { name: '받기', exact: true }).click();
+  await expect(attendance.locator('.attendance-summary')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.room-top .gold')).toContainText((beforeGold - 500 + reward).toLocaleString('ko-KR'));
+  await page.goto('/#/preview/shop/lotto');
+  await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold - 500 + reward).toLocaleString('ko-KR'));
+  await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
+  await page.getByRole('button', { name: '골드로 1장 사기 · 500G', exact: true }).click();
+  const finalGold = beforeGold - 1000 + reward;
+  await expect(page.locator('.game-toolbar .gold')).toContainText(finalGold.toLocaleString('ko-KR'));
+  await captureWidths(page, 'preview-lotto', info, 3);
+  await page.goto('/#/preview');
+  await expect(page.locator('.room-top .gold')).toContainText(finalGold.toLocaleString('ko-KR'));
+  await page.goto('/#/preview/profile');
+  await expect(page.locator('.profile-summary .stats')).toContainText(finalGold.toLocaleString('ko-KR'));
+  const attendanceLedger = page.locator('.history-row').filter({ hasText: '출석 체크' });
+  await expect(attendanceLedger).toHaveCount(1);
+  await expect(attendanceLedger).toContainText(`+${reward}G`);
+  await page.goto('/#/preview/shop/speetto');
+  await page.getByRole('button', { name: '골드로 1장 사기 · 300G', exact: true }).click();
+  await expect(page.locator('.scratch-card')).toBeVisible();
+  await page.getByRole('button', { name: '한 번에 열기', exact: true }).click();
+  await expect(page.locator('.scratch-result')).not.toHaveText('?');
+  expect(await page.locator('.scratch-symbols').evaluate(element => element.getAnimations({ subtree: true }).some(animation => animation.effect?.getTiming().iterations === Infinity))).toBe(false);
+  await captureWidths(page, 'preview-speetto', info, 3);
+  expect(requests).toEqual([]);
+});
+
+test('kuji grade modals close accessibly and a multi-purchase updates real gold, score and tickets', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'min');
+  await page.goto('/#/shop');
+  await expect(page.locator('.inventory-card')).toContainText('데일리 로또 이용권');
+  await expect(page.locator('.inventory-card')).toContainText('스피또 이용권');
+  await captureWidths(page, 'authenticated-shop', info, 3);
+  await page.goto('/#/play/kuji');
+  const before = await snapshot(page);
+  const shopBefore = await shopSnapshot<KujiResponse>(page, 'kuji');
+  await expect(page.locator('.pg-kuji-heading')).toContainText(`제${shopBefore.kuji.boardId}판`);
+  await page.getByRole('button', { name: 'A상 보상 보기', exact: true }).click();
+  const grade = page.getByRole('dialog', { name: 'A상 보상', exact: true });
+  await expect(grade).toContainText('+10점');
+  await expect(grade).toContainText('+100G');
+  await grade.getByRole('button', { name: '닫기', exact: true }).click();
+  await expect(grade).toHaveCount(0);
+  await page.getByRole('button', { name: '라스트원 보상 보기', exact: true }).click();
+  const last = page.getByRole('dialog', { name: '라스트원 보상', exact: true });
+  await expect(last).toContainText('1,000G');
+  await page.keyboard.press('Escape');
+  await expect(last).toHaveCount(0);
+  await page.getByRole('button', { name: 'A상 보상 보기', exact: true }).click();
+  await page.mouse.click(5, 5);
+  await expect(grade).toHaveCount(0);
+  const positions = shopBefore.kuji.cells.filter(cell => cell.grade === null).slice(0, 2).map(cell => cell.position);
+  for (const position of positions) await page.getByRole('button', { name: `${position + 1}번 쿠지`, exact: true }).click();
+  await expect(page.getByRole('button', { name: '2장 뽑기 · 600G', exact: true })).toBeEnabled();
+  const purchased = purchaseResponse(page, 'kuji');
+  await page.getByRole('button', { name: '2장 뽑기 · 600G', exact: true }).click();
+  const response = await purchased;
+  expect(response.status()).toBe(200);
+  const data = await response.json() as KujiResponse;
+  expect(data.purchase).toBeDefined();
+  expect(data.purchase!.cost).toBe(600);
+  expect(data.purchase!.reward).toEqual({ gold: 100, score: 10, lottoTickets: 3, speettoTickets: 0 });
+  expect(data.purchase!.cells.map(cell => cell.position).sort()).toEqual([...positions].sort());
+  const receipt = page.getByRole('dialog', { name: '뽑은 쿠지', exact: true });
+  await expect(receipt.locator('.kuji-ticket')).toHaveCount(2);
+  await expect(receipt).toContainText('받은 보상');
+  await receipt.getByRole('button', { name: '닫기', exact: true }).click();
+  const after = await snapshot(page);
+  expect(after.user.gold).toBe(before.user.gold - 600 + data.purchase!.reward.gold);
+  expect(after.user.weeklyScore).toBe(before.user.weeklyScore + data.purchase!.reward.score);
+  expect(after.inventory.lottoTickets).toBe(before.inventory.lottoTickets + data.purchase!.reward.lottoTickets);
+  expect(after.inventory.speettoTickets).toBe(before.inventory.speettoTickets + data.purchase!.reward.speettoTickets);
+  for (const cell of data.purchase!.cells) {
+    await expect(page.getByRole('button', { name: `${cell.position + 1}번 쿠지, 이미 뽑힌 ${cell.grade}상`, exact: true })).toBeDisabled();
+  }
+  await expect(page.locator('.game-toolbar .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
+  await captureWidths(page, 'authenticated-kuji', info, 3);
+  await page.goto('/#/');
+  await expect(page.locator('.room-top .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
+  await expect(page.locator('.home-score strong').first()).toHaveText(String(after.user.weeklyScore));
+  await page.goto('/#/profile');
+  await expect(page.locator('.history-row').filter({ hasText: '예굼쿠지 구매' }).first()).toContainText('600G');
+  await page.getByRole('tab', { name: '점수', exact: true }).click();
+  await expect(page.locator('.history-row').filter({ hasText: '예굼쿠지 등급 보상' }).first()).toContainText('+10점');
+});
+
+test('daily lotto shows past winnings and retries a lost purchase response once across navigation and reload', async ({ page }, info) => {
+  test.setTimeout(60000);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'yeseo');
+  await page.goto('/#/shop/lotto');
+  await expect(page.getByRole('heading', { name: '데일리 로또', exact: true })).toBeVisible();
+  const history = page.locator(`.ticket[data-ticket-id="${SAVED_LOTTO_ID}"]`);
+  await expect(history).toContainText('1등 · 5개 일치');
+  await expect(history).toContainText('+5,000G');
+  await expect(page.locator('.lotto-target')).toContainText('2026-10-30');
+  const before = await shopSnapshot<LottoResponse>(page, 'lotto');
+  const attempts: LottoPurchaseInput[] = [];
+  let dropped = false;
+  await page.route('**/api/shop/lotto', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    attempts.push(route.request().postDataJSON() as LottoPurchaseInput);
+    if (!dropped) {
+      dropped = true;
+      const committed = await route.fetch();
+      expect(committed.status()).toBe(200);
+      await route.abort('failed');
+    } else await route.continue();
+  });
+  await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
+  await page.getByRole('button', { name: '번호 6', exact: true }).click();
+  await expect(page.getByRole('button', { name: '번호 6', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('button', { name: '이용권으로 1장 사기', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeDisabled();
+  const committed = await shopSnapshot<LottoResponse>(page, 'lotto');
+  expect(committed.inventory.lottoTickets).toBe(before.inventory.lottoTickets - 1);
+  expect(committed.gold).toBe(before.gold);
+  expect(committed.lotto.tickets).toHaveLength(before.lotto.tickets.length + 1);
+  await page.goto('/#/shop');
+  await page.goto('/#/shop/lotto');
+  await page.reload();
+  await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeDisabled();
+  const retried = purchaseResponse(page, 'lotto');
+  await page.getByRole('button', { name: '이용권으로 1장 사기', exact: true }).click();
+  expect((await retried).status()).toBe(200);
+  await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeEnabled();
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  const afterRetry = await shopSnapshot<LottoResponse>(page, 'lotto');
+  expect(afterRetry.inventory.lottoTickets).toBe(before.inventory.lottoTickets - 1);
+  expect(afterRetry.lotto.tickets).toHaveLength(before.lotto.tickets.length + 1);
+  await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
+  const paid = purchaseResponse(page, 'lotto');
+  await page.getByRole('button', { name: '골드로 1장 사기 · 500G', exact: true }).click();
+  const paidResponse = await paid;
+  expect(paidResponse.status()).toBe(200);
+  const paidData = await paidResponse.json() as LottoResponse;
+  expect(paidData.purchase).toMatchObject({ payment: 'gold', cost: 500, drawDate: '2026-10-30', numbers: [6, 7, 8, 9, 10] });
+  await expect(page.locator(`.ticket[data-ticket-id="${paidData.purchase!.id}"]`)).toContainText('추첨 대기');
+  expect((await snapshot(page)).user.gold).toBe(before.gold - 500);
+  await captureWidths(page, 'authenticated-lotto', info, 3);
+  await page.goto('/#/profile');
+  await expect(page.locator('.history-row').filter({ hasText: '데일리 로또 1등' })).toContainText('+5,000G');
+  await expect(page.locator('.history-row').filter({ hasText: '데일리 로또 구매' }).first()).toContainText('500G');
+});
+
+test('speetto pays at purchase, restores owned tickets after leaving and scratching never changes the balance', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'siwon');
+  await page.goto('/#/shop/speetto');
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', SAVED_SPEETTO_ID);
+  await expect(page.locator('.scratch-result')).toHaveText('?');
+  const restored = await shopSnapshot<SpeettoResponse>(page, 'speetto');
+  expect(restored.speetto.tickets[0]).toMatchObject({ id: SAVED_SPEETTO_ID, won: true, prize: 1500 });
+  await page.goto('/#/shop');
+  await page.goto('/#/shop/speetto');
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', SAVED_SPEETTO_ID);
+  await page.getByRole('button', { name: '한 번에 열기', exact: true }).click();
+  await expect(page.locator('.scratch-result')).toHaveText('당첨! +1,500G');
+  expect((await snapshot(page)).user.gold).toBe(restored.gold);
+  await captureWidths(page, 'authenticated-speetto', info, 3);
+  const paid = purchaseResponse(page, 'speetto');
+  await page.getByRole('button', { name: '골드로 1장 사기 · 300G', exact: true }).click();
+  const response = await paid;
+  expect(response.status()).toBe(200);
+  const data = await response.json() as SpeettoResponse;
+  const ticket = data.purchase!;
+  expect(ticket).toMatchObject({ payment: 'gold', cost: 300 });
+  expect(ticket.cells).toHaveLength(3);
+  expect(ticket.prize).toBe(ticket.won ? 1500 : 0);
+  expect(new Set(ticket.cells).size === 1).toBe(ticket.won);
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', ticket.id);
+  await expect(page.locator('.scratch-result')).toHaveText('?');
+  expect((await snapshot(page)).user.gold).toBe(restored.gold - 300 + ticket.prize);
+  await page.goto('/#/shop');
+  await page.goto('/#/shop/speetto');
+  await page.reload();
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', ticket.id);
+  const afterPurchase = (await snapshot(page)).user.gold;
+  await page.getByRole('button', { name: '한 번에 열기', exact: true }).click();
+  await expect(page.locator('.scratch-result')).toHaveText(ticket.won ? '당첨! +1,500G' : '아쉽지만 낙첨이에요');
+  expect((await snapshot(page)).user.gold).toBe(afterPurchase);
+  const coupon = purchaseResponse(page, 'speetto');
+  await page.getByRole('button', { name: '이용권으로 1장 사기', exact: true }).click();
+  const couponData = await (await coupon).json() as SpeettoResponse;
+  expect(couponData.purchase).toMatchObject({ payment: 'ticket', cost: 0 });
+  expect(couponData.inventory.speettoTickets).toBe(restored.inventory.speettoTickets - 1);
+  expect((await snapshot(page)).user.gold).toBe(afterPurchase + couponData.purchase!.prize);
+});
+
+test('administrators cannot purchase any shop item through UI or API', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'admin');
+  const before = await snapshot(page);
+  const kuji = await shopSnapshot<KujiResponse>(page, 'kuji');
+  for (const [route, selector] of [
+    ['/play/kuji', '.pg-kuji-board button'],
+    ['/shop/lotto', '.shop-purchase-actions button'],
+    ['/shop/speetto', '.shop-purchase-actions button'],
+  ]) {
+    await page.goto(`/#${route}`);
+    await expect(page.locator(selector).first()).toBeVisible();
+    await expect(page.locator(selector).first()).toBeDisabled();
+    await expect(page.locator('main')).toContainText('운영자 계정은');
+  }
+  for (const [kind, input] of [
+    ['kuji', { boardId: kuji.kuji.boardId, positions: [99] }],
+    ['lotto', { numbers: [1, 2, 3, 4, 5], payment: 'gold' }],
+    ['speetto', { payment: 'gold' }],
+  ] as const) {
+    const response = await page.request.post(`/api/shop/${kind}`, { data: { requestId: crypto.randomUUID(), ...input }, headers: { Origin: new URL(page.url()).origin } });
+    expect(response.status()).toBe(403);
+  }
+  const after = await snapshot(page);
+  expect(after.user.gold).toBe(before.user.gold);
+  expect(after.inventory).toEqual(before.inventory);
+});
+
+for (const outcome of ['success', 'conflict'] as const) {
+  test(`opening another shop during a delayed kuji ${outcome} still loads the new screen`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await login(page, 'min');
+    await page.goto('/#/play/kuji');
+    const board = await shopSnapshot<KujiResponse>(page, 'kuji');
+    const position = board.kuji.cells.find(cell => cell.grade === null)!.position;
+    let held = false;
+    let release: () => void = () => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/shop/kuji', async route => {
+      if (route.request().method() !== 'POST') return route.continue();
+      held = true;
+      await gate;
+      const response = await route.fetch();
+      await route.fulfill({ response });
+    });
+    try {
+      await page.getByRole('button', { name: `${position + 1}번 쿠지`, exact: true }).click();
+      const completed = purchaseResponse(page, 'kuji');
+      await page.getByRole('button', { name: /^1장 뽑기/ }).click();
+      await expect.poll(() => held).toBe(true);
+      await page.goto('/#/shop/speetto');
+      await expect(page.getByRole('heading', { name: '스피또', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '골드로 1장 사기 · 300G', exact: true })).toBeDisabled();
+      if (outcome === 'conflict') {
+        // A second HTTP client takes the selected cell while the browser's
+        // original purchase is in flight. Its later response is a real 409.
+        const competitor = await page.request.post('/api/shop/kuji', {
+          data: { requestId: crypto.randomUUID(), boardId: board.kuji.boardId, positions: [position] },
+          headers: { Origin: new URL(page.url()).origin },
+        });
+        expect(competitor.status()).toBe(200);
+      }
+      const loaded = page.waitForResponse(response => new URL(response.url()).pathname === '/api/shop/speetto' && response.request().method() === 'GET', { timeout: 5000 });
+      release();
+      expect((await completed).status()).toBe(outcome === 'success' ? 200 : 409);
+      expect((await loaded).status()).toBe(200);
+      await expect(page.getByRole('button', { name: '골드로 1장 사기 · 300G', exact: true })).toBeEnabled();
+      await expect(page.locator('.inventory-card')).toContainText('스피또 이용권');
+    } finally { release(); }
+  });
+}
+
+test('a shop read refreshes home and profile after a purchase by another HTTP client', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page, 'min');
+  const before = await snapshot(page);
+  await expect(page.locator('.room-top .gold')).toContainText(before.user.gold.toLocaleString('ko-KR'));
+  const external = await page.request.post('/api/shop/lotto', {
+    data: { requestId: crypto.randomUUID(), numbers: [16, 17, 18, 19, 20], payment: 'gold' },
+    headers: { Origin: new URL(page.url()).origin },
+  });
+  expect(external.status()).toBe(200);
+  const receipt = await external.json() as LottoResponse;
+  expect(receipt.gold).toBe(before.user.gold - 500);
+  // APIRequestContext does not update React state: the view still has its
+  // original balance until entering the shop reads the new server state.
+  await expect(page.locator('.room-top .gold')).toContainText(before.user.gold.toLocaleString('ko-KR'));
+  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/bootstrap', { timeout: 5000 });
+  await page.goto('/#/shop');
+  expect((await refreshed).status()).toBe(200);
+  await page.goto('/#/');
+  await expect(page.locator('.room-top .gold')).toContainText(receipt.gold.toLocaleString('ko-KR'));
+  await page.goto('/#/profile');
+  await expect(page.locator('.profile-summary .stats')).toContainText(receipt.gold.toLocaleString('ko-KR'));
+  await expect(page.locator('.history-row').filter({ hasText: '데일리 로또 구매' }).first()).toContainText('500G');
 });
