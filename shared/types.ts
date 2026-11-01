@@ -72,6 +72,7 @@ export interface BootstrapResponse {
   inventory: Inventory;
   catchmind: CatchmindSummary;
   claw: ClawSummary;
+  launchGift: LaunchGiftState;
   serverTime: string;
   timeZone: 'Asia/Seoul';
 }
@@ -99,6 +100,13 @@ export interface PredictionInput extends GameMutationInput { value: string }
 export interface AnswerInput extends GameMutationInput { value: string; hint?: string }
 
 export interface Inventory { lottoTickets: number; speettoTickets: number }
+export interface LaunchGiftState { available: boolean; claimed: boolean }
+export interface LaunchGiftResponse {
+  launchGift: LaunchGiftState;
+  inventory: Inventory;
+  awarded: boolean;
+  serverTime: string;
+}
 export type ShopKind = 'kuji' | 'lotto' | 'speetto';
 export type ShopPayment = 'gold' | 'ticket';
 export interface ShopState { gold: number; inventory: Inventory; canPurchase: boolean; serverTime: string }
