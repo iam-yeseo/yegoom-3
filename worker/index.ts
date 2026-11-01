@@ -1,9 +1,10 @@
 import type { AttendanceState, BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, Player, LedgerEntry } from '../shared/types';
-import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, PREDICTION_REWARDS, predictionPoints } from '../shared/balance';
+import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, CATCHMIND_RULES, PREDICTION_REWARDS, predictionPoints } from '../shared/balance';
 import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
 import { DUMMY_HASH, hashToken, randomToken, verifyPassword } from './crypto';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readInventory, settleDueLotto, ShopError, shopRoute } from './shop';
+import { CatchmindError, catchmindRoute, readCatchmindSummary } from './catchmind';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null }
@@ -38,9 +39,9 @@ function requireSameOrigin(request: Request): void {
     throw new HttpError(403, 'ORIGIN_REJECTED', '이 페이지에서 다시 시도해 주세요.');
   }
 }
-async function body(request: Request): Promise<Record<string, unknown>> {
+async function body(request: Request, maxBytes = 4096): Promise<Record<string, unknown>> {
   if (!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) throw new HttpError(415, 'INVALID_CONTENT_TYPE', 'JSON 요청만 사용할 수 있어요.');
-  if (Number(request.headers.get('Content-Length') || 0) > 4096) throw new HttpError(413, 'BODY_TOO_LARGE', '입력 내용이 너무 길어요.');
+  if (Number(request.headers.get('Content-Length') || 0) > maxBytes) throw new HttpError(413, 'BODY_TOO_LARGE', '입력 내용이 너무 길어요.');
   const reader = request.body?.getReader();
   if (!reader) throw new HttpError(400, 'INVALID_BODY', '입력 내용을 확인해 주세요.');
   const chunks: Uint8Array[] = [];
@@ -49,7 +50,7 @@ async function body(request: Request): Promise<Record<string, unknown>> {
     const part = await reader.read();
     if (part.done) break;
     length += part.value.byteLength;
-    if (length > 4096) { await reader.cancel(); throw new HttpError(413, 'BODY_TOO_LARGE', '입력 내용이 너무 길어요.'); }
+    if (length > maxBytes) { await reader.cancel(); throw new HttpError(413, 'BODY_TOO_LARGE', '입력 내용이 너무 길어요.'); }
     chunks.push(part.value);
   }
   const bytes = new Uint8Array(length);
@@ -185,13 +186,14 @@ async function readGame(db: D1Database, user: UserRow, id: GameId, now: Date): P
 async function weeklyDailyScores(db: D1Database, userId: string, now: Date): Promise<number[]> {
   const monday = weekStart(now);
   // The profile's recent-entry limit must not truncate this week's chart.
-  const rows = (await db.prepare(`SELECT amount, reference, created_at FROM ledger
-    WHERE user_id = ? AND currency = 'score' AND week_start = ?`)
-    .bind(userId, monday).all<{ amount: number; reference: string; created_at: string }>()).results;
+  const rows = (await db.prepare(`SELECT l.amount, l.reference, l.created_at, r.round_date AS game_date FROM ledger l
+    LEFT JOIN catchmind_rounds r ON r.id = CASE WHEN l.reference LIKE 'catchmind:score:%' THEN substr(l.reference, length('catchmind:score:') + 1) END
+    WHERE l.user_id = ? AND l.currency = 'score' AND l.week_start = ?`)
+    .bind(userId, monday).all<{ amount: number; reference: string; created_at: string; game_date: string | null }>()).results;
   const daily = [0, 0, 0, 0, 0, 0, 0];
   for (const row of rows) {
     const roundDate = /^score:(?:wake|offwork|luck):(\d{4}-\d{2}-\d{2}):.+$/.exec(row.reference)?.[1];
-    const date = roundDate ?? kstDate(new Date(row.created_at));
+    const date = row.game_date ?? roundDate ?? kstDate(new Date(row.created_at));
     const day = (Date.parse(`${date}T00:00:00Z`) - Date.parse(`${monday}T00:00:00Z`)) / 86_400_000;
     if (Number.isInteger(day) && day >= 0 && day < daily.length) daily[day]! += row.amount;
   }
@@ -273,7 +275,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   // Complete payments before reading balances and weekly rankings in parallel.
   await settlePublishedRounds(env.DB, now);
   await settleDueLotto(env.DB, now);
-  const [viewer, players, games, ledger, dailyScores, attendance, inventory] = await Promise.all([
+  const [viewer, players, games, ledger, dailyScores, attendance, inventory, catchmind] = await Promise.all([
     publicUser(env.DB, user, now),
     env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, u.character, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Omit<Player, 'character'> & { character: ArtKey | null }>(),
     Promise.all(GAME_IDS.map(id => readGame(env.DB, user, id, now))),
@@ -281,9 +283,10 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     weeklyDailyScores(env.DB, user.id, now),
     readAttendance(env.DB, user, now),
     readInventory(env.DB, user.id),
+    readCatchmindSummary(env.DB),
   ]);
   return { user: viewer, players: players.results.map(player => ({ ...player, character: player.character ?? defaultCharacter(player.username) })),
-    games, ledger: ledger.results, dailyScores, attendance, inventory, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    games, ledger: ledger.results, dailyScores, attendance, inventory, catchmind, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId, action: string, now: Date): Promise<Response> {
   const input = await body(request);
@@ -368,6 +371,13 @@ async function api(request: Request, env: Env): Promise<Response> {
     if (request.method === 'PUT') return updateCharacter(request, env, user, now);
     throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
   }
+  const catchmindMatch = /^\/api\/catchmind(?:\/([^/]+))?$/.exec(url.pathname);
+  if (catchmindMatch) {
+    if (request.method === 'POST' && user.role !== 'player') throw new HttpError(403, 'CANNOT_PLAY', '플레이어만 캐치마인드에 참여할 수 있어요.');
+    const maxBytes = catchmindMatch[1] === 'publish' ? Math.ceil(CATCHMIND_RULES.maxImageBytes / 3) * 4 + 4096 : 4096;
+    const input = request.method === 'POST' ? await body(request, maxBytes) : undefined;
+    return json(await catchmindRoute(env.DB, user, catchmindMatch[1], request.method, input, new Date()));
+  }
   if (url.pathname === '/api/shop' || url.pathname.startsWith('/api/shop/')) {
     if (request.method === 'POST' && user.role !== 'player') throw new HttpError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');
     const input = request.method === 'POST' ? await body(request) : undefined;
@@ -390,7 +400,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof ShopError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof ShopError || error instanceof CatchmindError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

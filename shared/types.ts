@@ -69,6 +69,7 @@ export interface BootstrapResponse {
   dailyScores: number[];
   attendance: AttendanceState;
   inventory: Inventory;
+  catchmind: CatchmindSummary;
   serverTime: string;
   timeZone: 'Asia/Seoul';
 }
@@ -134,3 +135,29 @@ export interface SpeettoTicket {
 }
 export interface SpeettoState { tickets: SpeettoTicket[] }
 export interface SpeettoResponse extends ShopState { speetto: SpeettoState; purchase?: SpeettoTicket }
+
+export interface CatchmindPlayer { id: string; username: string; displayName: string; character: ArtKey }
+export interface CatchmindGuess { id: string; player: CatchmindPlayer; answer: string; correct: boolean; createdAt: string }
+export interface CatchmindRound {
+  id: string; number: number; status: 'draft' | 'open' | 'ended';
+  drawer: CatchmindPlayer; word: string | null; wordVersion: number; rerollsLeft: number;
+  image: string | null; wrongCount: number; hint: { firstCharacter: string; length: number } | null;
+  winner: CatchmindPlayer | null; endReason: 'correct' | 'misses' | 'manual' | null;
+  publishedAt: string | null; endedAt: string | null; guesses: CatchmindGuess[];
+}
+export interface CatchmindState {
+  round: CatchmindRound | null; turn: CatchmindPlayer | null;
+  canClaim: boolean; canReroll: boolean; canPublish: boolean; canGuess: boolean; canEnd: boolean; canNext: boolean;
+}
+export interface CatchmindSummary {
+  roundId: string | null; status: 'idle' | 'draft' | 'open' | 'ended';
+  drawer: CatchmindPlayer | null; turn: CatchmindPlayer | null; wrongCount: number;
+  winner: CatchmindPlayer | null; answer: string | null;
+}
+export interface CatchmindResponse { catchmind: CatchmindState; serverTime: string }
+export type CatchmindAction = 'claim' | 'reroll' | 'publish' | 'guess' | 'end' | 'next';
+export interface CatchmindMutationInput { requestId: string; roundId: string | null }
+export interface CatchmindRerollInput extends CatchmindMutationInput { wordVersion: number }
+export interface CatchmindPublishInput extends CatchmindRerollInput { image: string }
+export interface CatchmindGuessInput extends CatchmindMutationInput { answer: string }
+export type CatchmindInput = CatchmindMutationInput | CatchmindRerollInput | CatchmindPublishInput | CatchmindGuessInput;
