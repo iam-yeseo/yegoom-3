@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { ART_KEYS, defaultCharacter, isArtKey, type ArtKey } from "../../shared/characters";
 import { anim, useOnChange } from "../motion";
 
 export const art = {
@@ -10,9 +11,9 @@ export const art = {
   manta: { tint: "#E3F1FC", name: "만타" },
   moon: { tint: "#EEE8FC", name: "달빛" },
   monkey: { tint: "#FFF4CC", name: "별숭이" },
-} as const;
-export type ArtKey = keyof typeof art;
-export const artKeys = Object.keys(art) as ArtKey[];
+} as const satisfies Record<ArtKey, { tint: string; name: string }>;
+export type { ArtKey } from "../../shared/characters";
+export const artKeys = ART_KEYS;
 export const artSrc = (key: ArtKey) => `/characters/${key}.png`;
 
 export const charStates = ["idle", "happy", "sleepy", "greet", "jump"] as const;
@@ -76,45 +77,78 @@ function subscribeSpriteMotion(listener: () => void) {
 }
 const spriteMotionSnapshot = () => spriteReducedMotion?.matches ?? false;
 
-const defaults: Record<string, ArtKey> = {
-  min: "axolotl",
-  siwon: "cat",
-  yeseo: "bunny",
-};
 export const playerColor: Record<string, string> = {
   min: "#2E8C6E",
   siwon: "#94700A",
   yeseo: "#7556C4",
 };
 
-// "My character" is chosen per device until the server stores it.
-const storageKey = (username: string) => `yegoom3:character:${username}`;
-const listeners = new Set<() => void>();
-function readChoice(username: string): ArtKey | null {
+const legacyStorageKey = (username: string) => `yegoom3:character:${username}`;
+const previewStorageKey = (username: string) => `yegoom3:preview:character:${username}`;
+const previewListeners = new Set<() => void>();
+const previewChoices = new Map<string, ArtKey>();
+let previewRevision = 0;
+
+/** The caller clears the old device preference only after the server accepts
+ * its conditional import, or confirms it already has a preference. */
+export function readLegacyCharacter(username: string): ArtKey | null {
   try {
-    const value = localStorage.getItem(storageKey(username));
-    return value && value in art ? (value as ArtKey) : null;
+    const value = localStorage.getItem(legacyStorageKey(username));
+    return isArtKey(value) ? value : null;
   } catch {
     return null;
   }
 }
-export function characterOf(username: string): ArtKey {
-  return readChoice(username) ?? defaults[username] ?? "monkey";
+export function clearLegacyCharacter(username: string): void {
+  try { localStorage.removeItem(legacyStorageKey(username)); }
+  catch { /* A blocked storage area cannot be migrated on this visit. */ }
 }
-export function chooseCharacter(username: string, key: ArtKey) {
+function readPreviewCharacter(username: string): ArtKey {
   try {
-    localStorage.setItem(storageKey(username), key);
-  } catch {
-    // Private mode: the choice lasts for this page only.
-  }
-  listeners.forEach((listener) => listener());
+    const value = localStorage.getItem(previewStorageKey(username));
+    if (isArtKey(value)) return value;
+  } catch { /* Keep the preview usable when storage is unavailable. */ }
+  return previewChoices.get(username) ?? defaultCharacter(username);
 }
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+export function choosePreviewCharacter(username: string, key: ArtKey): void {
+  previewChoices.set(username, key);
+  try { localStorage.setItem(previewStorageKey(username), key); }
+  catch { /* In private mode the preview choice lasts for this page only. */ }
+  previewRevision += 1;
+  previewListeners.forEach(listener => listener());
+}
+function subscribePreview(listener: () => void) {
+  previewListeners.add(listener);
+  const changed = (event: StorageEvent) => {
+    if (event.key === null || event.key.startsWith("yegoom3:preview:character:")) {
+      previewChoices.clear();
+      previewRevision += 1;
+      listener();
+    }
+  };
+  window.addEventListener("storage", changed);
+  return () => {
+    previewListeners.delete(listener);
+    window.removeEventListener("storage", changed);
+  };
+}
+const subscribeNothing = () => () => {};
+type CharacterDirectory = Record<string, ArtKey | null | undefined>;
+const CharacterContext = createContext<{ characters: CharacterDirectory; preview: boolean }>({ characters: {}, preview: false });
+export function CharacterProvider({ characters, preview, children }: {
+  characters: CharacterDirectory;
+  preview: boolean;
+  children: ReactNode;
+}) {
+  return <CharacterContext.Provider value={{ characters, preview }}>{children}</CharacterContext.Provider>;
+}
+export function useCharacterLookup(): (username: string) => ArtKey {
+  const { characters, preview } = useContext(CharacterContext);
+  useSyncExternalStore(preview ? subscribePreview : subscribeNothing, () => preview ? previewRevision : 0, () => 0);
+  return username => preview ? readPreviewCharacter(username) : characters[username] ?? defaultCharacter(username);
 }
 export function useCharacter(username: string): ArtKey {
-  return useSyncExternalStore(subscribe, () => characterOf(username));
+  return useCharacterLookup()(username);
 }
 
 export function Character({
@@ -187,6 +221,7 @@ function SpriteFrames({
       key={playing ? "sprite" : "still"}
       className={`character character-sprite${playing ? " is-playing" : ""} ${className}`}
       aria-hidden="true"
+      data-character={artKey}
       data-state={state}
       data-ready={status === "ready"}
       style={{
@@ -244,6 +279,7 @@ export function Avatar({
   return (
     <span
       className="avatar"
+      data-character={key}
       style={{
         width: size,
         height: size,

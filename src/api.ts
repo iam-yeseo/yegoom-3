@@ -5,7 +5,10 @@ import type {
   GameId,
   GameResponse,
   HistoryResponse,
+  AttendanceState,
+  AttendanceClaimResponse,
 } from "../shared/types";
+import type { ArtKey } from "../shared/characters";
 
 export class ApiFailure extends Error {
   constructor(
@@ -45,6 +48,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 export const api = {
+  attendance: (month: string) => request<{ attendance: AttendanceState }>(`/me/attendance?month=${encodeURIComponent(month)}`),
+  claimAttendance: () => request<AttendanceClaimResponse>("/me/attendance", { method: "POST", body: "{}" }),
+  character: (character: ArtKey, migrate = false, expectedUserId?: string) => request<AuthResponse>("/me/character", {
+    method: "PUT", body: JSON.stringify({ character, migrate, ...(migrate ? { expectedUserId } : {}) }),
+  }),
   history: (id: GameId) => request<HistoryResponse>(`/games/${id}/history`),
   wake: (roundDate: string) => request<GameResponse>("/games/wake/wake", {
     method: "POST",

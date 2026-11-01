@@ -1,12 +1,13 @@
-import type { BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, Player, LedgerEntry } from '../shared/types';
-import { PREDICTION_REWARDS, predictionPoints } from '../shared/balance';
+import type { AttendanceState, BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, Player, LedgerEntry } from '../shared/types';
+import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, PREDICTION_REWARDS, predictionPoints } from '../shared/balance';
+import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
 import { DUMMY_HASH, hashToken, randomToken, verifyPassword } from './crypto';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher }
-interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number }
+interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null }
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null }
-interface PredictionRow { player_id: string; username: string; display_name: string; value: string }
+interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null }
 interface UnsettledRound extends RoundRow { game_id: GameId; round_date: string }
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
@@ -68,7 +69,7 @@ async function requireUser(request: Request, env: Env, now: number): Promise<Use
 }
 async function publicUser(db: D1Database, user: UserRow, now: Date): Promise<User> {
   const balances = await db.prepare("SELECT COALESCE(SUM(CASE WHEN currency = 'gold' THEN amount ELSE 0 END), 0) AS gold, COALESCE(SUM(CASE WHEN currency = 'score' AND week_start = ? THEN amount ELSE 0 END), 0) AS score FROM ledger WHERE user_id = ?").bind(weekStart(now), user.id).first<{ gold: number; score: number }>();
-  return { id: user.id, username: user.username, displayName: user.display_name, role: user.role, gold: balances?.gold ?? 0, weeklyScore: balances?.score ?? 0 };
+  return { id: user.id, username: user.username, displayName: user.display_name, role: user.role, gold: balances?.gold ?? 0, weeklyScore: balances?.score ?? 0, character: user.character };
 }
 async function consumeLoginLimit(db: D1Database, username: string, ip: string, now: number): Promise<void> {
   const bucketKeys = await Promise.all([hashToken(`user:${username}`), hashToken(`ip:${ip}`)]);
@@ -101,7 +102,7 @@ async function login(request: Request, env: Env, now: Date): Promise<Response> {
   return json({ user: await publicUser(env.DB, user, now) }, 200, { 'Set-Cookie': cookie(request, token, SESSION_AGE_SECONDS) });
 }
 async function roundResults(db: D1Database, id: GameId, date: string, answer: string): Promise<GameResult[]> {
-  const rows = (await db.prepare(`SELECT p.player_id, u.username, u.display_name, p.value
+  const rows = (await db.prepare(`SELECT p.player_id, u.username, u.display_name, p.value, u.character
     FROM predictions p JOIN users u ON u.id = p.player_id
     WHERE p.game_id = ? AND p.round_date = ? AND u.role = 'player' AND u.username != ?
     ORDER BY p.updated_at, p.player_id`).bind(id, date, GAME_RULES[id].author).all<PredictionRow>()).results;
@@ -112,7 +113,7 @@ async function roundResults(db: D1Database, id: GameId, date: string, answer: st
     const isFirst = difference === closest;
     const participationGold = PREDICTION_REWARDS.participationGold;
     const firstGold = isFirst ? PREDICTION_REWARDS.firstGold : 0;
-    return { playerId: row.player_id, username: row.username, displayName: row.display_name,
+    return { playerId: row.player_id, username: row.username, displayName: row.display_name, character: row.character ?? defaultCharacter(row.username),
       value: row.value, difference, score: predictionPoints(id, difference), isFirst,
       participationGold, firstGold, gold: participationGold + firstGold };
   }).sort((left, right) => left.difference - right.difference);
@@ -195,17 +196,91 @@ async function weeklyDailyScores(db: D1Database, userId: string, now: Date): Pro
   }
   return daily;
 }
+async function readAttendance(db: D1Database, user: UserRow, now: Date, selectedMonth?: string): Promise<AttendanceState> {
+  const today = kstDate(now);
+  const yesterday = kstDate(new Date(now.getTime() - 86_400_000));
+  const month = selectedMonth ?? today.slice(0, 7);
+  if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month)) throw new HttpError(400, 'INVALID_MONTH', '조회할 달을 YYYY-MM 형식으로 입력해 주세요.');
+  const [recent, history] = await Promise.all([
+    db.prepare('SELECT date, streak FROM attendance WHERE user_id = ? AND date IN (?, ?)')
+      .bind(user.id, today, yesterday).all<{ date: string; streak: number }>(),
+    db.prepare('SELECT date FROM attendance WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date')
+      .bind(user.id, `${month}-01`, `${month}-31`).all<{ date: string }>(),
+  ]);
+  const claimed = recent.results.find(row => row.date === today);
+  const previous = recent.results.find(row => row.date === yesterday);
+  const streak = claimed?.streak ?? (previous?.streak ?? 0) + 1;
+  const days = history.results.map(row => row.date);
+  return { today, claimed: Boolean(claimed), streak, cycleDay: attendanceCycleDay(streak), reward: attendanceReward(streak),
+    canClaim: user.role === 'player' && !claimed, month, monthCount: days.length, days };
+}
+
+async function claimAttendance(request: Request, env: Env, user: UserRow, now: Date): Promise<Response> {
+  if (user.role !== 'player') throw new HttpError(403, 'CANNOT_ATTEND', '플레이어만 출석할 수 있어요.');
+  await body(request); // The authenticated user and server KST day are authoritative.
+  now = new Date();
+  const today = kstDate(now);
+  const yesterday = kstDate(new Date(now.getTime() - 86_400_000));
+  const dayStart = kstTimestamp(today, '00:00:00');
+  const dayEnd = dayStart + 86_400_000;
+  const writes = await env.DB.batch([
+    // Read yesterday's streak inside the write, so concurrent claims cannot
+    // overwrite a stored streak or create a second attendance for this day.
+    env.DB.prepare(`INSERT OR IGNORE INTO attendance (user_id, date, streak, created_at)
+      SELECT u.id, ?, COALESCE((SELECT streak + 1 FROM attendance WHERE user_id = u.id AND date = ?), 1), ?
+      FROM users u WHERE u.id = ? AND u.role = 'player' AND u.active = 1
+      AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?`)
+      .bind(today, yesterday, now.toISOString(), user.id, dayStart, dayEnd),
+    env.DB.prepare(`INSERT OR IGNORE INTO ledger
+      (id, user_id, currency, amount, reason, reference, created_at)
+      SELECT ?, user_id, 'gold', CASE WHEN streak % ? = 0 THEN ? ELSE ? END, '출석 체크', ?, ?
+      FROM attendance WHERE user_id = ? AND date = ? AND changes() = 1`)
+      .bind(crypto.randomUUID(), ATTENDANCE_RULES.cycleLength, ATTENDANCE_RULES.cycleGold, ATTENDANCE_RULES.dailyGold,
+        `attendance:${today}:${user.id}`, now.toISOString(), user.id, today),
+    env.DB.prepare("SELECT unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ? AS dayOpen")
+      .bind(dayStart, dayEnd),
+  ]);
+  // A claim queued across midnight must not backfill yesterday after a newer
+  // day's streak was computed. Retrying uses the new server day instead.
+  if (writes[0]!.meta.changes === 0 && !(writes[2]!.results[0] as { dayOpen: number }).dayOpen) {
+    throw new HttpError(409, 'DAY_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침하고 출석해 주세요.');
+  }
+  const attendance = await readAttendance(env.DB, user, now);
+  if (!attendance.claimed) throw new HttpError(403, 'CANNOT_ATTEND', '플레이어만 출석할 수 있어요.');
+  return json({ attendance, user: await publicUser(env.DB, user, now), awarded: writes[1]!.meta.changes === 1 });
+}
+
+async function updateCharacter(request: Request, env: Env, user: UserRow, now: Date): Promise<Response> {
+  const input = await body(request);
+  if (!isArtKey(input.character) || (input.migrate !== undefined && typeof input.migrate !== 'boolean')) {
+    throw new HttpError(400, 'INVALID_CHARACTER', '사용할 캐릭터를 확인해 주세요.');
+  }
+  if (input.migrate === true && input.expectedUserId !== user.id) {
+    throw new HttpError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
+  }
+  // A stale device's one-time import may only fill an unset choice. Explicit
+  // selections may replace it, and multiple players may choose the same art.
+  const updated = await env.DB.prepare(`UPDATE users SET character = ?
+    WHERE id = ? AND active = 1 AND (? = 0 OR character IS NULL) RETURNING *`)
+    .bind(input.character, user.id, input.migrate === true ? 1 : 0).first<UserRow>();
+  const current = updated ?? await env.DB.prepare('SELECT * FROM users WHERE id = ? AND active = 1').bind(user.id).first<UserRow>();
+  if (!current) throw new HttpError(401, 'UNAUTHENTICATED', '다시 로그인해 주세요.');
+  return json({ user: await publicUser(env.DB, current, now) });
+}
+
 async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapResponse> {
   // Complete payments before reading balances and weekly rankings in parallel.
   await settlePublishedRounds(env.DB, now);
-  const [viewer, players, games, ledger, dailyScores] = await Promise.all([
+  const [viewer, players, games, ledger, dailyScores, attendance] = await Promise.all([
     publicUser(env.DB, user, now),
-    env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Player>(),
+    env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, u.character, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Omit<Player, 'character'> & { character: ArtKey | null }>(),
     Promise.all(GAME_IDS.map(id => readGame(env.DB, user, id, now))),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
     weeklyDailyScores(env.DB, user.id, now),
+    readAttendance(env.DB, user, now),
   ]);
-  return { user: viewer, players: players.results, games, ledger: ledger.results, dailyScores, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+  return { user: viewer, players: players.results.map(player => ({ ...player, character: player.character ?? defaultCharacter(player.username) })),
+    games, ledger: ledger.results, dailyScores, attendance, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId, action: string, now: Date): Promise<Response> {
   const input = await body(request);
@@ -281,6 +356,15 @@ async function api(request: Request, env: Env): Promise<Response> {
   const user = await requireUser(request, env, now.getTime());
   if (url.pathname === '/api/auth/me' && request.method === 'GET') return json({ user: await publicUser(env.DB, user, now) });
   if (url.pathname === '/api/bootstrap' && request.method === 'GET') return json(await bootstrap(env, user, now));
+  if (url.pathname === '/api/me/attendance') {
+    if (request.method === 'GET') return json({ attendance: await readAttendance(env.DB, user, now, url.searchParams.get('month') ?? undefined) });
+    if (request.method === 'POST') return claimAttendance(request, env, user, now);
+    throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+  }
+  if (url.pathname === '/api/me/character') {
+    if (request.method === 'PUT') return updateCharacter(request, env, user, now);
+    throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+  }
   const gameReadMatch = /^\/api\/games\/([^/]+)(?:\/(history))?$/.exec(url.pathname);
   if (gameReadMatch && isGameId(gameReadMatch[1]!) && request.method === 'GET') {
     await settlePublishedRounds(env.DB, now);

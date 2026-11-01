@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   BootstrapResponse,
+  AttendanceState,
   GameId,
   User,
 } from "../shared/types";
 import { ApiFailure, api } from "./api";
 import { anim } from "./motion";
-import { CharacterSprite, TabBar, tabs } from "./components/UI";
+import { CharacterProvider, CharacterSprite, TabBar, tabs, readLegacyCharacter, clearLegacyCharacter, choosePreviewCharacter } from "./components/UI";
+import { AttendanceProvider, clearLegacyAttendance, usePreviewAttendance } from "./attendance";
+import type { ArtKey } from "../shared/characters";
 import { PredictionGame } from "./components/PredictionGame";
 import { PreviewGames } from "./components/PreviewGames";
 import {
@@ -48,6 +51,7 @@ const previewUser: User = {
   role: "player",
   gold: previewGold,
   weeklyScore: previewScores.yeseo,
+  character: null,
 };
 const gameIds: GameId[] = ["wake", "offwork", "luck"];
 function previewHome(): HomeData {
@@ -266,12 +270,15 @@ export default function App() {
   const [bootError, setBootError] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
   const demo = route.startsWith("/preview");
+  const previewAttendance = usePreviewAttendance(demo);
   // A refresh may commit only while its generation is current. Mutations
   // invalidate older reads and pause polling until their state is applied.
   const requestGeneration = useRef(0);
   const pendingMutations = useRef(0);
   const mutationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const serverClockOffset = useRef(0);
+  const activeUserId = useRef<string | null>(null);
+  const characterImports = useRef(new Set<string>());
   const refresh = useCallback(async () => {
     if (pendingMutations.current) return null;
     const generation = ++requestGeneration.current;
@@ -280,12 +287,15 @@ export default function App() {
       const next = await api.bootstrap();
       if (!current()) return null;
       serverClockOffset.current = Date.parse(next.serverTime) - Date.now();
+      activeUserId.current = next.user.id;
+      clearLegacyAttendance(next.user.username);
       setData(next);
       setBootError("");
       return next;
     } catch (e) {
       if (!current()) return null;
       if (e instanceof ApiFailure && e.status === 401) {
+        activeUserId.current = null;
         setData(null);
         setBootError("");
       } else {
@@ -355,6 +365,7 @@ export default function App() {
         setBootError("");
       } catch (e) {
         if (e instanceof ApiFailure && e.status === 401) {
+          activeUserId.current = null;
           setData(null);
           setBootError("");
           navigate("/login");
@@ -370,11 +381,49 @@ export default function App() {
   }
   const applyBootstrap = (next: BootstrapResponse) => {
     serverClockOffset.current = Date.parse(next.serverTime) - Date.now();
+    activeUserId.current = next.user.id;
+    clearLegacyAttendance(next.user.username);
     setData(next);
   };
+  useEffect(() => {
+    if (demo || !data) return;
+    const { id, username, character } = data.user;
+    const legacy = readLegacyCharacter(username);
+    if (character !== null || !legacy) { clearLegacyCharacter(username); return; }
+    if (characterImports.current.has(id)) return;
+    characterImports.current.add(id);
+    // Serialize migration with saves/logout. A later login must never import
+    // the previous user's local choice into the new session.
+    void mutate(async () => {
+      if (activeUserId.current !== id) return null;
+      await api.character(legacy, true, id);
+      clearLegacyCharacter(username);
+      return api.bootstrap();
+    }, next => { if (next && activeUserId.current === id) applyBootstrap(next); })
+      .catch(() => { /* Keep the legacy key on failure and retry after a refresh. */ })
+      .finally(() => characterImports.current.delete(id));
+  }, [data, demo]);
+  const claimAttendance = async () => {
+    let result!: { attendance: AttendanceState; awarded: boolean };
+    await mutate(async () => {
+      const claim = await api.claimAttendance();
+      result = { attendance: claim.attendance, awarded: claim.awarded };
+      return api.bootstrap();
+    }, applyBootstrap);
+    return result;
+  };
+  const loadAttendanceMonth = async (month: string) => (await api.attendance(month)).attendance;
+  const characterMap: Record<string, ArtKey | null> = {};
+  if (data) {
+    for (const player of data.players) characterMap[player.username] = player.character;
+    characterMap[data.user.username] = data.user.character;
+  }
+  const attendanceContext = !demo && data ? {
+    attendance: data.attendance, claim: claimAttendance, loadMonth: loadAttendanceMonth, preview: false,
+  } : previewAttendance;
   const signedIn = !demo && !loading && data !== null;
-  const view = demo ? previewHome() : data ? homeData(data) : null;
-  const me = demo ? previewUser : data?.user;
+  const view = demo ? { ...previewHome(), gold: previewGold + previewAttendance.goldBonus } : data ? homeData(data) : null;
+  const me = demo ? { ...previewUser, gold: previewGold + previewAttendance.goldBonus } : data?.user;
   const tab = tabs.find((t) => t.path === path)?.path;
   let content: React.ReactNode;
   if (!demo && loading) content = <Skeleton />;
@@ -390,9 +439,7 @@ export default function App() {
                 return api.bootstrap();
               },
               (next) => {
-                serverClockOffset.current =
-                  Date.parse(next.serverTime) - Date.now();
-                setData(next);
+                applyBootstrap(next);
                 navigate("/");
               },
             )
@@ -426,7 +473,7 @@ export default function App() {
       <PredictionGame
         key={`demo-${gameId}`}
         game={previewGame(gameId)}
-        user={{ ...previewUser, username: viewer, displayName: viewer }}
+        user={{ ...me, username: viewer, displayName: viewer }}
         serverTime={new Date(`${previewGame(gameId).roundDate}T09:12:36+09:00`).toISOString()}
         demo
         onBack={home}
@@ -503,14 +550,23 @@ export default function App() {
         attendanceKey={view.attendanceKey}
         gold={me.gold}
         weeklyScore={me.weeklyScore}
-        ledger={demo ? previewLedger() : (data?.ledger ?? [])}
+        ledger={demo ? previewLedger(previewAttendance.attendance) : (data?.ledger ?? [])}
         others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
         onBack={home}
+        onCharacterChange={async (character) => {
+          if (demo) { choosePreviewCharacter(view.username, character); return; }
+          await mutate(async () => {
+            await api.character(character);
+            clearLegacyCharacter(view.username);
+            return api.bootstrap();
+          }, applyBootstrap);
+        }}
         onLogin={demo ? () => navigate("/login") : undefined}
         onLogout={
           signedIn
             ? () =>
                 mutate(api.logout, () => {
+                  activeUserId.current = null;
                   setData(null);
                   navigate("/login");
                 })
@@ -536,7 +592,8 @@ export default function App() {
   const screenRef = useScreenTransition(path);
   useStatusBarColor(screenRef, `${path}|${loading}|${!!data}`);
   return (
-    <>
+    <CharacterProvider characters={characterMap} preview={demo}>
+      <AttendanceProvider value={attendanceContext}>
       <aside className="desktop-brand" aria-hidden="true">
         <span className="wordmark">
           예굼방 아케이드<span>3</span>
@@ -569,6 +626,7 @@ export default function App() {
         </div>
         {showTabs && <TabBar active={tab ?? "/"} onNavigate={go} />}
       </main>
-    </>
+      </AttendanceProvider>
+    </CharacterProvider>
   );
 }

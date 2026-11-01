@@ -8,6 +8,13 @@ export const GAME_RULES = {
 } as const satisfies Record<GameId, { title: string; author: string; deadline: string; revealTime?: string }>;
 
 export const PREDICTION_REWARDS = { participationGold: 100, firstGold: 100 } as const;
+export const ATTENDANCE_RULES = { cycleLength: 7, dailyGold: 100, cycleGold: 500 } as const;
+export function attendanceCycleDay(streak: number): number {
+  return ((streak - 1) % ATTENDANCE_RULES.cycleLength) + 1;
+}
+export function attendanceReward(streak: number): number {
+  return streak % ATTENDANCE_RULES.cycleLength === 0 ? ATTENDANCE_RULES.cycleGold : ATTENDANCE_RULES.dailyGold;
+}
 export const SCORE_TABLES = {
   wake: [
     { maxDifference: 0, points: 30 }, { maxDifference: 60, points: 25 },

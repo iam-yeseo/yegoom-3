@@ -8,9 +8,7 @@ import {
   art,
   artKeys,
   artSrc,
-  characterOf,
-  chooseCharacter,
-  useCharacter,
+  useCharacterLookup,
   type ArtKey,
 } from "../components/UI";
 import { KST, weekdayNames } from "../sample";
@@ -59,6 +57,7 @@ export function Profile({
   onBack,
   onLogin,
   onLogout,
+  onCharacterChange,
 }: {
   username: string;
   displayName: string;
@@ -71,26 +70,38 @@ export function Profile({
   onBack: () => void;
   onLogin?: () => void;
   onLogout?: () => Promise<void>;
+  onCharacterChange: (character: ArtKey) => Promise<void>;
 }) {
-  const mine = useCharacter(username);
+  const characterOf = useCharacterLookup();
+  const mine = characterOf(username);
   const { monthCount } = useAttendance(attendanceKey);
   const [currency, setCurrency] = useState<"gold" | "score">("gold");
   const stage = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const [characterBusy, setCharacterBusy] = useState(false);
+  const [characterError, setCharacterError] = useState("");
+  const selecting = useRef(false);
   // Swap: the old character flattens away, then the new one springs up.
-  const pick = (key: ArtKey) => {
-    if (key === mine) return;
+  const pick = async (key: ArtKey) => {
+    if (key === mine || selecting.current) return;
+    selecting.current = true;
+    setCharacterBusy(true);
+    setCharacterError("");
     const out = anim(stage.current?.querySelector(".profile-character"), [
       { scale: "1 1", opacity: 1 },
       { scale: "1.25 .2", opacity: 0 },
     ], { dur: 200, ease: "inOut" });
-    const swap = () => {
+    try {
+      if (out && !reduced()) await out.finished.catch(() => undefined);
+      await onCharacterChange(key);
+    } catch (e) {
+      setCharacterError(e instanceof Error ? e.message : "캐릭터를 저장하지 못했어요. 다시 골라 주세요.");
+    } finally {
       out?.cancel();
-      chooseCharacter(username, key);
-    };
-    if (out && !reduced()) out.finished.then(swap, swap);
-    else swap();
+      selecting.current = false;
+      setCharacterBusy(false);
+    }
   };
   useOnChange(mine, () => {
     anim(stage.current?.querySelector(".profile-character"), [
@@ -107,7 +118,11 @@ export function Profile({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const owners = new Map(others.map((name) => [characterOf(name), name]));
+  const owners = new Map<ArtKey, string[]>();
+  for (const name of others) {
+    const key = characterOf(name);
+    owners.set(key, [...(owners.get(key) ?? []), name]);
+  }
   const rows = ledger.filter((entry) => entry.currency === currency);
   let lastDate = "";
   return (
@@ -139,7 +154,7 @@ export function Profile({
         </div>
       </div>
       <div className="screen-body stack">
-        <section className="card character-picker">
+        <section className="card character-picker" aria-busy={characterBusy}>
           <h2>내 캐릭터</h2>
           <div className="character-grid" ref={grid}>
             {artKeys.map((key) => (
@@ -147,11 +162,12 @@ export function Profile({
                 key={key}
                 style={{ background: art[key].tint }}
                 aria-pressed={key === mine}
-                aria-label={`${art[key].name}${owners.has(key) ? `, ${owners.get(key)}의 캐릭터` : ""}`}
-                onClick={() => pick(key)}
+                aria-label={`${art[key].name}${owners.has(key) ? `, ${owners.get(key)!.join(", ")}의 캐릭터` : ""}`}
+                disabled={characterBusy || busy}
+                onClick={() => void pick(key)}
               >
                 <img className="character" src={artSrc(key)} alt="" />
-                {owners.has(key) && <span className="owner">{owners.get(key)}</span>}
+                {owners.has(key) && <span className="owner">{owners.get(key)!.join(", ")}</span>}
                 {key === mine && (
                   <span className="check" aria-hidden="true">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
@@ -162,6 +178,8 @@ export function Profile({
               </button>
             ))}
           </div>
+          {characterBusy && <p className="subtle-note" role="status">캐릭터를 저장하는 중…</p>}
+          {characterError && <p className="form-message error" role="alert">{characterError}</p>}
         </section>
         <section className="card history">
           <Segmented
@@ -218,7 +236,7 @@ export function Profile({
         {onLogout && (
           <button
             className="text-button logout-button"
-            disabled={busy}
+            disabled={busy || characterBusy}
             onClick={async () => {
               setBusy(true);
               try {

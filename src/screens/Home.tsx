@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { GAME_RULES } from "../../shared/balance";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { ATTENDANCE_RULES, GAME_RULES } from "../../shared/balance";
 import type { GameState } from "../../shared/types";
-import { claimToday, useAttendance } from "../attendance";
+import { useAttendance } from "../attendance";
 import {
   Avatar,
   CharacterSprite,
@@ -20,7 +20,6 @@ import {
   kstDateText,
   kstParts,
   marketOpen,
-  weekdayNames,
 } from "../sample";
 import {
   anim,
@@ -39,7 +38,7 @@ export interface HomePlayer {
 export interface HomeData {
   username: string;
   displayName: string;
-  /** Key for device-local attendance claims. */
+  /** Legacy identity key; attendance itself is provided by the session context. */
   attendanceKey: string;
   gold: number;
   players: HomePlayer[];
@@ -290,100 +289,103 @@ function settleText() {
   return days ? `이번 주 종료까지 ${days}일` : "오늘 주간 집계 종료";
 }
 
-function AttendanceCard({
-  data,
-  go,
-  onClaimed,
-}: {
+function AttendanceCard({ data, go, onClaimed }: {
   data: HomeData;
   go: Go;
-  onClaimed: () => void;
+  onClaimed: () => Promise<void>;
 }) {
-  const { days, claimed, streak } = useAttendance(data.attendanceKey);
+  const { today, claimed, cycleDay, reward, canClaim, claim } = useAttendance(data.attendanceKey);
+  const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const pending = useRef(false);
+  const mounted = useRef(true);
   const card = useRef<HTMLElement>(null);
-  const claim = (button: HTMLElement) => {
-    const pill = document.querySelector(".room-top .gold");
-    coinFly(button, pill, () => {
-      claimToday(data.attendanceKey);
-      onClaimed();
-      toast(`+${BALANCE.attendanceGold}G 받았어요`);
-    });
-  };
+  const content = useRef<HTMLDivElement>(null);
+  const contentId = useId();
+  const collapsed = claimed && !expanded && !busy && !error;
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => { setExpanded(false); setError(""); }, [today]);
+  useEffect(() => { if (claimed && !busy) setError(""); }, [claimed, busy]);
+  useEffect(() => {
+    if (!collapsed) anim(content.current, [{ opacity: 0 }, { opacity: 1 }], { dur: 180, fill: "none" });
+  }, [collapsed]);
   useOnChange(claimed, () => {
-    if (!claimed) return;
-    anim(card.current?.querySelector(".week-day.today .node"), [
+    if (claimed) anim(card.current?.querySelector(".week-day.today .node"), [
       { scale: "1.8", rotate: "-20deg", opacity: 0 },
       { scale: "1", rotate: "0deg", opacity: 1 },
     ], { dur: 420, ease: "spring" });
   });
-  const t = kstParts();
-  const monday = new Date(Date.now() - t.weekday * 86_400_000);
-  const week = weekdayNames.map((name, i) => {
-    const date = new Date(monday.getTime() + i * 86_400_000);
-    const key = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul" }).format(date);
-    const today = i === t.weekday;
-    return {
-      name: today ? "오늘" : name,
-      today,
-      state: days.has(key) ? "claimed" : today ? "avail" : "locked",
-      bonus: i === 6,
-    };
-  });
-  const reached = week.filter((d) => d.state === "claimed").length;
-  return (
-    <section className="card attendance-card" ref={card}>
+  async function receive(button: HTMLElement) {
+    if (pending.current || !canClaim) return;
+    pending.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await claim();
+      if (!mounted.current) return;
+      if (result.awarded) {
+        await new Promise<void>(resolve => coinFly(button, document.querySelector(".room-top .gold"), resolve));
+        if (!mounted.current) return;
+        toast(`+${result.attendance.reward}G 받았어요`);
+        await onClaimed();
+      } else toast("오늘 출석은 이미 완료했어요");
+      if (mounted.current) setExpanded(false);
+    } catch (e) {
+      if (mounted.current) setError(e instanceof Error ? e.message : "출석하지 못했어요. 다시 시도해 주세요.");
+    } finally {
+      pending.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  }
+  const completed = claimed ? cycleDay : cycleDay - 1;
+  const week = Array.from({ length: ATTENDANCE_RULES.cycleLength }, (_, i) => ({
+    day: i + 1,
+    today: i + 1 === cycleDay,
+    state: i < completed ? "claimed" : i + 1 === cycleDay && canClaim ? "avail" : "locked",
+    bonus: i + 1 === ATTENDANCE_RULES.cycleLength,
+  }));
+  return <section className={`card attendance-card ${collapsed ? "collapsed" : ""}`} ref={card} aria-busy={busy}>
+    {claimed && !busy && <button className="attendance-summary" aria-expanded={!collapsed} aria-controls={contentId} onClick={() => setExpanded(value => !value)}>
+      <span>오늘 출석 완료 · {cycleDay}일째</span>
+      <span className={`attendance-chevron ${collapsed ? "" : "expanded"}`} aria-hidden="true"><Chevron direction="right" size={18} /></span>
+    </button>}
+    <div id={contentId} ref={content} hidden={collapsed} className="attendance-content">
       <div className="attendance-head">
         <button className="attendance-title" onClick={() => go("/attendance")}>
           <strong>출석체크</strong>
-          <small>
-            {claimed
-              ? `${streak}일 연속 · +${BALANCE.attendanceGold}G 받음`
-              : `${streak + 1}일째 · +${BALANCE.attendanceGold}G`}
-          </small>
+          <small>{cycleDay}일째 · +{reward}G{claimed ? " 받음" : ""}</small>
         </button>
-        {claimed ? (
-          <span className="claim-button done">받음</span>
-        ) : (
-          <button className="claim-button" onClick={(e) => claim(e.currentTarget)}>
-            <Coin size={24} />
-            받기
-          </button>
-        )}
+        {claimed && !busy ? <span className="claim-button done">받음</span> : canClaim || busy ?
+          <button className="claim-button" disabled={busy} onClick={e => void receive(e.currentTarget)}>
+            <Coin size={24} />{busy ? "받는 중…" : error ? "다시 받기" : "받기"}
+          </button> : <span className="subtle-note">참여 불가</span>}
       </div>
-      <div className="week-path">
+      <div className="week-path" aria-label={`${ATTENDANCE_RULES.cycleLength}일 출석 진행`}>
         <span className="week-track" />
-        <span
-          className="week-fill"
-          style={{ width: `calc((100% - 36px) * ${Math.max(reached - 1, 0) / 6})` }}
-        />
-        {week.map((day) => (
-          <div key={day.name} className={`week-day ${day.today ? "today" : ""}`}>
-            <span className={`node ${day.state}`}>
-              {day.state === "claimed" ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" aria-label="출석함">
-                  <path d="M5 12.5l4.5 4.5L19 7.5" />
-                </svg>
-              ) : day.state === "avail" ? (
-                "G"
-              ) : day.bonus ? (
-                "×2"
-              ) : (
-                ""
-              )}
-            </span>
-            <small>{day.name}</small>
-          </div>
-        ))}
+        <span className="week-fill" style={{ width: `calc((100% - 36px) * ${Math.max(completed - 1, 0) / (ATTENDANCE_RULES.cycleLength - 1)})` }} />
+        {week.map(day => <div key={day.day} className={`week-day ${day.today ? "today" : ""}`}>
+          <span className={`node ${day.state}`} aria-label={`${day.day}일째 ${day.state === "claimed" ? "출석 완료" : day.state === "avail" ? "출석 가능" : "출석 전"}`}>
+            {day.state === "claimed" ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg> : day.state === "avail" ? "G" : day.day}
+          </span>
+          <small>{day.day}일째</small>
+          {day.bonus && <b className="cycle-bonus">{ATTENDANCE_RULES.cycleGold}G</b>}
+        </div>)}
       </div>
-    </section>
-  );
+      {error && <p className="form-message error" role="alert">{error}</p>}
+    </div>
+  </section>;
 }
 
-function Room({ data, gold, evening, jumpRequest }: {
+function Room({ data, gold, evening, jumpRequest, onJumpDone }: {
   data: HomeData;
   gold: number;
   evening: boolean;
   jumpRequest: number;
+  onJumpDone: () => void;
 }) {
   const shown = useCountUp(gold);
   const chosen = useCharacter(data.username);
@@ -391,14 +393,22 @@ function Room({ data, gold, evening, jumpRequest }: {
   const playJump = useCallback(() => {
     setOneShot((state) => state === "jump" ? state : "jump");
   }, []);
-  const finish = useCallback(() => setOneShot(null), []);
+  const finish = useCallback(() => {
+    if (oneShot === "jump") onJumpDone();
+    setOneShot(null);
+  }, [oneShot, onJumpDone]);
   useEffect(() => {
     void preloadSprites(chosen, ["greet", "jump", "sleepy"]);
+    // A server character refresh can interrupt a claim celebration. Release
+    // its completion promise when this effect cancels the active jump.
+    if (oneShot === "jump") onJumpDone();
     setOneShot(null);
     if (evening) return;
     const timer = window.setTimeout(() => setOneShot((state) => state ?? "greet"), 300);
     return () => window.clearTimeout(timer);
-  }, [chosen, evening]);
+    // Reset only when the character or time-of-day scene changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosen, evening, onJumpDone]);
   useOnChange(jumpRequest, playJump);
   return (
     <div className={`room ${evening ? "evening" : ""}`}>
@@ -454,9 +464,18 @@ function Room({ data, gold, evening, jumpRequest }: {
 
 export function Home({ data, go }: { data: HomeData; go: Go }) {
   const evening = isEvening();
-  // The preview shows the attendance gold; real claims are not credited yet.
-  const [bonus, setBonus] = useState(0);
   const [jumpRequest, setJumpRequest] = useState(0);
+  const jumpFinished = useRef<(() => void) | null>(null);
+  const finishJump = useCallback(() => {
+    jumpFinished.current?.();
+    jumpFinished.current = null;
+  }, []);
+  useEffect(() => finishJump, [finishJump]);
+  const celebrateClaim = () => new Promise<void>(resolve => {
+    finishJump();
+    jumpFinished.current = resolve;
+    setJumpRequest(request => request + 1);
+  });
   const table = standings(data.players);
   const me = table.find((p) => p.username === data.username);
   const top = table[0];
@@ -471,7 +490,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
       : `1위 ${top.displayName}까지 ${top.weeklyScore - me.weeklyScore}점`;
   return (
     <div className={`home ${evening ? "evening" : ""}`}>
-      <Room data={data} gold={data.gold + bonus} evening={evening} jumpRequest={jumpRequest} />
+      <Room data={data} gold={data.gold} evening={evening} jumpRequest={jumpRequest} onJumpDone={finishJump} />
       <div className="home-score">
         <div className="home-score-row">
           <div>
@@ -494,10 +513,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
         <AttendanceCard
           data={data}
           go={go}
-          onClaimed={() => {
-            if (data.attendanceKey === "preview") setBonus(BALANCE.attendanceGold);
-            setJumpRequest((request) => request + 1);
-          }}
+          onClaimed={celebrateClaim}
         />
         <TodayGames data={data} go={go} />
         <SoloGames go={go} />
