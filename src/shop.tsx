@@ -49,7 +49,7 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   previewAttendanceDate: string;
   transact: <T>(action: () => Promise<T>) => Promise<T>;
   onPreviewChange: (state: ShopState, ledger: LedgerEntry[], score: number) => void;
-  onServerRead: (state: ShopState) => void;
+  onServerRead: (state: ShopResponse) => void;
 }) {
   const storageKey = `yegoom3:shop:pending:${accountKey}`;
   const previewEngine = useRef<ReturnType<typeof createShopPreview> | null>(null);

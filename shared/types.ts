@@ -80,6 +80,7 @@ export interface BootstrapResponse {
   dailyScores: number[];
   attendance: AttendanceState;
   inventory: Inventory;
+  kuji: KujiSummary;
   catchmind: CatchmindSummary;
   claw: ClawSummary;
   launchGift: LaunchGiftState;
@@ -123,6 +124,8 @@ export type ShopPayment = 'gold' | 'ticket';
 export interface ShopState { gold: number; inventory: Inventory; canPurchase: boolean; serverTime: string }
 export type KujiGrade = typeof KUJI_RULES.grades[number]['grade'];
 export interface KujiCell { position: number; grade: KujiGrade | null; buyerId: string | null }
+/** Read-only card summary. No board yet: null/100; sold out awaiting creation: id/0. */
+export interface KujiSummary { boardId: number | null; remaining: number }
 export interface KujiState {
   boardId: number;
   cells: KujiCell[];

@@ -1,5 +1,5 @@
 import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
-import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket } from '../shared/types';
+import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket } from '../shared/types';
 import { kstDate, kstTimestamp, weekStart } from './rules';
 import { announcePrize } from './announcements';
 
@@ -91,6 +91,14 @@ function grantGold(db: D1Database, attempt: string, amount: number, reason: stri
   return db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
     SELECT ?, user_id, 'gold', ?, ?, ?, created_at FROM shop_purchases WHERE id = ?`)
     .bind(crypto.randomUUID(), amount, reason, reference, attempt);
+}
+
+/** One snapshot, bounded by the current board's indexed claims; never creates a board. */
+export async function readKujiSummary(db: D1Database): Promise<KujiSummary> {
+  const board = await db.prepare(`SELECT b.id AS boardId,
+    (SELECT COUNT(*) FROM kuji_claims WHERE board_id = b.id) AS sold
+    FROM kuji_boards b ORDER BY b.id DESC LIMIT 1`).first<{ boardId: number; sold: number }>();
+  return { boardId: board?.boardId ?? null, remaining: KUJI_RULES.size - (board?.sold ?? 0) };
 }
 
 async function ensureBoard(db: D1Database, now: Date): Promise<BoardRow> {

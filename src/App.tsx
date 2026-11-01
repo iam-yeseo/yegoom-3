@@ -6,6 +6,7 @@ import type {
   User,
   LedgerEntry,
   ShopState,
+  KujiResponse,
   CatchmindSummary,
   ClawSummary,
   LaunchGiftResponse, AuthResponse, LuckPhotoResponse,
@@ -83,6 +84,7 @@ function previewHome(): HomeData {
       weeklyScore,
     })),
     games: gameIds.map((id) => previewGame(id)),
+    kuji: null,
     catchmind: emptyCatchmind,
     claw: previewClawSummary(),
   };
@@ -95,6 +97,7 @@ function homeData(data: BootstrapResponse): HomeData {
     gold: data.user.gold,
     players: data.players,
     games: data.games,
+    kuji: data.kuji,
     catchmind: data.catchmind,
     claw: data.claw,
   };
@@ -493,8 +496,12 @@ export default function App() {
     if (demo) return action();
     let receipt!: T;
     await mutate(async () => { receipt = await action(); return receipt; }, (result) => {
-      const balances = result as T & ShopState;
-      setData(current => current ? { ...current, user: { ...current.user, gold: balances.gold }, inventory: balances.inventory } : current);
+      const balances = result as T & ShopState & Partial<Pick<KujiResponse, "kuji">>;
+      setData(current => current ? { ...current, user: { ...current.user, gold: balances.gold }, inventory: balances.inventory,
+        // Keep the card current even if the follow-up bootstrap is unavailable.
+        // A saved receipt can refer to an older board, so never move backwards.
+        kuji: balances.kuji && balances.kuji.boardId >= (current.kuji.boardId ?? 0)
+          ? { boardId: balances.kuji.boardId, remaining: balances.kuji.remaining } : current.kuji } : current);
     });
     // A successful purchase remains successful if this follow-up read fails.
     // The receipt already carries current funds; refresh reports its own error.
@@ -739,7 +746,8 @@ export default function App() {
         canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
       transact={transactShop}
       onServerRead={state => {
-        if (data && (state.gold !== data.user.gold || state.inventory.lottoTickets !== data.inventory.lottoTickets || state.inventory.speettoTickets !== data.inventory.speettoTickets)) void refresh();
+        if (data && (state.gold !== data.user.gold || state.inventory.lottoTickets !== data.inventory.lottoTickets || state.inventory.speettoTickets !== data.inventory.speettoTickets
+          || "kuji" in state && (state.kuji.boardId !== data.kuji.boardId || state.kuji.remaining !== data.kuji.remaining))) void refresh();
       }}
       onPreviewChange={(state, ledger, score) => setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold, ledger: [...ledger], score })}>
     <LaunchGiftProvider preview={demo} role={me?.role} state={data?.launchGift ?? { available: false, claimed: false }}

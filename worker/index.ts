@@ -3,7 +3,7 @@ import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, CATCHMIND_RULES
 import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
 import { DUMMY_HASH, hashToken, randomToken, verifyPassword } from './crypto';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
-import { readInventory, settleDueLotto, ShopError, shopRoute } from './shop';
+import { readInventory, readKujiSummary, settleDueLotto, ShopError, shopRoute } from './shop';
 import { CatchmindError, catchmindRoute, readCatchmindImage, readCatchmindSummary } from './catchmind';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
@@ -286,7 +286,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   // Complete payments before reading balances and weekly rankings in parallel.
   await settlePublishedRounds(env.DB, now);
   await settleDueLotto(env.DB, now);
-  const [viewer, players, games, ledger, dailyScores, attendance, inventory, catchmind, claw, launchGift, announcements] = await Promise.all([
+  const [viewer, players, games, ledger, dailyScores, attendance, inventory, kuji, catchmind, claw, launchGift, announcements] = await Promise.all([
     publicUser(env.DB, user, now),
     env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, u.character, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photoVersion, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Omit<Player, 'character'> & { character: ArtKey | null }>(),
     Promise.all(GAME_IDS.map(id => readGame(env.DB, user, id, now))),
@@ -294,13 +294,14 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     weeklyDailyScores(env.DB, user.id, now),
     readAttendance(env.DB, user, now),
     readInventory(env.DB, user.id),
+    readKujiSummary(env.DB),
     readCatchmindSummary(env.DB),
     getClawSummary(env.DB, user, now.getTime()),
     getLaunchGiftState(env.DB, user, now),
     readAnnouncements(env.DB, user.id, now),
   ]);
   return { user: viewer, players: players.results.map(player => ({ ...player, character: player.character ?? defaultCharacter(player.username) })),
-    games, ledger: ledger.results, dailyScores, attendance, inventory, catchmind, claw, launchGift, announcements, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    games, ledger: ledger.results, dailyScores, attendance, inventory, kuji, catchmind, claw, launchGift, announcements, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId, action: string, now: Date): Promise<Response> {
   const input = await body(request);
