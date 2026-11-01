@@ -105,6 +105,8 @@ npm run deploy:check             # 원격 배포 없이 Worker 패키징 검사
 
 브라우저 테스트는 실행마다 별도의 `.test-build/e2e-*` D1과 8788 포트를 사용하며 개발 DB를 수정하지 않습니다. 테스트 번들에서만 서버·SQL 시각을 고정해 마감 전 예측과 공개를 재현하며, 운영 코드에는 테스트용 시각 설정이나 데이터 주입 API를 두지 않습니다. 시스템 Chromium을 쓰려면 `CHROMIUM_PATH=/usr/bin/chromium npm run test:e2e`로 실행합니다. GitHub Actions에서도 타입·API·브라우저·빌드를 확인하며 자동 배포는 하지 않습니다.
 
+Phase 4 검증: `npm run check`의 202개 테스트(Worker·D1 통합 121개 포함)와 `npm run test:e2e`의 27개가 통과했습니다. 실제 로그인·미리보기의 그리기·컬러 피커·힌트·결과를 390px·560px로 확인한 16장은 [스크린샷 폴더](docs/screenshots)의 `v2-p4-*.png`에 있습니다.
+
 ## 코드 안내
 
 | 경로 | 역할 |

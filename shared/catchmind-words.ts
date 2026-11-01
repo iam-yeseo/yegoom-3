@@ -402,4 +402,3 @@ export const CATCHMIND_WORDS = [
   "최후의 만찬",
   "진주 귀걸이를 한 소녀"
 ] as const;
-
