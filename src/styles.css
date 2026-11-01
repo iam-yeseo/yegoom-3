@@ -651,10 +651,10 @@ button svg {
 .time-wheel {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
   align-items: center;
-  height: 200px;
+  height: 224px;
 }
 .wheel-selection {
   position: absolute;
@@ -708,7 +708,7 @@ button svg {
 .wheel-colon {
   position: absolute;
   top: 80px;
-  left: calc(50% - 12px);
+  left: calc(33.333% - 14px);
   width: 24px;
   height: 40px;
   display: flex;
@@ -1114,3 +1114,32 @@ button svg {
     scroll-behavior: auto !important;
   }
 }
+
+/* Phase 1 prediction controls reuse the app palette and card tokens. */
+.wheel-colon.second { left: calc(66.666% - 10px); }
+.wheel-unit { text-align: center; color: var(--muted); font-size: 13px; }
+.author-date { margin: 8px 20px 0; font-size: 13px; color: var(--muted); }
+.wake-author { display: flex; flex-direction: column; gap: 16px; padding: 24px 20px; text-align: center; }
+.wake-author h2, .prediction-history h2 { font-size: 17px; }
+.wake-clock { font-size: 40px; font-variant-numeric: tabular-nums; }
+.wake-confirmation { padding: 26px; width: min(400px, calc(100% - 32px)); border: 0; border-radius: 24px; color: var(--text); background: var(--cream); box-shadow: var(--card-shadow); }
+.wake-confirmation::backdrop { background: rgba(58, 51, 64, .4); }
+.wake-confirmation h2 { font-size: 20px; margin-bottom: 12px; }
+.wake-confirmation p { line-height: 1.7; margin-bottom: 20px; }
+.wake-confirmation .text-button { display: block; margin: 12px auto 0; }
+.prediction-history { display: flex; flex-direction: column; gap: 14px; padding-top: 24px; }
+.history-round { display: flex; flex-direction: column; gap: 10px; }
+.history-heading { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; padding: 0 4px; }
+.history-heading h3, .history-heading span { font-size: 13px; }
+.history-heading span { color: var(--muted); }
+.prediction-help { padding-top: 24px; padding-bottom: 32px; }
+.prediction-help details { padding: 18px; }
+.prediction-help summary { cursor: pointer; font-weight: 800; }
+.help-content { color: var(--muted); font-size: 13px; line-height: 1.8; }
+.help-content p { margin-top: 14px; }
+.help-content table { border-collapse: collapse; width: 100%; margin-top: 18px; color: var(--text); }
+.help-content caption { text-align: left; font-weight: 800; padding-bottom: 8px; }
+.help-content th, .help-content td { text-align: left; border-bottom: 1px solid #f3eee8; padding: 6px 0; }
+.result-guess { font-size: clamp(18px, 5vw, 24px); white-space: nowrap; }
+.result-name { min-width: 0; }
+.result-rewards { flex-wrap: wrap; }

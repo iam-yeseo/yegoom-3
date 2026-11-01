@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Avatar, CharacterSprite, Coin, Toolbar, preloadSprites, useCharacter } from "../components/UI";
-import { BALANCE, kstParts, weekdayNames } from "../sample";
+import { Avatar, CharacterSprite, Toolbar, preloadSprites, useCharacter } from "../components/UI";
+import { kstParts, weekdayNames } from "../sample";
 import { anim, confetti, dropIn, reduced, tween } from "../motion";
 import { standings, type HomePlayer } from "./Home";
 
@@ -19,7 +19,7 @@ function weekOfMonth(date = new Date()) {
   const t = kstParts(date);
   return `${t.month}월 ${Math.ceil(t.day / 7)}주차`;
 }
-/** Time until Sunday 24:00 KST, when the week settles. */
+/** Time until the next KST week starts. */
 function settleLeft(now: number) {
   const t = kstParts(new Date(now));
   const elapsed = (t.weekday * 24 + t.hour) * 60 + t.minute;
@@ -43,7 +43,7 @@ function CountFrom({ value, delay }: { value: number; delay: number }) {
   return <>{shown}</>;
 }
 /** Podium entrance: blocks rise 3rd → 2nd → 1st, characters drop onto them,
- * reward chips pop, daily bars grow, then confetti for 1st place. */
+ * daily bars grow, then confetti for 1st place. */
 function usePodiumEntrance(ref: { current: HTMLDivElement | null }) {
   useEffect(() => {
     const root = ref.current;
@@ -53,7 +53,6 @@ function usePodiumEntrance(ref: { current: HTMLDivElement | null }) {
     places.forEach((place) => {
       const delay = order(place) * 160;
       anim(place.querySelector(".podium-block"), [{ scale: "1 0" }, { scale: "1 1" }], { dur: 520, ease: "spring", delay });
-      anim(place.querySelector(".podium-reward"), [{ scale: ".4", opacity: 0 }, { scale: "1", opacity: 1 }], { dur: 420, ease: "spring", delay: delay + 900 });
     });
     root.parentElement?.querySelectorAll(".daily-bars i").forEach((bar, i) =>
       anim(bar, [{ scale: "1 0" }, { scale: "1 1" }], { dur: 520, ease: "spring", delay: 400 + i * 50 }),
@@ -92,6 +91,7 @@ export function Ranking({
   players,
   daily,
   lastWeek,
+  serverTime,
   onBack,
 }: {
   me: string;
@@ -100,17 +100,20 @@ export function Ranking({
   /** My points per weekday (Mon–Sun) this week. */
   daily: number[];
   lastWeek: { username: string; score: number }[] | null;
+  serverTime?: string;
   onBack: () => void;
 }) {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => serverTime ? Date.parse(serverTime) : Date.now());
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    const offset = serverTime ? Date.parse(serverTime) - Date.now() : 0;
+    setNow(Date.now() + offset);
+    const timer = window.setInterval(() => setNow(Date.now() + offset), 30_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [serverTime]);
   const table = standings(players);
   // Second place on the left, first in the middle, third on the right.
   const podium = [table[1], table[0], table[2]].filter(Boolean);
-  const today = kstParts().weekday;
+  const today = kstParts(new Date(now)).weekday;
   const max = Math.max(...daily, 1);
   const lastWeekDate = new Date(now - 7 * 86_400_000);
   const root = useRef<HTMLDivElement>(null);
@@ -121,7 +124,7 @@ export function Ranking({
         <Toolbar title="주간 랭킹" onBack={onBack} gold={gold} />
         <div className="ranking-week">
           <span>
-            {weekOfMonth()} · 정산까지 <b>{settleLeft(now)}</b>
+            {weekOfMonth(new Date(now))} · 이번 주 종료까지 <b>{settleLeft(now)}</b>
           </span>
         </div>
         <div className="podium">
@@ -144,10 +147,6 @@ export function Ranking({
                   <strong>
                     <CountFrom value={player.weeklyScore} delay={(3 - Math.min(player.rank, 3)) * 160 + 500} />
                   </strong>
-                  <span className="podium-reward">
-                    <Coin size={18} />
-                    {(BALANCE.weeklyRewards[player.rank - 1] ?? 0).toLocaleString("ko-KR")}
-                  </span>
                 </div>
               </div>
             );
@@ -196,7 +195,6 @@ export function Ranking({
                 <Avatar username={row.username} size={40} />
                 <strong>{row.username}</strong>
                 <b>{row.score}점</b>
-                <em>+{(BALANCE.weeklyRewards[i] ?? 0).toLocaleString("ko-KR")}G</em>
               </div>
             ))}
           </section>

@@ -1,15 +1,12 @@
-import type { GameId, GameResult, GameState, LedgerEntry } from "../shared/types";
+import { GAME_RULES, PREDICTION_REWARDS, predictionPoints } from "../shared/balance";
+import type { GameHistoryRound, GameId, GameResult, GameState, LedgerEntry } from "../shared/types";
 import type { ArtKey } from "./components/UI";
 
-// Provisional balance values taken from the Claude Design mock-ups. The
-// planning document leaves all of them open (docs/decisions.md); change them
-// here once they are decided. Nothing below is credited to the server ledger.
+// Unimplemented games remain preview-only; prediction rewards use the shared rules.
 export const BALANCE = {
   attendanceGold: 100,
-  weeklyRewards: [3000, 1800, 1000],
-  predictionPoints: [40, 20, 10],
-  participationGold: 100,
-  firstPlaceGold: 500,
+  participationGold: PREDICTION_REWARDS.participationGold,
+  firstPlaceGold: PREDICTION_REWARDS.firstGold,
   catchmind: { points: 50, hintedPoints: 30, hintAfter: 3, endAfter: 6 },
   claw: { cost: 200, dailyTries: 5, points: 30 },
   kuji: { price: 300, raisedPrice: 400, raiseFrom: 6, boughtToday: 4 },
@@ -20,10 +17,6 @@ export const BALANCE = {
 /** 1-based place by closeness; equal differences share a place. */
 export const rankOf = (results: GameResult[], result: GameResult) =>
   results.findIndex((r) => r.difference === result.difference) + 1;
-/** Points for a prediction placed `rank` (1-based) by closeness. */
-export const predictionPoints = (rank: number) =>
-  BALANCE.predictionPoints[rank - 1] ?? 0;
-
 export const KST = "Asia/Seoul";
 export function kstParts(date = new Date()) {
   const parts = Object.fromEntries(
@@ -106,17 +99,15 @@ export const previewViewer = (id: GameId) => (id === "luck" ? "siwon" : "yeseo")
  * frames: 기상시간 and 행운 점수 open (2a, 2b), 퇴근시간 revealed (2c).
  */
 export function previewGame(id: GameId): GameState {
-  const title =
-    id === "wake" ? "기상시간 맞히기" : id === "offwork" ? "퇴근시간 맞히기" : "행운 점수 맞히기";
-  const authorUsername = id === "wake" ? "min" : id === "offwork" ? "siwon" : "yeseo";
+  const { title, author: authorUsername, deadline } = GAME_RULES[id];
   const viewer = previewViewer(id);
   const others = ["min", "siwon", "yeseo"].filter((name) => name !== authorUsername);
   const base: GameState = {
     id,
     title,
     authorUsername,
-    deadline: new Date(Date.now() + (id === "wake" ? 4644 : 28044) * 1000).toISOString(),
-    roundDate: "preview",
+    deadline,
+    roundDate: new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10),
     phase: "open",
     hint: "비 와도 기분 좋음. 점심이 맛있었다",
     prediction: null,
@@ -138,13 +129,34 @@ export function previewGame(id: GameId): GameState {
   return {
     ...base,
     phase: "revealed",
-    answer: "18:12",
-    prediction: "18:20",
-    results: [
-      { playerId: "yeseo", username: "yeseo", displayName: "yeseo", value: "18:20", difference: 8 },
-      { playerId: "min", username: "min", displayName: "min", value: "17:50", difference: 22 },
-    ],
+    answer: "18:12:30",
+    prediction: "18:12:45",
+    canPredict: false,
+    results: previewResults(id, "18:12:30", ["18:12:45", "18:13:31"]),
   };
+}
+
+function previewResults(id: GameId, answer: string, values: string[]): GameResult[] {
+  const players = ["yeseo", "min", "siwon"].filter(name => name !== GAME_RULES[id].author);
+  const numeric = (value: string) => id === "luck" ? Number(value) : value.split(":").reduce((total, part) => total * 60 + Number(part), 0);
+  const differences = values.map(value => Math.abs(numeric(value) - numeric(answer)));
+  const minimum = Math.min(...differences);
+  return values.map((value, i) => {
+    const firstGold = differences[i] === minimum ? PREDICTION_REWARDS.firstGold : 0;
+    return { playerId: players[i], username: players[i], displayName: players[i], value, difference: differences[i],
+      score: predictionPoints(id, differences[i]), isFirst: differences[i] === minimum,
+      participationGold: PREDICTION_REWARDS.participationGold, firstGold, gold: PREDICTION_REWARDS.participationGold + firstGold };
+  }).sort((a, b) => a.difference - b.difference);
+}
+/** Three published rounds; the skipped day illustrates that unplayed days do not count. */
+export function previewHistory(id: GameId): GameHistoryRound[] {
+  const answer = id === "luck" ? "70" : id === "wake" ? "08:31:00" : "18:02:30";
+  const values = id === "luck" ? ["70", "77"] : id === "wake" ? ["08:31:00", "08:32:01"] : ["18:02:30", "18:03:31"];
+  return [1, 2, 4].map((days, i) => ({
+    roundDate: new Date(Date.now() + 9 * 60 * 60 * 1000 - days * 86_400_000).toISOString().slice(0, 10),
+    answer,
+    results: previewResults(id, answer, i === 1 ? [values[0], values[0]] : values),
+  }));
 }
 
 /** Sample gold and score history for the preview's 내 정보 screen. */
@@ -166,10 +178,12 @@ export function previewLedger(): LedgerEntry[] {
     [yesterday, "08:55", "출석", 100, "gold"],
     [today, "13:10", "캐치마인드 정답", 50, "score"],
     [today, "13:06", "캐릭터 뽑기", 30, "score"],
-    [today, "08:47", "기상시간 맞히기", 30, "score"],
+    [today, "08:47", "기상시간 맞히기", predictionPoints("wake", 0), "score"],
+    [today, "08:47", "기상시간 1등", PREDICTION_REWARDS.firstGold, "gold"],
+    [today, "08:10", "기상시간 참여", PREDICTION_REWARDS.participationGold, "gold"],
     [yesterday, "18:00", "주식 수익 1위", 40, "score"],
-    [yesterday, "18:00", "행운 점수 맞히기", 25, "score"],
-    [yesterday, "08:31", "기상시간 맞히기", 20, "score"],
+    [yesterday, "18:00", "행운 점수 맞히기", predictionPoints("luck", 1), "score"],
+    [yesterday, "08:31", "기상시간 맞히기", predictionPoints("wake", 61), "score"],
   ];
   return rows.map(([base, time, reason, amount, currency], i) => ({
     id: `preview-${i}`,

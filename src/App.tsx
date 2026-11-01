@@ -2,17 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type {
   BootstrapResponse,
   GameId,
-  LedgerEntry,
   User,
 } from "../shared/types";
 import { ApiFailure, api } from "./api";
-import { dayKey } from "./attendance";
 import { anim } from "./motion";
 import { CharacterSprite, TabBar, tabs } from "./components/UI";
 import { PredictionGame } from "./components/PredictionGame";
 import { PreviewGames } from "./components/PreviewGames";
 import {
-  kstParts,
   previewDaily,
   previewGame,
   previewGold,
@@ -76,17 +73,6 @@ function homeData(data: BootstrapResponse): HomeData {
     players: data.players,
     games: data.games,
   };
-}
-/** This week's score entries summed per weekday (Mon–Sun, KST). */
-function dailyScores(ledger: LedgerEntry[]) {
-  const daily = [0, 0, 0, 0, 0, 0, 0];
-  const monday = dayKey(new Date(Date.now() - kstParts().weekday * 86_400_000));
-  for (const entry of ledger) {
-    const date = new Date(entry.createdAt);
-    if (entry.currency === "score" && dayKey(date) >= monday)
-      daily[kstParts(date).weekday] += entry.amount;
-  }
-  return daily;
 }
 /** Navigation depth: tab pages 0, sub-pages 1, a stock's detail 2. */
 function depthOf(path: string) {
@@ -311,15 +297,16 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
+    if (demo) { setLoading(false); return; }
     void refresh();
     return () => {
       requestGeneration.current += 1;
     };
-  }, [refresh]);
+  }, [refresh, demo]);
   useEffect(() => {
     const on = () => {
       setOnline(true);
-      void refresh();
+      if (!demo) void refresh();
     };
     const off = () => setOnline(false);
     window.addEventListener("online", on);
@@ -328,9 +315,9 @@ export default function App() {
       window.removeEventListener("online", on);
       window.removeEventListener("offline", off);
     };
-  }, [refresh]);
+  }, [refresh, demo]);
   useEffect(() => {
-    if (!data) return;
+    if (!data || demo) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && navigator.onLine)
         void refresh();
@@ -344,7 +331,7 @@ export default function App() {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [data?.user.id, refresh]);
+  }, [data?.user.id, refresh, demo]);
   const path = demo ? route.replace("/preview", "") || "/" : route;
   const gameId = path.match(/^\/game\/(wake|offwork|luck)$/)?.[1] as
     GameId | undefined;
@@ -381,6 +368,10 @@ export default function App() {
     mutationQueue.current = operation.catch(() => undefined);
     return operation;
   }
+  const applyBootstrap = (next: BootstrapResponse) => {
+    serverClockOffset.current = Date.parse(next.serverTime) - Date.now();
+    setData(next);
+  };
   const signedIn = !demo && !loading && data !== null;
   const view = demo ? previewHome() : data ? homeData(data) : null;
   const me = demo ? previewUser : data?.user;
@@ -436,11 +427,12 @@ export default function App() {
         key={`demo-${gameId}`}
         game={previewGame(gameId)}
         user={{ ...previewUser, username: viewer, displayName: viewer }}
-        serverTime={new Date().toISOString()}
+        serverTime={new Date(`${previewGame(gameId).roundDate}T09:12:36+09:00`).toISOString()}
         demo
         onBack={home}
         onSave={async () => {}}
         onReveal={async () => {}}
+        onWake={async () => {}}
       />
     );
   } else if (gameId && data) {
@@ -454,41 +446,18 @@ export default function App() {
           Date.now() + serverClockOffset.current,
         ).toISOString()}
         onBack={home}
-        onSave={(value, hint, author) =>
-          mutate(
-            () =>
-              author
-                ? api.answer(gameId, value, hint, game.roundDate)
-                : api.predict(gameId, value, game.roundDate),
-            (result) =>
-              setData((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      games: prev.games.map((g) =>
-                        g.id === gameId ? result.game : g,
-                      ),
-                    }
-                  : prev,
-              ),
-          )
-        }
-        onReveal={() =>
-          mutate(
-            () => api.reveal(gameId, game.roundDate),
-            (result) =>
-              setData((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      games: prev.games.map((g) =>
-                        g.id === gameId ? result.game : g,
-                      ),
-                    }
-                  : prev,
-              ),
-          )
-        }
+        onSave={(value, hint, author) => mutate(async () => {
+          await (author ? api.answer(gameId, value, hint, game.roundDate) : api.predict(gameId, value, game.roundDate));
+          return api.bootstrap();
+        }, applyBootstrap)}
+        onReveal={() => mutate(async () => {
+          await api.reveal(gameId, game.roundDate);
+          return api.bootstrap();
+        }, applyBootstrap)}
+        onWake={() => mutate(async () => {
+          await api.wake(game.roundDate);
+          return api.bootstrap();
+        }, applyBootstrap)}
       />
     ) : (
       <div className="empty-state">
@@ -516,7 +485,8 @@ export default function App() {
         me={view.displayName}
         gold={me.gold}
         players={view.players}
-        daily={demo ? previewDaily : dailyScores(data?.ledger ?? [])}
+        serverTime={demo ? undefined : new Date(Date.now() + serverClockOffset.current).toISOString()}
+        daily={demo ? previewDaily : (data?.dailyScores ?? [0, 0, 0, 0, 0, 0, 0])}
         lastWeek={demo ? previewLastWeek : null}
         onBack={home}
       />

@@ -1,11 +1,13 @@
-import type { BootstrapResponse, GameId, GameState, User, Player, LedgerEntry } from '../shared/types';
+import type { BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, Player, LedgerEntry } from '../shared/types';
+import { PREDICTION_REWARDS, predictionPoints } from '../shared/balance';
 import { DUMMY_HASH, hashToken, randomToken, verifyPassword } from './crypto';
-import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
+import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number }
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null }
 interface PredictionRow { player_id: string; username: string; display_name: string; value: string }
+interface UnsettledRound extends RoundRow { game_id: GameId; round_date: string }
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
 }
@@ -98,6 +100,64 @@ async function login(request: Request, env: Env, now: Date): Promise<Response> {
   if (sessionWrites[2]!.meta.changes !== 1) throw new HttpError(401, 'INVALID_CREDENTIALS', '아이디와 비밀번호를 확인해 주세요.');
   return json({ user: await publicUser(env.DB, user, now) }, 200, { 'Set-Cookie': cookie(request, token, SESSION_AGE_SECONDS) });
 }
+async function roundResults(db: D1Database, id: GameId, date: string, answer: string): Promise<GameResult[]> {
+  const rows = (await db.prepare(`SELECT p.player_id, u.username, u.display_name, p.value
+    FROM predictions p JOIN users u ON u.id = p.player_id
+    WHERE p.game_id = ? AND p.round_date = ? AND u.role = 'player' AND u.username != ?
+    ORDER BY p.updated_at, p.player_id`).bind(id, date, GAME_RULES[id].author).all<PredictionRow>()).results;
+  const differences = rows.map(row => valueDifference(id, row.value, answer));
+  const closest = Math.min(...differences);
+  return rows.map((row, index) => {
+    const difference = differences[index]!;
+    const isFirst = difference === closest;
+    const participationGold = PREDICTION_REWARDS.participationGold;
+    const firstGold = isFirst ? PREDICTION_REWARDS.firstGold : 0;
+    return { playerId: row.player_id, username: row.username, displayName: row.display_name,
+      value: row.value, difference, score: predictionPoints(id, difference), isFirst,
+      participationGold, firstGold, gold: participationGold + firstGold };
+  }).sort((left, right) => left.difference - right.difference);
+}
+
+/** Published answers and predictions are immutable. Each round's payouts and
+ * completion marker commit together; references also make concurrent calls safe.
+ * Scan past rounds too, since the first visit after a reveal may be on a new day. */
+async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
+  const rounds = (await db.prepare(`SELECT game_id, round_date, answer, hint, reveal_at, revealed_at
+    FROM game_rounds WHERE settled_at IS NULL AND answer IS NOT NULL
+    AND (revealed_at IS NOT NULL OR reveal_at <= ?) ORDER BY round_date, game_id`)
+    .bind(now.getTime()).all<UnsettledRound>()).results;
+  for (const round of rounds) {
+    const results = await roundResults(db, round.game_id, round.round_date, round.answer!);
+    const writes: D1PreparedStatement[] = [];
+    const gameWeek = weekStart(new Date(kstTimestamp(round.round_date, '00:00:00')));
+    for (const result of results) {
+      for (const [kind, currency, amount, reason] of [
+        ['score', 'score', result.score, `${GAME_RULES[round.game_id].title} 예측 점수`],
+        ['first', 'gold', result.firstGold, `${GAME_RULES[round.game_id].title} 1등`],
+      ] as const) {
+        if (amount === 0) continue;
+        writes.push(db.prepare(`INSERT OR IGNORE INTO ledger
+          (id, user_id, currency, amount, reason, reference, created_at, week_start)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(crypto.randomUUID(), result.playerId, currency, amount, reason,
+            `${kind}:${round.game_id}:${round.round_date}:${result.playerId}`, now.toISOString(), currency === 'score' ? gameWeek : null));
+      }
+    }
+    writes.push(db.prepare('UPDATE game_rounds SET settled_at = ? WHERE game_id = ? AND round_date = ? AND settled_at IS NULL')
+      .bind(now.getTime(), round.game_id, round.round_date));
+    await db.batch(writes);
+  }
+}
+
+async function readHistory(db: D1Database, id: GameId, now: Date): Promise<GameHistoryRound[]> {
+  const rounds = (await db.prepare(`SELECT round_date, answer FROM game_rounds
+    WHERE game_id = ? AND round_date < ? AND answer IS NOT NULL
+    AND (revealed_at IS NOT NULL OR reveal_at <= ?) ORDER BY round_date DESC LIMIT 3`)
+    .bind(id, kstDate(now), now.getTime()).all<{ round_date: string; answer: string }>()).results;
+  return Promise.all(rounds.map(async round => ({ roundDate: round.round_date, answer: round.answer,
+    results: await roundResults(db, id, round.round_date, round.answer) })));
+}
+
 async function readGame(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameState> {
   const date = kstDate(now);
   const rules = GAME_RULES[id];
@@ -106,7 +166,7 @@ async function readGame(db: D1Database, user: UserRow, id: GameId, now: Date): P
   const closed = revealed || now.getTime() >= kstTimestamp(date, rules.deadline);
   const author = user.role === 'player' && user.username === rules.author;
   const prediction = await db.prepare('SELECT value FROM predictions WHERE game_id = ? AND round_date = ? AND player_id = ?').bind(id, date, user.id).first<{ value: string }>();
-  const results = revealed ? (await db.prepare('SELECT p.player_id, u.username, u.display_name, p.value FROM predictions p JOIN users u ON u.id = p.player_id WHERE game_id = ? AND round_date = ? ORDER BY p.updated_at, p.player_id').bind(id, date).all<PredictionRow>()).results : [];
+  const results = revealed ? await roundResults(db, id, date, round!.answer!) : [];
   const participants = (await db.prepare(`SELECT u.id AS playerId, u.username, u.display_name AS displayName, p.player_id IS NOT NULL AS submitted
     FROM users u LEFT JOIN predictions p ON p.player_id = u.id AND p.game_id = ? AND p.round_date = ?
     WHERE u.active = 1 AND u.role = 'player' AND u.username != ? ORDER BY u.username`).bind(id, date, rules.author).all<{ playerId: string; username: string; displayName: string; submitted: number }>()).results;
@@ -116,18 +176,36 @@ async function readGame(db: D1Database, user: UserRow, id: GameId, now: Date): P
     phase: revealed ? 'revealed' : closed ? 'closed' : 'open', hint: round?.hint ?? '',
     prediction: prediction?.value ?? null, answer: revealed || author ? round?.answer ?? null : null,
     answerEntered: round?.answer != null,
-    results: results.map(result => ({ playerId: result.player_id, username: result.username, displayName: result.display_name, value: result.value, difference: valueDifference(id, result.value, round!.answer!) })).sort((left, right) => left.difference - right.difference),
-    canPredict: !closed && !author && user.role === 'player', canEditAnswer: author && !revealed, canReveal: author && !revealed && round?.answer != null,
+    results,
+    canPredict: !closed && !author && user.role === 'player', canEditAnswer: author && !revealed, canReveal: id !== 'wake' && author && !revealed && round?.answer != null,
   };
 }
+async function weeklyDailyScores(db: D1Database, userId: string, now: Date): Promise<number[]> {
+  const monday = weekStart(now);
+  // The profile's recent-entry limit must not truncate this week's chart.
+  const rows = (await db.prepare(`SELECT amount, reference, created_at FROM ledger
+    WHERE user_id = ? AND currency = 'score' AND week_start = ?`)
+    .bind(userId, monday).all<{ amount: number; reference: string; created_at: string }>()).results;
+  const daily = [0, 0, 0, 0, 0, 0, 0];
+  for (const row of rows) {
+    const roundDate = /^score:(?:wake|offwork|luck):(\d{4}-\d{2}-\d{2}):.+$/.exec(row.reference)?.[1];
+    const date = roundDate ?? kstDate(new Date(row.created_at));
+    const day = (Date.parse(`${date}T00:00:00Z`) - Date.parse(`${monday}T00:00:00Z`)) / 86_400_000;
+    if (Number.isInteger(day) && day >= 0 && day < daily.length) daily[day]! += row.amount;
+  }
+  return daily;
+}
 async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapResponse> {
-  const [viewer, players, games, ledger] = await Promise.all([
+  // Complete payments before reading balances and weekly rankings in parallel.
+  await settlePublishedRounds(env.DB, now);
+  const [viewer, players, games, ledger, dailyScores] = await Promise.all([
     publicUser(env.DB, user, now),
     env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Player>(),
     Promise.all(GAME_IDS.map(id => readGame(env.DB, user, id, now))),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
+    weeklyDailyScores(env.DB, user.id, now),
   ]);
-  return { user: viewer, players: players.results, games, ledger: ledger.results, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+  return { user: viewer, players: players.results, games, ledger: ledger.results, dailyScores, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId, action: string, now: Date): Promise<Response> {
   const input = await body(request);
@@ -139,21 +217,29 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
   if (action === 'prediction') {
     if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (user.role !== 'player' || author) throw new HttpError(403, 'CANNOT_PREDICT', '이 게임의 예측에 참여할 수 없어요.');
-    if (!validValue(id, input.value)) throw new HttpError(400, 'INVALID_VALUE', id === 'luck' ? '0부터 100 사이의 정수를 입력해 주세요.' : '시간을 00:00부터 23:59 사이로 입력해 주세요.');
+    if (!validValue(id, input.value)) throw new HttpError(400, 'INVALID_VALUE', id === 'luck' ? '0부터 100 사이의 정수를 입력해 주세요.' : '시간을 00:00:00부터 23:59:59 사이로 입력해 주세요.');
     if (now.getTime() >= kstTimestamp(date, rules.deadline)) throw new HttpError(409, 'PREDICTION_CLOSED', '오늘의 예측이 마감됐어요.');
     const writes = await env.DB.batch([
       env.DB.prepare('INSERT OR IGNORE INTO game_rounds (game_id, round_date, updated_at) VALUES (?, ?, ?)').bind(id, date, now.getTime()),
       env.DB.prepare(`INSERT INTO predictions (game_id, round_date, player_id, value, updated_at)
         SELECT ?, ?, ?, ?, ? FROM game_rounds WHERE game_id = ? AND round_date = ? AND revealed_at IS NULL AND (reveal_at IS NULL OR reveal_at > unixepoch('now') * 1000) AND unixepoch('now') * 1000 < ?
         ON CONFLICT(game_id, round_date, player_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).bind(id, date, user.id, input.value, now.getTime(), id, date, kstTimestamp(date, rules.deadline)),
+      // changes() belongs to the preceding conditional prediction write in this
+      // transaction. A rejected write cannot pay; edits share the same reference.
+      env.DB.prepare(`INSERT OR IGNORE INTO ledger
+        (id, user_id, currency, amount, reason, reference, created_at)
+        SELECT ?, ?, 'gold', ?, ?, ?, ? WHERE changes() = 1`)
+        .bind(crypto.randomUUID(), user.id, PREDICTION_REWARDS.participationGold,
+          `${rules.title} 참여`, `predict:${id}:${date}:${user.id}`, now.toISOString()),
     ]);
     if (writes[1]!.meta.changes === 0) throw new HttpError(409, 'PREDICTION_CLOSED', '정답이 공개되어 예측이 마감됐어요.');
   } else if (action === 'answer') {
     if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (!author) throw new HttpError(403, 'NOT_AUTHOR', '출제자만 정답을 입력할 수 있어요.');
+    if (id === 'wake') throw new HttpError(400, 'WAKE_ACTION_REQUIRED', '기상했어요 버튼으로 정답을 공개해 주세요.');
     if (!validValue(id, input.value)) throw new HttpError(400, 'INVALID_VALUE', '정답 값을 확인해 주세요.');
     if (input.hint !== undefined && (typeof input.hint !== 'string' || input.hint.length > 200)) throw new HttpError(400, 'INVALID_HINT', '힌트는 200자 이내로 입력해 주세요.');
-    const revealAt = id === 'luck' ? kstTimestamp(date, '18:00') : id === 'offwork' ? kstTimestamp(date, input.value) : null;
+    const revealAt = kstTimestamp(date, id === 'luck' ? GAME_RULES.luck.revealTime : input.value);
     const result = await env.DB.prepare(`INSERT INTO game_rounds (game_id, round_date, answer, hint, reveal_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(game_id, round_date) DO UPDATE SET answer = excluded.answer, hint = excluded.hint, reveal_at = excluded.reveal_at, updated_at = excluded.updated_at
       WHERE game_rounds.revealed_at IS NULL AND (game_rounds.reveal_at IS NULL OR game_rounds.reveal_at > unixepoch('now') * 1000)`)
@@ -162,11 +248,24 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
   } else if (action === 'reveal') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (!author) throw new HttpError(403, 'NOT_AUTHOR', '출제자만 정답을 공개할 수 있어요.');
+    if (id === 'wake') throw new HttpError(400, 'WAKE_ACTION_REQUIRED', '기상했어요 버튼으로 정답을 공개해 주세요.');
     const result = await env.DB.prepare(`UPDATE game_rounds SET revealed_at = ?, updated_at = ? WHERE game_id = ? AND round_date = ? AND answer IS NOT NULL AND revealed_at IS NULL AND (reveal_at IS NULL OR reveal_at > unixepoch('now') * 1000)`)
       .bind(now.getTime(), now.getTime(), id, date).run();
     if (result.meta.changes === 0) throw new HttpError(409, 'CANNOT_REVEAL', '정답을 먼저 입력하거나 공개 상태를 확인해 주세요.');
+  } else if (action === 'wake' && id === 'wake') {
+    if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    if (!author) throw new HttpError(403, 'NOT_AUTHOR', '출제자만 기상 시각을 공개할 수 있어요.');
+    await env.DB.batch([
+      env.DB.prepare('INSERT OR IGNORE INTO game_rounds (game_id, round_date, updated_at) VALUES (?, ?, ?)').bind(id, date, now.getTime()),
+      // The first server timestamp wins, including concurrent presses/retries.
+      env.DB.prepare(`UPDATE game_rounds SET answer = ?, revealed_at = ?, updated_at = ?
+        WHERE game_id = ? AND round_date = ? AND answer IS NULL AND revealed_at IS NULL`)
+        .bind(kstTime(now), now.getTime(), now.getTime(), id, date),
+    ]);
   } else throw new HttpError(404, 'NOT_FOUND', '요청한 게임 기능이 없어요.');
-  return json({ game: await readGame(env.DB, user, id, new Date()) });
+  const refreshedAt = new Date();
+  await settlePublishedRounds(env.DB, refreshedAt);
+  return json({ game: await readGame(env.DB, user, id, refreshedAt) });
 }
 async function api(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -182,6 +281,13 @@ async function api(request: Request, env: Env): Promise<Response> {
   const user = await requireUser(request, env, now.getTime());
   if (url.pathname === '/api/auth/me' && request.method === 'GET') return json({ user: await publicUser(env.DB, user, now) });
   if (url.pathname === '/api/bootstrap' && request.method === 'GET') return json(await bootstrap(env, user, now));
+  const gameReadMatch = /^\/api\/games\/([^/]+)(?:\/(history))?$/.exec(url.pathname);
+  if (gameReadMatch && isGameId(gameReadMatch[1]!) && request.method === 'GET') {
+    await settlePublishedRounds(env.DB, now);
+    return gameReadMatch[2] === 'history'
+      ? json({ history: await readHistory(env.DB, gameReadMatch[1], now) })
+      : json({ game: await readGame(env.DB, user, gameReadMatch[1], now) });
+  }
   const gameMatch = /^\/api\/games\/([^/]+)\/([^/]+)$/.exec(url.pathname);
   if (gameMatch && isGameId(gameMatch[1]!)) return mutateGame(request, env, user, gameMatch[1]!, gameMatch[2]!, now);
   throw new HttpError(404, 'NOT_FOUND', '요청한 기능을 찾을 수 없어요.');

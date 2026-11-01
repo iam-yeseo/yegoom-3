@@ -8,14 +8,14 @@ describe('Korean day and weekly boundaries', () => {
     expect(kstDate(new Date('2026-11-01T15:00:00Z'))).toBe('2026-11-02');
     expect(weekStart(new Date('2026-11-01T14:59:59Z'))).toBe('2026-10-26');
     expect(weekStart(new Date('2026-11-01T15:00:00Z'))).toBe('2026-11-02');
-    expect(kstTimestamp('2026-10-30', '10:30')).toBe(Date.parse('2026-10-30T01:30:00Z'));
+    expect(kstTimestamp('2026-10-30', '10:30:00')).toBe(Date.parse('2026-10-30T01:30:00Z'));
   });
   it('validates exact value format without coercing out-of-range inputs', () => {
-    expect(validValue('wake', '23:59')).toBe(true);
-    for (const value of ['24:00', '9:30', '12:60', '', 930, null]) expect(validValue('wake', value)).toBe(false);
+    expect(validValue('wake', '23:59:59')).toBe(true);
+    for (const value of ['24:00:00', '9:30:00', '12:60:00', '12:00:60', '12:00', '', 930, null]) expect(validValue('wake', value)).toBe(false);
     for (const value of ['0', '50', '100']) expect(validValue('luck', value)).toBe(true);
     for (const value of ['101', '-1', '1.5', '01', '1e2', 50]) expect(validValue('luck', value)).toBe(false);
-    expect(valueDifference('wake', '08:59', '09:01')).toBe(2);
+    expect(valueDifference('wake', '08:59:59', '09:01:00')).toBe(61);
     expect(valueDifference('luck', '0', '100')).toBe(100);
   });
 });
