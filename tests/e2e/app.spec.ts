@@ -315,8 +315,10 @@ test('a delayed bootstrap cannot restore the previous user after logout', async 
   });
   await login(page, 'siwon');
   holdNext = true;
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-  await expect.poll(() => held).toBe(true);
+  await expect.poll(async () => {
+    if (!held) await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    return held;
+  }).toBe(true);
   await page.goto('/#/profile');
   await page.getByRole('button', { name: '로그아웃', exact: true }).click();
   await expect(page.getByRole('button', { name: '예굼방 들어가기' })).toBeVisible();

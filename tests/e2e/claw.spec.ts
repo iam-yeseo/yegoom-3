@@ -294,14 +294,22 @@ test('claw preview stays serverless, preserves sound preference, and auto-drops 
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('Space');
   await expect(machine(page)).toHaveAttribute('data-state', 'ready');
+  const insertedAt = await page.evaluate(() => performance.now());
   await page.keyboard.down('ArrowLeft');
   await page.clock.runFor(600);
   await page.keyboard.up('ArrowLeft');
   await expect(canvas(page)).toHaveAccessibleName(/위치는 왼쪽에서 5퍼센트/);
-  await page.clock.runFor(9392);
+  // The deadline is relative to insertion, while RAF may start at any offset.
+  // Stay safely before it, then run through two frames after the deadline.
+  const untilLastTenth = insertedAt + 9900 - await page.evaluate(() => performance.now());
+  await page.clock.runFor(untilLastTenth);
   await expect(machine(page)).toHaveAttribute('data-state', 'ready');
-  await page.clock.runFor(16);
+  await expect(page.getByRole('timer')).toContainText('01');
+  await page.clock.runFor(132);
   await expect(machine(page)).toHaveAttribute('data-state', 'descending');
+  const elapsed = await page.evaluate(() => performance.now()) - insertedAt;
+  expect(elapsed).toBeGreaterThanOrEqual(10000);
+  expect(elapsed).toBeLessThanOrEqual(10032);
   // Stop above the dolls so the result is deterministic for any preview board.
   await page.keyboard.press('Space');
   await page.clock.runFor(16);
