@@ -1,0 +1,21 @@
+.luck-photo-card { min-width: 0; }
+.luck-photo-thumbnail { display: block; width: 100%; padding: 0; overflow: hidden; border: 1px solid #eee8e0; border-radius: 18px; background: var(--cream); color: var(--text); text-align: left; }
+.luck-photo-thumbnail > img { display: block; width: 100%; height: 220px; object-fit: contain; background: #f3eee8; }
+.luck-photo-thumbnail > span { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; font-size: 13px; font-weight: 700; word-break: keep-all; }
+.luck-photo-thumbnail > span > span { flex: none; color: var(--muted); font-size: 12px; font-weight: 400; }
+.luck-photo-card.is-compact .luck-photo-thumbnail > img { height: 144px; }
+.luck-photo-picker { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.luck-photo-empty { padding: 24px 18px; border: 1px dashed #d8ccf7; border-radius: 18px; background: #f6f2fc; text-align: center; }
+.luck-photo-empty strong { color: var(--text); font-size: 15px; }
+.luck-photo-empty p { margin: 10px 0 0; color: var(--muted); font-size: 13px; line-height: 1.7; word-break: keep-all; }
+.luck-photo-select { width: 100%; min-height: 44px; padding: 12px 16px; border: 0; border-radius: 14px; color: #7556c4; background: #eee8fc; font-size: 14px; font-weight: 800; }
+.luck-photo-select:disabled { opacity: .55; cursor: default; }
+.luck-photo-status { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.luck-photo-status.is-saved { color: #2e8c6e; }
+.luck-photo-dialog { width: min(560px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 0; border: 0; border-radius: 24px; background: var(--cream); color: var(--text); box-shadow: var(--card-shadow); }
+.luck-photo-dialog::backdrop { background: rgba(58, 51, 64, .45); }
+.luck-photo-dialog-content { padding: 18px; }
+.luck-photo-dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.luck-photo-dialog-heading h2 { margin: 0; font-size: 18px; line-height: 1.5; word-break: keep-all; }
+.luck-photo-dialog-heading button { display: grid; flex: none; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: #f3eee8; }
+.luck-photo-dialog-content > img { display: block; width: 100%; max-height: 72vh; object-fit: contain; border-radius: 12px; }

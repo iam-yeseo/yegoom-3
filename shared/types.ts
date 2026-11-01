@@ -4,10 +4,15 @@ import type { Board, Doll, AttemptResult } from './claw-physics';
 
 export type GameId = 'wake' | 'offwork' | 'luck';
 export type Role = 'player' | 'admin';
+export interface PhotoMetadata { url: string; version: number }
+export interface ProfileMetadata { displayName: string; photoVersion: number | null }
+export interface LuckPhotoResponse { photo: PhotoMetadata; serverTime: string }
+export interface Announcement { id: number; kind: 'lotto' | 'speetto'; userId: string; displayName: string; rank: number | null; prize: number; createdAt: string }
 export interface User {
   id: string;
   username: string;
   displayName: string;
+  photoVersion: number | null;
   role: Role;
   gold: number;
   weeklyScore: number;
@@ -17,6 +22,7 @@ export interface Player {
   id: string;
   username: string;
   displayName: string;
+  photoVersion: number | null;
   weeklyScore: number;
   character: ArtKey;
 }
@@ -24,6 +30,7 @@ export interface GameResult {
   playerId: string;
   username: string;
   displayName: string;
+  photoVersion: number | null;
   character: ArtKey;
   value: string;
   difference: number;
@@ -36,12 +43,15 @@ export interface GameResult {
 export interface GameHistoryRound {
   roundDate: string;
   answer: string;
+  photo: PhotoMetadata | null;
   results: GameResult[];
 }
 export interface GameState {
   id: GameId;
   title: string;
   authorUsername: string;
+  authorDisplayName: string;
+  photo: PhotoMetadata | null;
   deadline: string;
   roundDate: string;
   phase: 'open' | 'closed' | 'revealed';
@@ -50,7 +60,7 @@ export interface GameState {
   answer: string | null;
   answerEntered: boolean;
   results: GameResult[];
-  participants: { playerId: string; username: string; displayName: string; submitted: boolean }[];
+  participants: { playerId: string; username: string; displayName: string; photoVersion: number | null; submitted: boolean }[];
   canPredict: boolean;
   canEditAnswer: boolean;
   canReveal: boolean;
@@ -73,6 +83,7 @@ export interface BootstrapResponse {
   catchmind: CatchmindSummary;
   claw: ClawSummary;
   launchGift: LaunchGiftState;
+  announcements: Announcement[];
   serverTime: string;
   timeZone: 'Asia/Seoul';
 }
@@ -146,7 +157,7 @@ export interface SpeettoTicket {
 export interface SpeettoState { tickets: SpeettoTicket[] }
 export interface SpeettoResponse extends ShopState { speetto: SpeettoState; purchase?: SpeettoTicket }
 
-export interface CatchmindPlayer { id: string; username: string; displayName: string; character: ArtKey }
+export interface CatchmindPlayer { id: string; username: string; displayName: string; photoVersion: number | null; character: ArtKey }
 export interface CatchmindGuess { id: string; player: CatchmindPlayer; answer: string; correct: boolean; createdAt: string }
 export interface CatchmindRound {
   id: string; number: number; status: 'draft' | 'open' | 'ended';

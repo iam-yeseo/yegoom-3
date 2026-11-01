@@ -1,5 +1,7 @@
 import type { GameId } from './types';
 
+export const ANNOUNCEMENT_RULES = { recentMs: 10 * 60_000, limit: 5, displayMs: 4000, lottoRanks: [1, 2, 3] as const } as const;
+
 export const FEATURES = { stock: false };
 export const LAUNCH_GIFT = { date: '2026-11-02', lottoTickets: 5, speettoTickets: 5 } as const;
 

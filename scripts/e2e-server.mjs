@@ -109,6 +109,29 @@ for (const [game, author, answer, secondGuess] of [
   }
   statements.push(`INSERT INTO game_rounds (game_id, round_date, updated_at) VALUES ('${game}', '2026-10-28', ${timestamp});`);
 }
+if (process.env.E2E_PROFILE === 'launch-b') {
+  // Isolated browser scenarios for the launch-B suite, never seeded into the
+  // baseline suites or production. Real settlement still creates the latest
+  // first-prize announcement from the original overdue lotto fixture above.
+  for (const [id, username, kind, rank, prize, offset] of [
+    [1001, 'siwon', 'lotto', 3, 1000, -600001],
+    [1002, 'min', 'lotto', 1, 5000, -4000],
+    [1003, 'siwon', 'speetto', null, 1500, -3000],
+    [1004, 'yeseo', 'lotto', 2, 3000, -2000],
+    [1005, 'siwon', 'speetto', null, 1500, 60000],
+  ]) {
+    statements.push(`INSERT INTO announcements (id, kind, user_id, payload_json, created_at, reference) VALUES (${id}, '${kind}', 'e2e-${username}', '${JSON.stringify({ rank, prize })}', '${new Date(timestamp + offset).toISOString()}', 'fixture:announcement:${id}');`);
+  }
+  const fourthId = '00000000-0000-4000-8000-000000000004';
+  const fourthNumbers = [1, 2, 6, 7, 8];
+  statements.push(`INSERT INTO shop_purchases (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome) VALUES ('${fourthId}', 'e2e-min', 'fixture-lotto-fourth', 'lotto', '${JSON.stringify({ numbers: fourthNumbers, payment: 'gold' })}', 'gold', 500, '2026-10-29', '2026-10-29T00:00:00.000Z', '${JSON.stringify({ drawDate: '2026-10-29', numbers: fourthNumbers })}');`);
+  statements.push(`INSERT INTO lotto_tickets (id, draw_date, numbers) VALUES ('${fourthId}', '2026-10-29', '${JSON.stringify(fourthNumbers)}');`);
+  statements.push(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('fixture-lotto-fourth-cost', 'e2e-min', 'gold', -500, '데일리 로또 구매', 'buy:lotto:e2e-min:fixture-lotto-fourth', '2026-10-29T00:00:00.000Z');`);
+  const historicalPhoto = readFileSync('public/claw/dolls/doll-1.webp').toString('hex');
+  for (const date of ['2026-10-29', '2026-10-27', '2026-10-24']) {
+    statements.push(`INSERT INTO luck_photos (round_date, mime, data, version, updated_at) VALUES ('${date}', 'image/webp', X'${historicalPhoto}', 1, '${date}T00:00:00.000Z');`);
+  }
+}
 const seedPath = `${state}/users.sql`;
 writeFileSync(seedPath, statements.join('\n'), { mode: 0o600 });
 try { run(['d1', 'execute', 'DB', '--local', '--persist-to', state, '--file', seedPath, '--yes']); }

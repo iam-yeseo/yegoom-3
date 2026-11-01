@@ -18,7 +18,9 @@
     "check": "npm run typecheck && npm test && npm run build",
     "deploy:check": "npm run build && wrangler deploy --dry-run",
     "deploy": "npm run build && wrangler deploy",
-    "predev": "npm run build"
+    "predev": "npm run build",
+    "predb:migrate:remote": "node scripts/launch-profile-preflight.mjs",
+    "launch:profiles:preflight:remote": "node scripts/launch-profile-preflight.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",

@@ -39,7 +39,9 @@ test('mobile and desktop previews render all game screens without errors or over
       }
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
       expect(overflow, `${width}px ${route}`).toBe(false);
-      expect(await page.locator('img').evaluateAll(images => images.every(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
+      // Evidence thumbnails intentionally load lazily below the author form.
+      for (const image of await page.locator('img[loading=lazy]').all()) await image.scrollIntoViewIfNeeded();
+      await expect.poll(() => page.locator('img').evaluateAll(images => images.every(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)), { message: `${width}px ${route} images decode` }).toBe(true);
     }
   }
   expect(errors).toEqual([]);
@@ -175,7 +177,7 @@ test('offwork author saves seconds privately and rewards appear in results, home
   await expect(page.getByRole('heading', { name: '오늘의 퇴근 시각' })).toBeVisible();
   await fillTime(page, '18', '37', '42');
   await page.getByRole('button', { name: '정답 저장', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('정답을 저장했어요');
+  await expect(page.locator('.fx-toast').filter({ hasText: '정답을 저장했어요' })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('spinbutton', { name: '초', exact: true })).toHaveValue('42');
   await expect(page.locator('.prediction-input')).toContainText('18:37:42에 자동 공개');
@@ -190,7 +192,7 @@ test('offwork author saves seconds privately and rewards appear in results, home
     await player.goto('/#/game/offwork');
     await fillTime(player, '18', '37', '42');
     await player.locator('.game-actions button[type="submit"]').click();
-    await expect(player.getByRole('status')).toContainText('예측을 저장했어요');
+    await expect(player.locator('.fx-toast').filter({ hasText: '예측을 저장했어요' })).toBeVisible();
     expect((await snapshot(player)).user.gold).toBe(before.user.gold + 100);
     await fillTime(player, '18', '37', '43');
     await player.locator('.game-actions button[type="submit"]').click();
@@ -262,8 +264,19 @@ test('luck author edits a bounded hint and publishes the saved score', async ({ 
   const hint = page.getByLabel('함께 볼 힌트');
   await expect(hint).toHaveAttribute('maxlength', '200');
   await hint.fill('행운이 가득한 하루');
+  const evidence = await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 240;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#fff4cc'; context.fillRect(0, 0, 320, 240);
+    context.fillStyle = '#3a3340'; context.font = 'bold 80px sans-serif'; context.fillText('77', 110, 150);
+    return canvas.toDataURL('image/jpeg');
+  });
+  await page.locator('input[type=file][aria-label="행운 점수 증거 사진"]').setInputFiles({
+    name: 'luck-evidence.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(evidence.split(',')[1], 'base64'),
+  });
+  await expect(page.getByRole('button', { name: '정답 저장', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '정답 저장', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('정답을 저장했어요');
+  await expect(page.locator('.fx-toast').filter({ hasText: '정답을 저장했어요' })).toBeVisible();
   const other = await browser.newContext({ reducedMotion: 'reduce' });
   try {
     const player = await other.newPage();
@@ -300,7 +313,7 @@ test('PWA caches the app shell and previews offline but never caches authenticat
   await expect(page.getByRole('status')).toContainText('오프라인');
   await expect(page.getByRole('heading', { name: 'yeseo', exact: true })).toBeVisible();
   await page.goto('/#/preview/game/wake');
-  await expect(page.getByRole('heading', { name: 'min은 몇 시에 일어날까?' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'min님은 몇 시에 일어날까?' })).toBeVisible();
 });
 
 test('a delayed bootstrap cannot restore the previous user after logout', async ({ page }) => {
@@ -1147,7 +1160,7 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
       expect((await guessed).status()).toBe(200);
       await expect(guesser.getByRole('list', { name: '모두의 답', exact: true })).toContainText(answer);
     }
-    await expect(guesser.locator('.pg-hint')).toHaveAttribute('aria-label', `첫 글자 힌트: ${Array.from(word)[0]}, ${Array.from(word).length}글자`);
+    await expect(guesser.locator('.pg-hint')).toHaveAttribute('aria-label', `첫 글자 힌트: ${Array.from(word)[0]}, ${Array.from(word.replace(/\s/gu, '')).length}글자`);
     expect((await catchmindState(guesser)).round).toMatchObject({ word: null, wrongCount: 3 });
     await captureWidths(guesser, 'authenticated-hint', info, 4);
     const winningAttempts: { requestId: string; answer: string }[] = [];

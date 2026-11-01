@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { GameHistoryRound, GameId, GameResult, GameState, User } from "../../shared/types";
+import type { GameHistoryRound, GameId, GameResult, GameState, PhotoMetadata, User } from "../../shared/types";
 import { GAME_RULES, PREDICTION_REWARDS, SCORE_TABLES, predictionPoints } from "../../shared/balance";
 import { api } from "../api";
 import { previewHistory, rankOf } from "../sample";
+import { LuckPhotoCard, LuckPhotoPicker } from "./LuckEvidence";
 import {
   anim,
   confetti,
@@ -22,6 +23,7 @@ import {
   playerColor,
   preloadSprites,
   useCharacter,
+  useDisplayNameLookup,
   type CharState,
 } from "./UI";
 
@@ -34,12 +36,10 @@ type Props = {
   onSave: (value: string, hint: string, author: boolean) => Promise<void>;
   onReveal: () => Promise<void>;
   onWake: () => Promise<void>;
+  onPhotoUpload?: (image: string) => Promise<PhotoMetadata>;
 };
-const questions = {
-  wake: "min은 몇 시에 일어날까?",
-  offwork: "siwon은 몇 시에 퇴근할까?",
-  luck: "yeseo의 오늘 행운 점수는?",
-};
+const question = (id: GameId, name: string) => id === "wake" ? `${name}님은 몇 시에 일어날까?`
+  : id === "offwork" ? `${name}님은 몇 시에 퇴근할까?` : `${name}님의 오늘 행운 점수는?`;
 function clock(seconds: number) {
   const n = Math.max(0, seconds);
   return [Math.floor(n / 3600), Math.floor((n % 3600) / 60), n % 60]
@@ -225,12 +225,13 @@ function SubmissionRow({
   me: boolean;
 }) {
   const chip = useRef<HTMLSpanElement>(null);
+  const displayName = useDisplayNameLookup();
   useOnChange(player.submitted, () => player.submitted && pop(chip.current, 1.2));
   return (
     <div className="submission-card">
-      <Avatar username={player.username} />
+      <Avatar username={player.username} userId={player.playerId} photoVersion={player.photoVersion} />
       <strong>
-        {player.displayName}
+        {displayName(player.username, player.displayName)}
         {me ? " (나)" : ""}
       </strong>
       <span ref={chip} className={`pill ${player.submitted ? "mint" : "muted"}`}>
@@ -243,14 +244,15 @@ function differenceText(id: GameId, difference: number) {
   return difference === 0 ? "정확히 맞힘" : `${difference}${id === "luck" ? "점" : "초"} 차이`;
 }
 function ResultCards({ id, results, username, demo }: { id: GameId; results: GameResult[]; username: string; demo?: boolean }) {
+  const displayName = useDisplayNameLookup();
   return results.length ? results.map((result) => {
     const rank = rankOf(results, result);
     return <article className="card result-card" key={result.playerId}>
       <div className="result-player">
         <span className={`rank-badge ${result.isFirst ? "first" : ""}`}>{rank}</span>
-        <Avatar username={result.username} artKey={demo ? undefined : result.character} size={46} />
+        <Avatar username={result.username} userId={result.playerId} photoVersion={result.photoVersion} artKey={demo ? undefined : result.character} size={46} />
         <div className="result-name">
-          <strong>{result.displayName}{result.username === username ? " (나)" : ""}</strong>
+          <strong>{displayName(result.username, result.displayName)}{result.username === username ? " (나)" : ""}</strong>
           <span>{differenceText(id, result.difference)}</span>
         </div>
         <strong className="result-guess">{result.value}{id === "luck" ? "점" : ""}</strong>
@@ -286,6 +288,7 @@ function GameHistory({ game, username, demo }: { game: GameState; username: stri
       <div className="card empty-state"><p role="alert">{error}</p><button className="text-button" onClick={() => setRetry(n => n + 1)}>다시 시도</button></div> :
       history.length ? history.map(round => <section className="history-round" key={round.roundDate}>
         <div className="history-heading"><h3>{round.roundDate}</h3><span>정답 <strong>{round.answer}{game.id === "luck" ? "점" : ""}</strong></span></div>
+        {game.id === "luck" && round.photo && <LuckPhotoCard photo={round.photo} label={`${round.roundDate} 증거 사진`} compact />}
         <ResultCards id={game.id} results={round.results} username={username} demo={demo} />
       </section>) : <p className="card empty-state">아직 공개된 지난 기록이 없어요.</p>}
   </section>;
@@ -298,13 +301,13 @@ function thresholdLabel(id: GameId, difference: number): string {
   const seconds = difference % 60;
   return [hours ? `${hours}시간` : "", minutes ? `${minutes}분` : "", seconds ? `${seconds}초` : ""].filter(Boolean).join(" ") + " 이내";
 }
-function GameHelp({ id }: { id: GameId }) {
+function GameHelp({ id, authorName }: { id: GameId; authorName: string }) {
   const rules = GAME_RULES[id];
   return <div className="screen-body prediction-help"><details className="card">
     <summary>게임 방법</summary>
     <div className="help-content">
       <p>매일 {rules.deadline} (KST)까지 예측할 수 있어요. 정답이 먼저 공개되면 예측도 바로 마감돼요.</p>
-      <p>{id === "wake" ? 'min이 “기상했어요”를 누른 서버 시각이 정답이 되어 바로 공개돼요.' : id === "offwork" ? 'siwon이 정한 퇴근 시각에 자동 공개돼요. 미리 공개할 수도 있어요.' : `yeseo의 점수와 힌트를 보고 예측해요. ${GAME_RULES.luck.revealTime}에 자동 공개되며 미리 공개할 수도 있어요.`}</p>
+      <p>{id === "wake" ? `${authorName}님이 “기상했어요”를 누른 서버 시각이 정답이 되어 바로 공개돼요.` : id === "offwork" ? `${authorName}님이 정한 퇴근 시각에 자동 공개돼요. 미리 공개할 수도 있어요.` : `${authorName}님의 점수와 힌트를 보고 예측해요. ${GAME_RULES.luck.revealTime}에 자동 공개되며 미리 공개할 수도 있어요.`}</p>
       <p>첫 예측 저장 즉시 참여 보상 {PREDICTION_REWARDS.participationGold}G를 받아요. 수정해도 다시 지급되지 않아요. 정답과 가장 가까운 1등은 {PREDICTION_REWARDS.firstGold}G를 받고, 동점이면 모두 받아요.</p>
       <table><caption>정답과의 차이에 따른 점수</caption><thead><tr><th scope="col">차이</th><th scope="col">점수</th></tr></thead><tbody>
         {SCORE_TABLES[id].map(tier => <tr key={tier.maxDifference}><th scope="row">{thresholdLabel(id, tier.maxDifference)}</th><td>{tier.points}점</td></tr>)}
@@ -314,14 +317,26 @@ function GameHelp({ id }: { id: GameId }) {
     </div>
   </details></div>;
 }
-export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, onReveal, onWake }: Props) {
+export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, onReveal, onWake, onPhotoUpload }: Props) {
   const author = user.role === "player" && user.username === game.authorUsername;
+  const displayName = useDisplayNameLookup();
+  const authorName = displayName(game.authorUsername, game.authorDisplayName);
   const initial = author ? game.answer : game.prediction;
   const defaultValue = game.id === "luck" ? "65" : game.id === "wake" ? "08:40:00" : "18:00:00";
   const [value, setValue] = useState(initial ?? defaultValue);
   const [hint, setHint] = useState(game.hint);
   const [busy, setBusy] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [uploadedPhoto, setUploadedPhoto] = useState<{ date: string; photo: PhotoMetadata } | null>(null);
+  const photo = author && uploadedPhoto?.date === game.roundDate && uploadedPhoto.photo.version >= (game.photo?.version ?? 0)
+    ? uploadedPhoto.photo : game.photo;
+  const needsPhoto = author && game.id === "luck" && !photo;
+  const mounted = useRef(true);
+  const activeRound = useRef(game.roundDate);
+  activeRound.current = game.roundDate;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [error, setError] = useState("");
+  const [previewPublished, setPreviewPublished] = useState(false);
   const [now, setNow] = useState(Date.parse(serverTime));
   const confirmation = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -335,8 +350,9 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
   const deadline = /^\d{2}:\d{2}:\d{2}$/.test(game.deadline) ? `${game.roundDate}T${game.deadline}+09:00` : game.deadline;
   const left = Math.max(0, Math.ceil((Date.parse(deadline) - now) / 1000));
   const editable = demo || (author ? game.canEditAnswer : game.canPredict && left > 0);
-  const revealed = game.phase === "revealed";
+  const revealed = game.phase === "revealed" || Boolean(demo && author && previewPublished);
   const [savedValue, setSavedValue] = useState<string | null>(null);
+  const answer = demo && author && previewPublished ? savedValue : game.answer;
   const saved = (savedValue ?? initial) === value && (savedValue ?? initial) !== null;
   const urgent = !revealed && left > 0 && left < 600;
   const countdownRef = useRef<HTMLElement>(null);
@@ -377,10 +393,19 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
     return () => clearTimeout(t);
   }, [revealed, playJump]);
   const update = (next: string) => { setValue(next); setError(""); };
+  async function uploadPhoto(image: string): Promise<PhotoMetadata> {
+    if (!author || game.id !== "luck" || !editable || revealed) throw new Error("공개 전 출제자 화면에서 사진을 바꿀 수 있어요.");
+    const date = game.roundDate;
+    if (!demo && !onPhotoUpload) throw new Error("사진을 저장하지 못했어요. 화면을 다시 열어 주세요.");
+    const next = demo ? { url: image, version: (photo?.version ?? 0) + 1 } : await onPhotoUpload!(image);
+    if (mounted.current && activeRound.current === date) setUploadedPhoto({ date, photo: next });
+    return next;
+  }
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
-    if (!editable || busy) return;
+    if (!editable || busy || photoBusy) return;
+    if (needsPhoto) { setError("정답을 저장하려면 증거 사진을 먼저 선택해 주세요."); return; }
     if (game.id === "luck" ? !/^(?:0|[1-9][0-9]?|100)$/.test(value) : !/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(value)) {
       setError(game.id === "luck" ? "0~100 사이의 정수를 입력해 주세요." : "올바른 시·분·초를 입력해 주세요.");
       return;
@@ -394,11 +419,12 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
     finally { setBusy(false); }
   }
   async function reveal(wake = false) {
-    if (busy) return;
+    if (busy || photoBusy) return;
     setBusy(true);
     setError("");
     try {
-      await (wake ? onWake() : onReveal());
+      if (demo && author && game.id === "luck") setPreviewPublished(true);
+      else await (wake ? onWake() : onReveal());
       confirmation.current?.close();
       toast(wake ? "기상 시각을 공개했어요" : "정답을 공개했어요");
     } catch (e) { setError(e instanceof Error ? e.message : "공개하지 못했어요."); confirmation.current?.close(); }
@@ -412,16 +438,16 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
       <Toolbar title={game.title} onBack={onBack} gold={user.gold} />
       <div className="character-stage">
         <div className="character-shadow" />
-        <button type="button" className="hero-character-button" aria-label={`${game.authorUsername}의 캐릭터`} data-nopress onClick={playJump}>
+        <button type="button" className="hero-character-button" aria-label={`${authorName}님의 캐릭터`} data-nopress onClick={playJump}>
           <span className="hero-character-wrap"><CharacterSprite username={game.authorUsername} state={oneShot ?? "idle"} className="hero-character" onDone={finish} /></span>
         </button>
-        <span className="author-pill" style={{ color: playerColor[game.authorUsername] }}>출제 {game.authorUsername}</span>
+        <span className="author-pill" style={{ color: playerColor[game.authorUsername] }}>출제 {authorName}</span>
       </div>
     </div>
     {author && <p className="author-date">{game.roundDate} · {GAME_RULES[game.id].deadline} 마감 · 내가 출제하는 게임</p>}
     <div className="countdown-row">
       <div className="countdown"><span>{revealed ? "정답" : author ? "예측 마감까지" : "마감까지"}</span>
-        <strong ref={revealed ? answerRef : countdownRef} className={revealed ? "answer-number" : urgent ? "urgent" : ""}>{revealed ? `${game.answer ?? "—"}${game.id === "luck" ? "점" : ""}` : clock(left)}</strong>
+        <strong ref={revealed ? answerRef : countdownRef} className={revealed ? "answer-number" : urgent ? "urgent" : ""}>{revealed ? `${answer ?? "—"}${game.id === "luck" ? "점" : ""}` : clock(left)}</strong>
       </div>
       <div className="deadline-block">
         <span className={`pill ${revealed ? "yellow" : "mint"}`}>{revealed ? "결과 공개" : `${GAME_RULES[game.id].deadline} 마감`}</span>
@@ -429,11 +455,12 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
       </div>
     </div>
     {revealed ? <div className="screen-body result-list" ref={results}>
+      {game.id === "luck" && photo && <LuckPhotoCard photo={photo} label="오늘의 증거" />}
       <ResultCards id={game.id} results={game.results} username={user.username} demo={demo} />
-      <div className="result-caption"><span />{game.authorUsername} {game.answer}{game.id === "offwork" ? " 퇴근" : game.id === "wake" ? " 기상" : "점"}<span /></div>
+      <div className="result-caption"><span />{authorName} {answer}{game.id === "offwork" ? " 퇴근" : game.id === "wake" ? " 기상" : "점"}<span /></div>
     </div> : <form onSubmit={submit}>
       <div className="screen-body input-cards">
-        {game.id === "luck" && !author && <div className="hint-card"><span aria-hidden="true">“</span><p>{game.hint || "yeseo가 오늘의 힌트를 준비하고 있어요."}</p></div>}
+        {game.id === "luck" && !author && <div className="hint-card"><span aria-hidden="true">“</span><p>{game.hint || `${authorName}님이 오늘의 힌트를 준비하고 있어요.`}</p></div>}
         {author && game.id === "wake" ? <section className="card wake-author">
           <h2>오늘도 잘 잤나요?</h2>
           <span className="subtle-note">현재 시각 (KST)</span>
@@ -441,7 +468,8 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
           <button className="primary-button" type="button" disabled={!editable || busy} onClick={() => confirmation.current?.showModal()}>기상했어요</button>
           <p className="subtle-note">확인하는 순간의 시각이 정답으로 바로 공개돼요.</p>
         </section> : <section className="card prediction-input">
-          <h2>{author ? game.id === "luck" ? "오늘의 행운 점수" : "오늘의 퇴근 시각" : questions[game.id]}</h2>
+          <h2>{author ? game.id === "luck" ? "오늘의 행운 점수" : "오늘의 퇴근 시각" : question(game.id, authorName)}</h2>
+          {author && game.id === "luck" && <LuckPhotoPicker photo={photo} disabled={!editable || busy} onUpload={uploadPhoto} onBusyChange={setPhotoBusy} />}
           {game.id === "luck" ? <div className="luck-input">
             <label className="luck-number" ref={luckNumber}><span className="sr-only">{author ? "정답 점수" : "예측 점수"}</span>
               <input type="number" inputMode="numeric" min="0" max="100" step="1" value={value} disabled={!editable || busy} onChange={e => update(e.target.value)} /><span>점</span>
@@ -460,15 +488,15 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
         {!editable && <p className="form-message" role="status">{user.role === "admin" ? "운영자 계정은 게임에 참여하지 않아요." : author ? "정답 입력이 마감되었어요." : "예측이 마감되었어요. 결과를 기다려 주세요."}</p>}
       </div>
       {!(author && game.id === "wake") && <div className="game-actions">
-        <button className={`primary-button ${saved ? "saved" : ""}`} disabled={!editable || busy} type="submit">
+        <button className={`primary-button ${saved ? "saved" : ""}`} disabled={!editable || busy || photoBusy || needsPhoto} type="submit">
           {saved && !author && <svg className="saved-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" pathLength="1" /></svg>}
           <span key={busy ? "busy" : saved ? "saved" : "idle"} className="button-label">{busy ? "저장 중…" : author ? "정답 저장" : saved ? "제출 완료 · 마감 전까지 수정 가능" : `${value}${game.id === "luck" ? "점" : ""}으로 예측`}</span>
         </button>
-        {author && game.canReveal && <><button className="secondary-button reveal-button" type="button" onClick={() => void reveal()} disabled={busy}>지금 공개</button><p className="subtle-note">공개하면 지금부터 예측을 받을 수 없어요.</p></>}
+        {author && (game.canReveal || demo && game.id === "luck" && savedValue !== null) && <><button className="secondary-button reveal-button" type="button" onClick={() => void reveal()} disabled={busy || photoBusy}>지금 공개</button><p className="subtle-note">공개하면 지금부터 예측을 받을 수 없어요.</p></>}
       </div>}
     </form>}
     <GameHistory game={game} username={user.username} demo={demo} />
-    <GameHelp id={game.id} />
+    <GameHelp id={game.id} authorName={authorName} />
     <dialog className="wake-confirmation" ref={confirmation} aria-labelledby="wake-confirm-title" aria-describedby="wake-confirm-description" onClick={e => { if (e.target === e.currentTarget && !busy) e.currentTarget.close(); }} onCancel={e => { if (busy) e.preventDefault(); }}>
       <h2 id="wake-confirm-title">기상 시각을 공개할까요?</h2>
       <p id="wake-confirm-description">확인을 누른 순간의 서버 시각이 정답이 돼요. 공개 후에는 되돌릴 수 없고 예측도 마감돼요.</p>

@@ -1,6 +1,7 @@
-import { KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
 import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket } from '../shared/types';
 import { kstDate, kstTimestamp, weekStart } from './rules';
+import { announcePrize } from './announcements';
 
 export interface ShopUser { id: string; role: 'player' | 'admin' }
 export class ShopError extends Error {
@@ -202,12 +203,16 @@ export async function settleDueLotto(db: D1Database, now: Date): Promise<void> {
     for (const ticket of tickets) {
       const matches = (JSON.parse(ticket.numbers) as number[]).filter(number => winning.includes(number)).length;
       const prize = lottoPrize(matches);
+      const rank = lottoRank(matches);
       const writes: D1PreparedStatement[] = [];
       if (prize) writes.push(db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
         VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
-        .bind(crypto.randomUUID(), ticket.user_id, prize, `데일리 로또 ${lottoRank(matches)}등`, `lotto:prize:${ticket.id}`, now.toISOString()));
+        .bind(crypto.randomUUID(), ticket.user_id, prize, `데일리 로또 ${rank}등`, `lotto:prize:${ticket.id}`, now.toISOString()));
+      if (rank !== null && ANNOUNCEMENT_RULES.lottoRanks.some(value => value === rank)) {
+        writes.push(announcePrize(db, 'lotto', `lotto:prize:${ticket.id}`, rank));
+      }
       writes.push(db.prepare('UPDATE lotto_tickets SET matches = ?, rank = ?, prize = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL')
-        .bind(matches, lottoRank(matches), prize, now.toISOString(), ticket.id));
+        .bind(matches, rank, prize, now.toISOString(), ticket.id));
       await db.batch(writes);
     }
   }
@@ -273,7 +278,8 @@ async function buySpeetto(db: D1Database, user: ShopUser, input: Record<string, 
   const attempt = crypto.randomUUID(); const window = dayWindow(now);
   const writes = [simplePurchaseStatement(db, user, id, 'speetto', payload, method, SPEETTO_RULES.price, JSON.stringify({ cells, won, prize }), attempt, now, window.start, window.end),
     ...chargeStatements(db, attempt, 'speetto')];
-  if (prize) writes.push(grantGold(db, attempt, prize, '스피또 당첨', `speetto:prize:${attempt}`));
+  if (prize) writes.push(grantGold(db, attempt, prize, '스피또 당첨', `speetto:prize:${attempt}`),
+    announcePrize(db, 'speetto', `speetto:prize:${attempt}`, null));
   await db.batch(writes);
   return await previousPurchase(db, user, id, 'speetto', payload) ?? await rejectedPurchase(db, user, window.start, window.end);
 }

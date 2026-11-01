@@ -101,9 +101,9 @@ export function validateDrawing(value: unknown): string {
 
 async function player(db: D1Database, id: string | null): Promise<CatchmindPlayer | null> {
   if (!id) return null;
-  const row = await db.prepare('SELECT id, username, display_name, character FROM users WHERE id = ?').bind(id)
-    .first<{ id: string; username: string; display_name: string; character: ArtKey | null }>();
-  return row ? { id: row.id, username: row.username, displayName: row.display_name, character: row.character ?? defaultCharacter(row.username) } : null;
+  const row = await db.prepare('SELECT id, username, display_name, character, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = users.id) THEN photo_version ELSE NULL END AS photo_version FROM users WHERE id = ?').bind(id)
+    .first<{ id: string; username: string; display_name: string; character: ArtKey | null; photo_version: number | null }>();
+  return row ? { id: row.id, username: row.username, displayName: row.display_name, photoVersion: row.photo_version, character: row.character ?? defaultCharacter(row.username) } : null;
 }
 async function board(db: D1Database): Promise<{ turn: TurnRow; round: RoundRow | null }> {
   // Polling and mutations need metadata, never the stored base64 image body.
@@ -148,9 +148,9 @@ async function readState(db: D1Database, user: Actor): Promise<CatchmindState> {
   const { turn, round } = await board(db);
   const [drawer, next, winner] = await Promise.all([player(db, round?.drawer_id ?? null), player(db, turn.drawer_id), player(db, round?.winner_id ?? null)]);
   const playing = user.role === 'player'; const author = playing && round?.drawer_id === user.id;
-  const guesses = round ? (await db.prepare(`SELECT g.id, g.answer, g.correct, g.created_at, u.id AS player_id, u.username, u.display_name, u.character
+  const guesses = round ? (await db.prepare(`SELECT g.id, g.answer, g.correct, g.created_at, u.id AS player_id, u.username, u.display_name, u.character, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photo_version
     FROM catchmind_guesses g JOIN users u ON u.id = g.player_id WHERE g.round_id = ? ORDER BY g.sequence`)
-    .bind(round.id).all<{ id: string; answer: string; correct: number; created_at: string; player_id: string; username: string; display_name: string; character: ArtKey | null }>()).results : [];
+    .bind(round.id).all<{ id: string; answer: string; correct: number; created_at: string; player_id: string; username: string; display_name: string; character: ArtKey | null; photo_version: number | null }>()).results : [];
   const letters = round ? Array.from(round.normalized_word) : [];
   return {
     turn: next,
@@ -161,7 +161,7 @@ async function readState(db: D1Database, user: Actor): Promise<CatchmindState> {
       hint: round.wrong_count >= CATCHMIND_RULES.hintAfter ? { firstCharacter: letters[0]!, length: letters.length } : null,
       winner, endReason: round.end_reason, publishedAt: round.published_at, endedAt: round.ended_at,
       guesses: guesses.map(guess => ({ id: guess.id, answer: guess.answer, correct: Boolean(guess.correct), createdAt: guess.created_at,
-        player: { id: guess.player_id, username: guess.username, displayName: guess.display_name, character: guess.character ?? defaultCharacter(guess.username) } })) } : null,
+        player: { id: guess.player_id, username: guess.username, displayName: guess.display_name, photoVersion: guess.photo_version, character: guess.character ?? defaultCharacter(guess.username) } })) } : null,
     canClaim: playing && !turn.drawer_id && !round,
     canReroll: Boolean(author && round?.status === 'draft' && round.rerolls < CATCHMIND_RULES.rerolls),
     canPublish: Boolean(author && round?.status === 'draft'), canGuess: Boolean(playing && !author && round?.status === 'open'),

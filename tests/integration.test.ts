@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +11,32 @@ import { hashPassword, hashToken } from '../worker/crypto';
 import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
 import { getClawState, getClawSummary, playClaw } from '../worker/claw';
 import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
-import type { LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
+import { readAnnouncements } from '../worker/announcements';
+import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
+
+// Tiny, real encoded fixtures: solid coral images generated with Pillow, quality 80.
+const photoFixture = (name: string, mime = 'image/webp') => `data:${mime};base64,${readFileSync(new URL(`./fixtures/${name}`, import.meta.url)).toString('base64')}`;
+const PROFILE_WEBP = photoFixture('photo-square.webp');
+const PROFILE_JPEG = photoFixture('photo-square.jpg', 'image/jpeg');
+const LUCK_PHOTO = photoFixture('photo-wide.webp');
+const NONSQUARE_PHOTO = photoFixture('photo-nonsquare.webp');
+const TOO_WIDE_PHOTO = photoFixture('photo-too-wide.webp');
+function paddedJpeg(bytes: number): string {
+  const original = Buffer.from(PROFILE_JPEG.split(',')[1]!, 'base64');
+  const chunks: Buffer[] = [original.subarray(0, 2)];
+  let remaining = bytes - original.length;
+  if (remaining < 4) throw new Error('JPEG padding must fit a comment segment');
+  while (remaining > 0) {
+    let size = Math.min(65537, remaining);
+    if (remaining - size > 0 && remaining - size < 4) size -= 4;
+    const chunk = Buffer.alloc(size); chunk[0] = 0xff; chunk[1] = 0xfe; chunk.writeUInt16BE(size - 2, 2);
+    chunks.push(chunk); remaining -= size;
+  }
+  chunks.push(original.subarray(2));
+  return `data:image/jpeg;base64,${Buffer.concat(chunks).toString('base64')}`;
+}
+const profilePhotoPath = (id: string, version: number) => `/api/users/${id}/photo?v=${version}`;
+const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds/${date}/photo?v=${version}`;
 
 const ORIGIN = 'http://localhost';
 const PASSWORD = 'test-only-password-42!';
@@ -316,6 +342,432 @@ describe('Worker and D1 integration', () => {
     await database.prepare('UPDATE claw_accounts SET board_json = ?, power_counter = ?, next_play_at = 0 WHERE user_id = ?')
       .bind(JSON.stringify(board), counter, 'min').run();
   }
+
+  async function uploadLuck(cookie: string, image = LUCK_PHOTO, instance?: Miniflare, roundDate = TODAY) {
+    const response = await request('/api/games/luck/photo', { method: 'PUT', cookie, instance, body: { roundDate, image } });
+    expect(response.status).toBe(200);
+    return response.json() as Promise<LuckPhotoResponse>;
+  }
+  async function uploadProfile(cookie: string, photo = PROFILE_WEBP, instance?: Miniflare) {
+    const response = await request('/api/me/photo', { method: 'PUT', cookie, instance, body: { photo } });
+    expect(response.status).toBe(200);
+    return (await response.json() as { user: User }).user;
+  }
+
+  describe('launch profile and photo APIs', () => {
+    it('rejects stale profile and photo edits after another tab switches the authenticated account', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      await uploadProfile(min.cookie, PROFILE_JPEG);
+      await uploadProfile(siwon.cookie, PROFILE_WEBP);
+      const snapshot = async () => ({
+        users: (await db.prepare("SELECT id, display_name, photo_version FROM users WHERE id IN ('min', 'siwon') ORDER BY id").all()).results,
+        photos: (await db.prepare("SELECT user_id, mime, data, updated_at FROM user_photos WHERE user_id IN ('min', 'siwon') ORDER BY user_id").all()).results,
+      });
+      const before = await snapshot();
+      const operations = [
+        { path: '/api/me/profile', method: 'PUT', body: { displayName: '이전계정이름' } },
+        { path: '/api/me/photo', method: 'PUT', body: { photo: PROFILE_JPEG } },
+        { path: '/api/me/photo', method: 'DELETE', body: {} },
+      ];
+      for (const operation of operations) {
+        const response = await request(operation.path, { method: operation.method, cookie: siwon.cookie,
+          body: { ...operation.body, expectedUserId: 'min' } });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ error: { code: 'ACCOUNT_CHANGED' } });
+        expect(await snapshot()).toEqual(before);
+      }
+      // The same routes remain usable when the screen and session agree.
+      for (const operation of operations) {
+        const response = await request(operation.path, { method: operation.method, cookie: siwon.cookie,
+          body: { ...operation.body, expectedUserId: 'siwon' } });
+        expect(response.status).toBe(200);
+      }
+      const after = await snapshot();
+      expect(after.users.filter(row => row.id === 'min')).toEqual(before.users.filter(row => row.id === 'min'));
+      expect(after.photos.filter(row => row.user_id === 'min')).toEqual(before.photos.filter(row => row.user_id === 'min'));
+      expect((await bootstrap(siwon.cookie)).user).toMatchObject({ displayName: '이전계정이름', photoVersion: null });
+    });
+
+
+    it('normalizes NFC and surrounding spaces, counts Hangul graphemes, and leaves the login ID intact', async () => {
+      const { cookie } = await login('min');
+      const response = await request('/api/me/profile', { method: 'PUT', cookie, body: { displayName: `  ${'가'.repeat(10).normalize('NFD')}  ` } });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { user: User }).user).toMatchObject({ username: 'min', displayName: '가'.repeat(10) });
+      expect((await login('min')).user.displayName).toBe('가'.repeat(10));
+      expect((await bootstrap(cookie)).players.find(player => player.id === 'min')?.displayName).toBe('가'.repeat(10));
+      for (const displayName of ['', '  ', 'a'.repeat(11), '가'.repeat(11), '한 글', 'hello!', 'é', '中文', '👨‍👩‍👧‍👦', { toString: 'bad' }]) {
+        expect((await request('/api/me/profile', { method: 'PUT', cookie, body: { displayName } })).status).toBe(400);
+      }
+      expect((await bootstrap(cookie)).user.displayName).toBe('가'.repeat(10));
+      expect((await request('/api/me/profile', { method: 'PUT', cookie, body: { displayName: '새이름Ab12' } })).status).toBe(200);
+    });
+
+    it('enforces case-insensitive uniqueness across concurrent active users', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      const responses = await Promise.all([
+        request('/api/me/profile', { method: 'PUT', cookie: min.cookie, body: { displayName: 'Together' } }),
+        request('/api/me/profile', { method: 'PUT', cookie: siwon.cookie, body: { displayName: 'together' } }),
+      ]);
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM users WHERE display_name = 'Together' COLLATE NOCASE AND active = 1").first('n')).toBe(1);
+    });
+
+    it('allows inactive-name reuse but prevents reactivating a conflicting account', async () => {
+      const { cookie } = await login('min');
+      await db.prepare("UPDATE users SET active = 0, display_name = 'Reusable' WHERE id = 'siwon'").run();
+      expect((await request('/api/me/profile', { method: 'PUT', cookie, body: { displayName: 'reusable' } })).status).toBe(200);
+      await expect(db.prepare("UPDATE users SET active = 1 WHERE id = 'siwon'").run()).rejects.toThrow('UNIQUE');
+      expect(await db.prepare("SELECT active FROM users WHERE id = 'siwon'").first('active')).toBe(0);
+    });
+
+    it.each([PROFILE_WEBP, PROFILE_JPEG])('serves a real 512px profile photo to another logged-in user with immutable private caching %#', async photo => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      const user = await uploadProfile(min.cookie, photo);
+      expect(user.photoVersion).toBe(1);
+      const path = profilePhotoPath('min', user.photoVersion!);
+      expect((await request(path)).status).toBe(401);
+      const response = await request(path, { cookie: siwon.cookie });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('private, max-age=31536000, immutable');
+      expect(response.headers.get('vary')).toContain('Cookie');
+      expect(response.headers.get('content-type')).toBe(photo.startsWith('data:image/webp') ? 'image/webp' : 'image/jpeg');
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from(photo.split(',')[1]!, 'base64'));
+      const view = await bootstrap(siwon.cookie);
+      expect(view.players.find(player => player.id === 'min')?.photoVersion).toBe(1);
+      expect(JSON.stringify(view)).not.toContain(photo.split(',')[1]);
+      expect(JSON.stringify(view)).not.toContain('data:image/');
+    });
+
+    it('rejects malformed, unsupported, non-512 and nonsquare profile images without changing version', async () => {
+      const { cookie } = await login('min');
+      const invalid = [null, '', 'https://example.test/p.jpg', 'data:image/jpeg;base64,@@@', DRAWING_PNG,
+        DRAWING_WEBP, NONSQUARE_PHOTO, LUCK_PHOTO, PROFILE_WEBP.replace('image/webp', 'image/jpeg'),
+        PROFILE_JPEG.slice(0, -8), PROFILE_WEBP.slice(0, -8), 'data:image/jpeg;base64,' + Buffer.from('not a jpeg').toString('base64')];
+      for (const photo of invalid) {
+        expect((await request('/api/me/photo', { method: 'PUT', cookie, body: { photo } })).status).toBe(400);
+      }
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM user_photos').first('n')).toBe(0);
+      expect((await bootstrap(cookie)).user.photoVersion).toBeNull();
+    });
+
+    it('accepts exactly 260KiB of valid JPEG bytes and rejects one extra byte', async () => {
+      const { cookie } = await login('min');
+      expect((await uploadProfile(cookie, paddedJpeg(260 * 1024))).photoVersion).toBe(1);
+      const rejected = await request('/api/me/photo', { method: 'PUT', cookie, body: { photo: paddedJpeg(260 * 1024 + 1) } });
+      expect(rejected.status).toBe(413);
+      expect((await bootstrap(cookie)).user.photoVersion).toBe(1);
+    });
+
+    it('increments versions across replacements, deletion and reupload without reusing an old URL', async () => {
+      const { cookie } = await login('min');
+      expect((await uploadProfile(cookie)).photoVersion).toBe(1);
+      expect((await uploadProfile(cookie, PROFILE_JPEG)).photoVersion).toBe(2);
+      expect((await request(profilePhotoPath('min', 1), { cookie })).status).toBe(404);
+      const deleted = await request('/api/me/photo', { method: 'DELETE', cookie, body: {} });
+      expect(deleted.status).toBe(200);
+      expect((await deleted.json() as { user: User }).user.photoVersion).toBeNull();
+      expect((await request(profilePhotoPath('min', 2), { cookie })).status).toBe(404);
+      expect((await bootstrap(cookie)).players.find(player => player.id === 'min')?.photoVersion).toBeNull();
+      expect((await uploadProfile(cookie)).photoVersion).toBe(4);
+      expect((await request(profilePhotoPath('min', 3), { cookie })).status).toBe(404);
+    });
+
+    it('rolls back photo-version counters with failed image writes or deletion', async () => {
+      const { cookie } = await login('min');
+      await db.prepare(`CREATE TRIGGER reject_profile_upload BEFORE INSERT ON user_photos
+        BEGIN SELECT RAISE(ABORT, 'test photo write failure'); END;`).run();
+      expect((await request('/api/me/photo', { method: 'PUT', cookie, body: { photo: PROFILE_WEBP } })).status).toBe(500);
+      expect(await db.prepare("SELECT photo_version FROM users WHERE id = 'min'").first('photo_version')).toBeNull();
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM user_photos').first('n')).toBe(0);
+      await db.prepare('DROP TRIGGER reject_profile_upload').run();
+      expect((await uploadProfile(cookie)).photoVersion).toBe(1);
+      await db.prepare(`CREATE TRIGGER reject_profile_delete BEFORE DELETE ON user_photos
+        BEGIN SELECT RAISE(ABORT, 'test photo delete failure'); END;`).run();
+      expect((await request('/api/me/photo', { method: 'DELETE', cookie, body: {} })).status).toBe(500);
+      expect((await bootstrap(cookie)).user.photoVersion).toBe(1);
+      expect((await request(profilePhotoPath('min', 1), { cookie })).status).toBe(200);
+      await db.prepare('DROP TRIGGER reject_profile_delete').run();
+      expect((await request('/api/me/photo', { method: 'DELETE', cookie, body: {} })).status).toBe(200);
+    });
+
+    it('rejects missing and invalid image versions and protects profile mutations with authentication', async () => {
+      for (const path of ['/api/me/profile', '/api/me/photo']) {
+        expect((await request(path, { method: 'PUT', body: {} })).status).toBe(401);
+      }
+      const { cookie } = await login('admin');
+      expect((await request('/api/me/profile', { method: 'PUT', cookie, body: { displayName: '관리자2' } })).status).toBe(200);
+      await uploadProfile(cookie);
+      for (const suffix of ['', '?v=0', '?v=-1', '?v=1.5', '?v=nope']) {
+        expect((await request(`/api/users/admin/photo${suffix}`, { cookie })).status).toBe(400);
+      }
+      expect((await request('/api/users/missing/photo?v=1', { cookie })).status).toBe(404);
+      expect((await request('/api/me/photo', { method: 'PUT', cookie, origin: 'https://evil.test', body: { photo: PROFILE_WEBP } })).status).toBe(403);
+    });
+
+    it('updates nickname and photo metadata in results, participants and catchmind without leaking photo bytes', async () => {
+      const min = await login('min'); const yeseo = await login('yeseo');
+      expect((await request('/api/me/profile', { method: 'PUT', cookie: min.cookie, body: { displayName: '민새이름' } })).status).toBe(200);
+      await uploadProfile(min.cookie);
+      await seedRound({ game: 'luck', answer: '50', revealedAt: Date.parse(`${TODAY}T00:00:00Z`), predictions: [['min', '50']] });
+      const view = await bootstrap(yeseo.cookie);
+      const game = view.games.find(game => game.id === 'luck')!;
+      expect(game.results[0]).toMatchObject({ displayName: '민새이름', photoVersion: 1 });
+      expect(game.participants.find(player => player.playerId === 'min')).toMatchObject({ displayName: '민새이름', photoVersion: 1 });
+      const round = await openCatchmind(min.cookie);
+      expect(round.drawer).toMatchObject({ displayName: '민새이름', photoVersion: 1 });
+      expect(JSON.stringify(await getCatchmind(yeseo.cookie))).not.toContain(PROFILE_WEBP.split(',')[1]);
+    });
+  });
+
+  describe('luck evidence photos', () => {
+    it('requires a photo before saving an answer and permits JPEG/WebP rectangular evidence', async () => {
+      const { cookie } = await login('yeseo');
+      expect((await request('/api/games/luck/answer', { method: 'PUT', cookie, body: { value: '77', hint: '오늘' } })).status).toBe(400);
+      expect(await db.prepare("SELECT answer FROM game_rounds WHERE game_id = 'luck' AND round_date = ?").bind(TODAY).first('answer')).toBeNull();
+      const uploaded = await uploadLuck(cookie);
+      expect(uploaded.photo).toEqual({ url: luckPhotoPath(TODAY, 1), version: 1 });
+      expect((await request('/api/games/luck/answer', { method: 'PUT', cookie, body: { value: '77', hint: '오늘' } })).status).toBe(200);
+      expect((await uploadLuck(cookie, PROFILE_JPEG)).photo.version).toBe(2);
+    });
+
+    it('hides evidence before reveal, publishes it afterward and includes only URLs in polling responses', async () => {
+      const yeseo = await login('yeseo'); const min = await login('min'); const admin = await login('admin');
+      const uploaded = await uploadLuck(yeseo.cookie);
+      const path = uploaded.photo.url;
+      expect((await request(path)).status).toBe(401);
+      for (const cookie of [min.cookie, admin.cookie]) expect((await request(path, { cookie })).status).toBe(403);
+      expect((await request(path, { cookie: yeseo.cookie })).status).toBe(200);
+      expect((await bootstrap(min.cookie)).games.find(game => game.id === 'luck')?.photo).toBeNull();
+      expect((await bootstrap(yeseo.cookie)).games.find(game => game.id === 'luck')?.photo).toEqual(uploaded.photo);
+      expect((await request('/api/games/luck/answer', { method: 'PUT', cookie: yeseo.cookie, body: { value: '77' } })).status).toBe(200);
+      expect((await request('/api/games/luck/reveal', { method: 'POST', cookie: yeseo.cookie, body: {} })).status).toBe(200);
+      const image = await request(path, { cookie: min.cookie });
+      expect(image.status).toBe(200);
+      expect(image.headers.get('cache-control')).toBe('private, max-age=31536000, immutable');
+      expect(image.headers.get('vary')).toContain('Cookie');
+      expect(Buffer.from(await image.arrayBuffer())).toEqual(Buffer.from(LUCK_PHOTO.split(',')[1]!, 'base64'));
+      const view = await bootstrap(min.cookie);
+      expect(view.games.find(game => game.id === 'luck')?.photo).toEqual(uploaded.photo);
+      expect(JSON.stringify(view)).not.toContain('data:image/');
+      expect(JSON.stringify(view)).not.toContain(LUCK_PHOTO.split(',')[1]);
+      expect((await request('/api/games/luck/photo', { method: 'PUT', cookie: yeseo.cookie, body: { image: PROFILE_WEBP } })).status).toBe(409);
+    });
+
+    it('allows only today\'s author to replace a hidden photo and invalidates old version addresses', async () => {
+      const yeseo = await login('yeseo'); const min = await login('min'); const admin = await login('admin');
+      for (const cookie of [min.cookie, admin.cookie]) {
+        expect((await request('/api/games/luck/photo', { method: 'PUT', cookie, body: { image: LUCK_PHOTO } })).status).toBe(403);
+      }
+      expect((await request('/api/games/luck/photo', { method: 'PUT', cookie: yeseo.cookie,
+        body: { roundDate: '2026-10-29', image: LUCK_PHOTO } })).status).toBe(409);
+      await uploadLuck(yeseo.cookie);
+      expect((await uploadLuck(yeseo.cookie, PROFILE_WEBP)).photo.version).toBe(2);
+      expect((await request(luckPhotoPath(TODAY, 1), { cookie: yeseo.cookie })).status).toBe(404);
+      expect((await request(luckPhotoPath(TODAY, 2), { cookie: yeseo.cookie })).status).toBe(200);
+      for (const suffix of ['', '?v=0', '?v=-1', '?v=1.5']) {
+        expect((await request(`/api/games/luck/rounds/${TODAY}/photo${suffix}`, { cookie: yeseo.cookie })).status).toBe(400);
+      }
+    });
+
+    it('accepts 440KiB evidence and rejects malformed, oversized and wider-than-1280 inputs', async () => {
+      const { cookie } = await login('yeseo');
+      expect((await uploadLuck(cookie, paddedJpeg(440 * 1024))).photo.version).toBe(1);
+      expect((await request('/api/games/luck/photo', { method: 'PUT', cookie, body: { image: paddedJpeg(440 * 1024 + 1) } })).status).toBe(413);
+      for (const image of [DRAWING_PNG, TOO_WIDE_PHOTO, 'not a photo', PROFILE_WEBP.slice(0, -8)]) {
+        expect((await request('/api/games/luck/photo', { method: 'PUT', cookie, body: { image } })).status).toBe(400);
+      }
+      expect(await db.prepare('SELECT version FROM luck_photos WHERE round_date = ?').bind(TODAY).first('version')).toBe(1);
+    });
+
+    it('uses automatic reveal time for image permissions and includes evidence in revealed history', async () => {
+      const { cookie } = await login('min');
+      await seedRound({ game: 'luck', date: '2026-10-29', answer: '50', revealAt: Date.parse('2026-10-29T09:00:00Z') });
+      await db.prepare('INSERT INTO luck_photos (round_date, mime, data, version, updated_at) VALUES (?, ?, ?, 3, ?)')
+        .bind('2026-10-29', 'image/webp', Array.from(Buffer.from(LUCK_PHOTO.split(',')[1]!, 'base64')), '2026-10-29T00:00:00Z').run();
+      const response = await request(luckPhotoPath('2026-10-29', 3), { cookie });
+      expect(response.status).toBe(200);
+      const history = await request('/api/games/luck/history', { cookie });
+      expect((await history.json() as HistoryResponse).history[0]).toMatchObject({ roundDate: '2026-10-29', photo: { url: luckPhotoPath('2026-10-29', 3), version: 3 } });
+    });
+
+    it('rejects a photo replacement when the SQL write crosses KST midnight', async () => {
+      const instance = runtime(await workerAt('2026-10-30T14:59:59Z', '2026-10-30T15:00:00Z'));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const { cookie } = await login('yeseo', instance);
+        expect((await request('/api/games/luck/photo', { method: 'PUT', cookie, instance, body: { image: LUCK_PHOTO } })).status).toBe(409);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM luck_photos').first('n')).toBe(0);
+      } finally { await instance.dispose(); }
+    });
+  });
+
+  describe('lottery win announcements', () => {
+    it.each([0, 99])('announces winning speetto roll %i atomically once across retries', async roll => {
+      const instant = `${TODAY}T00:00:00Z`;
+      const instance = runtime(await workerAt(instant, instant, roll));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        await fund(1000, 'min', database);
+        const min = await login('min', instance); const siwon = await login('siwon', instance);
+        const body = { requestId: crypto.randomUUID(), payment: 'gold' };
+        const responses = await Promise.all(Array.from({ length: 3 }, () => request('/api/shop/speetto', { method: 'POST', cookie: min.cookie, instance, body })));
+        expect(responses.every(response => response.status === 200)).toBe(true);
+        const purchase = (await responses[0]!.json() as SpeettoResponse).purchase!;
+        const rows = (await database.prepare('SELECT kind, user_id, payload_json, reference FROM announcements').all<{ kind: string; user_id: string; payload_json: string; reference: string }>()).results;
+        expect(rows).toHaveLength(roll === 0 ? 1 : 0);
+        if (roll === 0) {
+          expect(rows[0]).toMatchObject({ kind: 'speetto', user_id: 'min', reference: `announcement:speetto:prize:${purchase.id}` });
+          expect(JSON.parse(rows[0]!.payload_json)).toEqual({ rank: null, prize: 1500 });
+          const peer = await request('/api/bootstrap', { cookie: siwon.cookie, instance });
+          expect((await peer.json() as BootstrapResponse).announcements[0]).toMatchObject({ kind: 'speetto', userId: 'min', displayName: 'min', prize: 1500 });
+        }
+        const own = await request('/api/bootstrap', { cookie: min.cookie, instance });
+        expect((await own.json() as BootstrapResponse).announcements).toEqual([]);
+      } finally { await instance.dispose(); }
+    });
+
+    it('rolls back a speetto debit, win and receipt when its announcement cannot be inserted', async () => {
+      const instant = `${TODAY}T00:00:00Z`;
+      const instance = runtime(await workerAt(instant, instant, 0));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        await fund(1000, 'min', database);
+        const { cookie } = await login('min', instance);
+        await database.prepare(`CREATE TRIGGER reject_win_notice BEFORE INSERT ON announcements
+          BEGIN SELECT RAISE(ABORT, 'test announcement failure'); END;`).run();
+        const body = { requestId: crypto.randomUUID(), payment: 'gold' };
+        expect((await request('/api/shop/speetto', { method: 'POST', cookie, instance, body })).status).toBe(500);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM shop_purchases').first('n')).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(0);
+        expect((await ledgerRows(database)).map(row => row.amount)).toEqual([1000]);
+        await database.prepare('DROP TRIGGER reject_win_notice').run();
+        expect((await request('/api/shop/speetto', { method: 'POST', cookie, instance, body })).status).toBe(200);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(1);
+      } finally { await instance.dispose(); }
+    });
+
+    it('announces only daily lotto ranks one through three and deduplicates concurrent settlement', async () => {
+      const min = await login('min'); const siwon = await login('siwon');
+      await fund(3000);
+      const picks = [[1,2,3,4,5], [1,2,3,4,6], [1,2,3,6,7], [1,2,6,7,8], [1,6,7,8,9], [6,7,8,9,10]];
+      for (const numbers of picks) {
+        expect((await request('/api/shop/lotto', { method: 'POST', cookie: min.cookie,
+          body: { requestId: crypto.randomUUID(), numbers, payment: 'gold' } })).status).toBe(200);
+      }
+      await db.prepare("UPDATE lotto_tickets SET draw_date = '2026-10-29'").run();
+      await db.prepare("INSERT INTO lotto_draws (date, numbers, created_at) VALUES ('2026-10-29', '[1,2,3,4,5]', '2026-10-29T08:00:00Z')").run();
+      const views = await Promise.all([bootstrap(siwon.cookie), bootstrap(min.cookie), bootstrap(siwon.cookie)]);
+      const rows = (await db.prepare('SELECT kind, payload_json, reference FROM announcements ORDER BY id').all<{ kind: string; payload_json: string; reference: string }>()).results;
+      expect(rows).toHaveLength(3);
+      expect(rows.map(row => JSON.parse(row.payload_json).rank).sort()).toEqual([1,2,3]);
+      expect(rows.map(row => JSON.parse(row.payload_json).prize).sort((a, b) => a - b)).toEqual([1000,3000,5000]);
+      expect(rows.every(row => row.kind === 'lotto' && row.reference.startsWith('announcement:lotto:prize:'))).toBe(true);
+      expect(views[0]!.announcements).toHaveLength(3);
+      expect(views[1]!.announcements).toEqual([]);
+      const payouts = (await ledgerRows()).filter(row => row.reference.startsWith('lotto:prize:'));
+      expect(payouts.map(row => row.amount).sort((a, b) => a - b)).toEqual([500,1000,3000,5000]);
+      await bootstrap(siwon.cookie);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(3);
+    });
+
+    it('rolls back lotto settlement and payout if its announcement fails', async () => {
+      const { cookie } = await login('min'); await fund(500);
+      const bought = await request('/api/shop/lotto', { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), numbers: [1,2,3,4,5], payment: 'gold' } });
+      expect(bought.status).toBe(200);
+      await db.prepare("UPDATE lotto_tickets SET draw_date = '2026-10-29'").run();
+      await db.prepare("INSERT INTO lotto_draws (date, numbers, created_at) VALUES ('2026-10-29', '[1,2,3,4,5]', '2026-10-29T08:00:00Z')").run();
+      await db.prepare(`CREATE TRIGGER reject_lotto_notice BEFORE INSERT ON announcements
+        BEGIN SELECT RAISE(ABORT, 'test lotto notice failure'); END;`).run();
+      expect((await request('/api/bootstrap', { cookie })).status).toBe(500);
+      expect(await db.prepare('SELECT settled_at FROM lotto_tickets').first('settled_at')).toBeNull();
+      expect((await ledgerRows()).filter(row => row.reference.startsWith('lotto:prize:'))).toEqual([]);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(0);
+      await db.prepare('DROP TRIGGER reject_lotto_notice').run();
+      expect((await bootstrap(cookie)).user.gold).toBe(5000);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(1);
+    });
+
+    it('filters self, exact ten-minute-old and future notices, limits to five, and uses current nicknames', async () => {
+      const min = await login('min'); const siwon = await login('siwon');
+      const now = Date.parse(`${TODAY}T00:00:00Z`);
+      const add = async (id: string, user: string, when: number) => db.prepare(`INSERT INTO announcements (kind, user_id, payload_json, created_at, reference)
+        VALUES ('speetto', ?, '{"rank":null,"prize":1500}', ?, ?)`).bind(user, new Date(when).toISOString(), id).run();
+      await add('exact-old', 'siwon', now - 600000);
+      await add('own', 'min', now);
+      await add('future', 'siwon', now + 1);
+      expect((await bootstrap(min.cookie)).announcements).toEqual([]);
+      await add('inside', 'siwon', now - 599999);
+      expect((await bootstrap(min.cookie)).announcements).toHaveLength(1);
+      for (let index = 1; index <= 6; index++) await add(`recent-${index}`, 'siwon', now - index * 1000);
+      expect((await request('/api/me/profile', { method: 'PUT', cookie: siwon.cookie, body: { displayName: '새시원' } })).status).toBe(200);
+      const notices = (await bootstrap(min.cookie)).announcements;
+      // The newest global five include the viewer's own win; it is omitted, not backfilled.
+      expect(notices).toHaveLength(4);
+      expect(notices.map(notice => notice.createdAt)).toEqual([1,2,3,4].map(seconds => new Date(now - seconds * 1000).toISOString()));
+      expect(notices.every(notice => notice.userId === 'siwon' && notice.displayName === '새시원')).toBe(true);
+    });
+
+    it('bounds reads when hundreds of the newest wins belong to the viewer', async () => {
+      const now = new Date(`${TODAY}T00:00:00Z`);
+      await db.prepare(`INSERT INTO announcements (kind, user_id, payload_json, created_at, reference)
+        VALUES ('speetto', 'siwon', '{"rank":null,"prize":1500}', ?, 'older-other-win')`)
+        .bind(new Date(now.getTime() - 5000).toISOString()).run();
+      await db.batch(Array.from({ length: 200 }, (_, index) => db.prepare(`INSERT INTO announcements
+        (kind, user_id, payload_json, created_at, reference) VALUES ('speetto', 'min', '{"rank":null,"prize":1500}', ?, ?)`)
+        .bind(new Date(now.getTime() - index).toISOString(), `own-fixture:${index}`)));
+      const observed = measuredDatabase(db, now.getTime());
+      expect(await readAnnouncements(observed.binding, 'min', now)).toEqual([]);
+      expect(observed.rowsRead()).toBeLessThanOrEqual(12);
+      console.log(`Announcements bootstrap module D1 rows_read: ${observed.rowsRead()} with 200 recent own wins; newest global five filtered before display`);
+    });
+
+    it('reads a bounded indexed announcement window regardless of old history size', async () => {
+      const now = new Date(`${TODAY}T00:00:00Z`);
+      await db.batch(Array.from({ length: 5 }, (_, index) => db.prepare(`INSERT INTO announcements
+        (kind, user_id, payload_json, created_at, reference) VALUES ('speetto', 'siwon', '{"rank":null,"prize":1500}', ?, ?)`)
+        .bind(new Date(now.getTime() - index * 1000).toISOString(), `recent-fixture:${index}`)));
+      const observed = measuredDatabase(db, now.getTime());
+      expect(await readAnnouncements(observed.binding, 'min', now)).toHaveLength(5);
+      const before = observed.rowsRead(); observed.reset();
+      await db.batch(Array.from({ length: 200 }, (_, index) => db.prepare(`INSERT INTO announcements
+        (kind, user_id, payload_json, created_at, reference) VALUES ('speetto', 'siwon', '{"rank":null,"prize":1500}', ?, ?)`)
+        .bind(new Date(now.getTime() - 600000 - index * 1000).toISOString(), `old-fixture:${index}`)));
+      expect(await readAnnouncements(observed.binding, 'min', now)).toHaveLength(5);
+      expect(observed.rowsRead()).toBe(before);
+      expect(before).toBeLessThanOrEqual(20);
+      console.log(`Announcements bootstrap module D1 rows_read: ${before} for five recent notices, unchanged after 200 expired notices; authentication and other bootstrap work excluded`);
+    });
+  });
+
+  it('measures complete authenticated profile and luck photo API reads without production instrumentation', async () => {
+    const instance = runtime(workerWithD1Metrics(script));
+    try {
+      const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+      const min = await login('min', instance); const yeseo = await login('yeseo', instance);
+      const measurements: Record<string, number> = {};
+      const measured = async (name: string, path: string, options: { method?: string; cookie: string; body?: unknown }) => {
+        const response = await request(path, { ...options, instance });
+        expect(response.status).toBe(200);
+        const value = response.headers.get('X-Test-D1-Rows-Read'); expect(value).not.toBeNull();
+        measurements[name] = Number(value); expect(measurements[name]).toBeGreaterThan(0);
+        return response;
+      };
+      await measured('PUT profile', '/api/me/profile', { method: 'PUT', cookie: min.cookie, body: { displayName: '측정이름' } });
+      const uploaded = await measured('PUT profile photo', '/api/me/photo', { method: 'PUT', cookie: min.cookie, body: { photo: PROFILE_WEBP } });
+      const user = (await uploaded.json() as { user: User }).user;
+      await measured('GET profile photo', profilePhotoPath('min', user.photoVersion!), { cookie: yeseo.cookie });
+      await measured('DELETE profile photo', '/api/me/photo', { method: 'DELETE', cookie: min.cookie, body: {} });
+      const luck = await measured('PUT luck photo', '/api/games/luck/photo', { method: 'PUT', cookie: yeseo.cookie, body: { roundDate: TODAY, image: LUCK_PHOTO } });
+      const photo = (await luck.json() as LuckPhotoResponse).photo;
+      await measured('GET luck photo author', photo.url, { cookie: yeseo.cookie });
+      console.log(`Launch B full authenticated API D1 rows_read (empty history): ${JSON.stringify(measurements)}`);
+    } finally { await instance.dispose(); }
+  });
 
   describe('launch gift event', () => {
     const launchInstant = '2026-11-02T00:00:00Z'; // 09:00 KST on launch day.
@@ -2333,6 +2785,7 @@ describe('Worker and D1 integration', () => {
     for (const [cookie, value] of [[min.cookie, '43'], [siwon.cookie, '57']]) {
       expect((await request('/api/games/luck/prediction', { method: 'PUT', cookie, body: { value } })).status).toBe(200);
     }
+    await uploadLuck(yeseo.cookie);
     expect((await request('/api/games/luck/answer', { method: 'PUT', cookie: yeseo.cookie, body: { value: '50' } })).status).toBe(200);
     expect((await request('/api/games/luck/reveal', { method: 'POST', cookie: yeseo.cookie, body: {} })).status).toBe(200);
     const result = (await bootstrap(min.cookie)).games.find(game => game.id === 'luck')!;
@@ -2598,6 +3051,7 @@ describe('Worker and D1 integration', () => {
     const min = await login('min');
     const siwon = await login('siwon');
     const admin = await login('admin');
+    await uploadLuck(yeseo.cookie);
     expect((await request('/api/games/luck/answer', { method: 'PUT', cookie: yeseo.cookie, body: { value: '77', hint: '행운이 가득해요' } })).status).toBe(200);
     for (const cookie of [min.cookie, siwon.cookie, admin.cookie]) {
       const state = (await bootstrap(cookie)).games.find(game => game.id === 'luck')!;
@@ -2793,6 +3247,7 @@ describe('Worker and D1 integration', () => {
 
   it('limits luck hints to 200 characters and schedules the saved answer for 18:00', async () => {
     const { cookie } = await login('yeseo');
+    await uploadLuck(cookie);
     expect((await request('/api/games/luck/answer', { method: 'PUT', cookie, body: { value: '50', hint: '가'.repeat(200) } })).status).toBe(200);
     expect(await db.prepare('SELECT reveal_at FROM game_rounds').first('reveal_at')).toBe(Date.parse(`${TODAY}T09:00:00Z`));
     expect((await request('/api/games/luck/answer', { method: 'PUT', cookie, body: { value: '51', hint: '가'.repeat(201) } })).status).toBe(400);

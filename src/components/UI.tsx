@@ -1,6 +1,30 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ART_KEYS, defaultCharacter, isArtKey, type ArtKey } from "../../shared/characters";
 import { anim, useOnChange } from "../motion";
+import "../profile-photo.css";
+
+export interface ProfileDirectoryEntry {
+  id: string;
+  username: string;
+  displayName: string;
+  photoVersion: number | null;
+  /** Only preview stores local data URLs; signed-in photos use versioned URLs. */
+  photoUrl?: string | null;
+}
+const ProfileDirectory = createContext<{ profiles: ProfileDirectoryEntry[]; preview: boolean }>({ profiles: [], preview: false });
+export function ProfileDirectoryProvider({ profiles, preview, children }: { profiles: ProfileDirectoryEntry[]; preview: boolean; children: ReactNode }) {
+  return <ProfileDirectory.Provider value={{ profiles, preview }}>{children}</ProfileDirectory.Provider>;
+}
+export function useProfile(username: string) {
+  return useContext(ProfileDirectory).profiles.find(profile => profile.username === username);
+}
+export function useDisplayNameLookup() {
+  const { profiles } = useContext(ProfileDirectory);
+  return useCallback((username: string, fallback?: string) => profiles.find(profile => profile.username === username)?.displayName ?? fallback ?? username, [profiles]);
+}
+export function useDisplayName(username: string, fallback?: string) {
+  return useDisplayNameLookup()(username, fallback);
+}
 
 export const art = {
   axolotl: { tint: "#E3F6EE", name: "우파" },
@@ -266,16 +290,26 @@ export function CharacterSprite({
 export function Avatar({
   username,
   artKey,
+  userId,
+  photoVersion,
   size = 40,
   radius = "50%",
 }: {
   username?: string;
   artKey?: ArtKey;
+  userId?: string;
+  photoVersion?: number | null;
   size?: number;
   radius?: string;
 }) {
   const chosen = useCharacter(username ?? "");
   const key = artKey ?? chosen;
+  const directory = useContext(ProfileDirectory);
+  const profile = directory.profiles.find(person => person.username === username || person.id === userId);
+  const id = profile?.id ?? userId;
+  const version = profile ? profile.photoVersion : photoVersion;
+  const source = directory.preview ? profile?.photoUrl : id && version ? `/api/users/${encodeURIComponent(id)}/photo?v=${version}` : null;
+  const [failedSource, setFailedSource] = useState<string | null>(null);
   return (
     <span
       className="avatar"
@@ -287,7 +321,9 @@ export function Avatar({
         background: art[key].tint,
       }}
     >
-      <Character artKey={key} />
+      {source && source !== failedSource
+        ? <img className="avatar-photo" src={source} alt={profile ? `${profile.displayName} 프로필 사진` : "프로필 사진"} onError={() => setFailedSource(source)} />
+        : <Character artKey={key} />}
     </span>
   );
 }

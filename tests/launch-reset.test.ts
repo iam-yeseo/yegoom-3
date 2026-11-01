@@ -14,8 +14,8 @@ type Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
 const root = fileURLToPath(new URL('..', import.meta.url));
 const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventory_ledger', 'shop_purchases',
   'kuji_claims', 'kuji_boards', 'lotto_tickets', 'lotto_draws', 'catchmind_guesses', 'catchmind_requests',
-  'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts'];
-const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config'];
+  'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts', 'announcements', 'luck_photos'];
+const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -63,11 +63,16 @@ describe('launch reset in an isolated local D1', () => {
     for (const migration of migrations) await db.batch(statements(migration.sql).map(sql => db.prepare(sql)));
     await db.prepare('CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)').run();
     for (const migration of migrations) await db.prepare('INSERT INTO d1_migrations (name) VALUES (?)').bind(migration.name).run();
+    const profileBytes = Array.from(await readFile(new URL('./fixtures/photo-square.webp', import.meta.url)));
     await db.batch([
       db.prepare("INSERT INTO users (id, username, display_name, password_hash, role, active, character) VALUES ('min', 'min', '민', 'unchanged-player-password', 'player', 1, 'moon'), ('admin', 'admin', '관리자', 'unchanged-admin-password', 'admin', 1, 'cat'), ('inactive', 'inactive', '휴면', 'unchanged-inactive-password', 'player', 0, NULL)"),
       db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)').bind(await hashToken(token), 'min', now + 86400000, now - 86400000),
       db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES ('admin-session', 'admin', ?, ?)").bind(now + 86400000, now - 86400000),
       db.prepare("UPDATE claw_config SET payout_every = 17, weak_pickup = 39, weak_carry = 21, updated_at = '2026-10-31T07:00:00Z'"),
+      db.prepare("UPDATE users SET photo_version = 7 WHERE id = 'min'"),
+      db.prepare("INSERT INTO user_photos (user_id, mime, data, updated_at) VALUES ('min', 'image/webp', ?, '2026-11-01T00:00:00Z')").bind(profileBytes),
+      db.prepare("INSERT INTO luck_photos (round_date, mime, data, version, updated_at) VALUES ('2026-11-01', 'image/webp', ?, 2, '2026-11-01T00:00:00Z')").bind(profileBytes),
+      db.prepare("INSERT INTO announcements (kind, user_id, payload_json, created_at, reference) VALUES ('lotto', 'min', '{\"rank\":2,\"prize\":3000}', '2026-11-01T08:00:00Z', 'old-announcement')"),
       db.prepare("INSERT INTO login_attempts (bucket, attempts, expires_at) VALUES ('test:login', 3, ?) ").bind(now),
       db.prepare("INSERT INTO game_rounds (game_id, round_date, answer, hint, updated_at) VALUES ('luck', '2026-11-01', '88', 'fixture', ?) ").bind(now),
       db.prepare("INSERT INTO predictions (game_id, round_date, player_id, value, updated_at) VALUES ('luck', '2026-11-01', 'min', '87', ?)").bind(now),
@@ -115,13 +120,19 @@ describe('launch reset in an isolated local D1', () => {
     expect(await triggers()).toEqual(originalTriggers);
     expect((await triggers()).filter(trigger => appendOnly.includes(trigger.name))).toHaveLength(4);
     expect(await db.prepare('SELECT * FROM catchmind_turn').all()).toMatchObject({ results: [{ id: 1, drawer_id: null, round_id: null }] });
-    expect(results.flatMap(result => result.results).filter(row => 'cleared_table' in row)).toEqual(cleared.map(cleared_table => ({ cleared_table, remaining: 0 })));
+    expect(results.flatMap(result => result.results).filter(row => 'cleared_table' in row)
+      .sort((a, b) => String(a.cleared_table).localeCompare(String(b.cleared_table))))
+      .toEqual([...cleared].sort().map(cleared_table => ({ cleared_table, remaining: 0 })));
 
     // The existing session still authenticates; reads create a fresh wallet/first board.
     const bootstrapResponse = await request('/api/bootstrap');
     expect(bootstrapResponse.status).toBe(200);
     const bootstrap = await bootstrapResponse.json() as BootstrapResponse;
-    expect(bootstrap.user).toMatchObject({ id: 'min', displayName: '민', character: 'moon', gold: 0, weeklyScore: 0 });
+    expect(bootstrap.user).toMatchObject({ id: 'min', displayName: '민', photoVersion: 7, character: 'moon', gold: 0, weeklyScore: 0 });
+    expect(bootstrap.announcements).toEqual([]);
+    const retainedPhoto = await request('/api/users/min/photo?v=7');
+    expect(retainedPhoto.status).toBe(200);
+    expect(Buffer.from(await retainedPhoto.arrayBuffer())).toEqual(await readFile(new URL('./fixtures/photo-square.webp', import.meta.url)));
     expect(bootstrap.attendance).toMatchObject({ claimed: false, streak: 1, cycleDay: 1 });
     expect(bootstrap.claw).toMatchObject({ freeCoins: CLAW_RULES.freeCoins, purchasedCoins: 0 });
     const kujiResponse = await request('/api/shop/kuji');
@@ -186,5 +197,52 @@ describe('launch reset operator confirmation', () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe('launch profile additive migration', () => {
+  let instance: Miniflare;
+  let database: Database;
+  let oldMigrations: string[];
+  let launchMigration: string[];
+  beforeAll(async () => {
+    const names = (await readdir(new URL('../migrations/', import.meta.url))).filter(name => name.endsWith('.sql')).sort();
+    oldMigrations = await Promise.all(names.filter(name => name < '0007').map(name => readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8')));
+    launchMigration = statements(await readFile(new URL('../migrations/0007_launch_profiles.sql', import.meta.url), 'utf8'));
+  });
+  beforeEach(async () => {
+    await instance?.dispose();
+    instance = new Miniflare({ modules: true, script: 'export default { fetch() { return new Response("schema test"); } };', compatibilityDate: '2026-08-06', d1Databases: ['DB'] });
+    database = await instance.getD1Database('DB');
+    for (const sql of oldMigrations) await database.batch(statements(sql).map(statement => database.prepare(statement)));
+    await database.prepare(`INSERT INTO users (id, username, display_name, password_hash, role)
+      VALUES ('first', 'first', 'Name', 'unchanged-password', 'player'), ('second', 'second', 'Other', 'other-password', 'player')`).run();
+    await database.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at, created_at)
+      VALUES ('preserved-session', 'first', ?, ?)`).bind(now + 86400000, now).run();
+  });
+  afterAll(async () => { await instance?.dispose(); });
+
+  it('refuses existing active nickname duplicates before adding any columns or tables', async () => {
+    await database.prepare("UPDATE users SET display_name = 'name' WHERE id = 'second'").run();
+    const before = (await database.prepare('SELECT * FROM users ORDER BY id').all()).results;
+    await expect(database.batch(launchMigration.map(sql => database.prepare(sql)))).rejects.toThrow('UNIQUE');
+    expect((await database.prepare('PRAGMA table_info(users)').all<{ name: string }>()).results.some(column => column.name === 'photo_version')).toBe(false);
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name IN ('user_photos', 'announcements', 'luck_photos', 'users_active_display_name_idx')").first('n')).toBe(0);
+    expect((await database.prepare('SELECT * FROM users ORDER BY id').all()).results).toEqual(before);
+  });
+
+  it('preserves existing account/session values and the old SQL write contract when applied before deployment', async () => {
+    const before = (await database.prepare('SELECT id, username, display_name, password_hash, role, active, character FROM users ORDER BY id').all()).results;
+    await database.batch(launchMigration.map(sql => database.prepare(sql)));
+    expect((await database.prepare('SELECT id, username, display_name, password_hash, role, active, character FROM users ORDER BY id').all()).results).toEqual(before);
+    expect((await database.prepare('SELECT photo_version FROM users').all<{ photo_version: number | null }>()).results.every(row => row.photo_version === null)).toBe(true);
+    expect(await database.prepare('SELECT COUNT(*) AS n FROM sessions').first('n')).toBe(1);
+    // These are the pre-launch column lists; additive columns need no old-app writes.
+    await database.prepare("INSERT INTO attendance (user_id, date, streak, created_at) VALUES ('first', '2026-11-02', 1, '2026-11-02T00:00:00Z')").run();
+    await database.prepare("INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('compat-gold', 'first', 'gold', 100, 'compatibility', 'compat:attendance', '2026-11-02T00:00:00Z')").run();
+    await database.prepare("INSERT INTO users (id, username, display_name, password_hash, role) VALUES ('new', 'new', 'New', 'old-column-list', 'player')").run();
+    expect(await database.prepare("SELECT SUM(amount) AS gold FROM ledger WHERE user_id = 'first'").first('gold')).toBe(100);
+    await expect(database.prepare('DELETE FROM ledger').run()).rejects.toThrow('append-only');
+    for (const table of ['user_photos', 'announcements', 'luck_photos']) expect(await database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first('n')).toBe(0);
   });
 });
