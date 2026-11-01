@@ -55,6 +55,19 @@ for (const username of ['min', 'siwon', 'yeseo']) {
     statements.push(`INSERT INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at) VALUES ('fixture-${item}-${username}', 'e2e-${username}', '${item}', 2, '브라우저 테스트 이용권', 'fixture:${item}:${username}', '2026-10-23T00:00:00.000Z');`);
   }
 }
+// Real, untouched physics boards provide repeatable single/multiple catches.
+// Only this isolated fixture selects the board and the tenth (strong) attempt;
+// production has no seed endpoint, forced outcome, or browser-only physics.
+const physicsArtifact = await build({
+  entryPoints: ['shared/claw-physics.ts'], bundle: true, format: 'esm', platform: 'node', write: false,
+});
+const { createBoard } = await import(`data:text/javascript;base64,${Buffer.from(physicsArtifact.outputFiles[0].text).toString('base64')}`);
+for (const [username, generation, seed] of [
+  ['min', 1, 1792405194], ['siwon', 7, 681247775], ['yeseo', 1, 1792405194],
+]) {
+  const board = JSON.stringify(createBoard(generation, seed));
+  statements.push(`INSERT INTO claw_accounts (user_id, free_coins, purchased_coins, last_grant_slot, board_json, generation, version, next_play_at, power_counter) VALUES ('e2e-${username}', 5, 0, ${Math.floor(timestamp / 10800000)}, '${board}', ${generation}, 0, 0, 9);`);
+}
 // A complete, valid board makes browser reward assertions and screenshots
 // deterministic. Production board creation still uses crypto randomness.
 const kujiFixtureGrades = ['A', 'E', ...[

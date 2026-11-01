@@ -21,11 +21,12 @@
 - 전역 터치 이펙트: 누른 위치에 2px 코랄 테두리 링과 6px 색 점이 잠깐 나타나며, 입력·그리기 영역과 reduced motion에서는 생략
 - 한국 시간 기준 마감, 공개 전 정답 보호, 날짜가 바뀐 화면의 제출 차단
 - Claude Design 시안대로 만든 홈(아침/저녁), 하단 탭, 주간 랭킹, 출석 체크, 내 정보(캐릭터 선택·골드/점수 내역)
-- 캐릭터 뽑기, 주식 시장(목록·상세·장 마감·상장폐지) 화면
+- 캐릭터 뽑기: 개인별 물리 기계, 10초 조작·하강 멈춤·서버 결과 재생, 무료/구매 코인, 인형·클리어 보상
+- 주식 시장(목록·상세·장 마감·상장폐지) 화면
 - 로그인 전 미리보기(`#/preview`)
 - 설치 가능한 PWA, 로컬 폰트와 정적 화면의 오프라인 재방문
 
-뽑기·주식은 아직 서버 기능이 없는 **화면 단계**입니다. 화면 안에서만 동작하고 저장되지 않으며 실제 골드·점수가 변하지 않습니다. 예측 게임·출석·상점·캐치마인드의 확정 규칙은 `shared/balance.ts`에서 Worker와 화면이 함께 읽습니다. 도움말의 시간 차이는 점수표 값에서 계산한 시·분·초 단위로 표시합니다. 나머지 화면의 잠정값과 미리보기 데이터는 `src/sample.ts`에 남아 있습니다. 홈의 골드·주간 점수와 내 정보 내역은 실제 원장 합계·기록을 표시합니다. 기존 기기 출석 기록은 서버로 옮기지 않고 정리하며, 미리보기의 출석·캐릭터 선택은 기기 안에서만 동작합니다. 미리보기의 상점·캐치마인드도 서버 없이 동작하며 실제 계정에 반영되지 않습니다. 후속 개발 범위는 [2차 계획](docs/plan-v2.md)을 따릅니다.
+주식은 아직 서버 기능이 없는 **화면 단계**입니다. 화면 안에서만 동작하고 저장되지 않으며 실제 골드·점수가 변하지 않습니다. 예측 게임·출석·상점·캐치마인드·캐릭터 뽑기의 공개 규칙은 `shared/balance.ts`에서 Worker와 화면이 함께 읽습니다. 도움말의 시간 차이는 점수표 값에서 계산한 시·분·초 단위로 표시합니다. 나머지 화면의 잠정값과 미리보기 데이터는 `src/sample.ts`에 남아 있습니다. 홈의 골드·주간 점수와 내 정보 내역은 실제 원장 합계·기록을 표시합니다. 기존 기기 출석 기록은 서버로 옮기지 않고 정리하며, 미리보기의 출석·캐릭터 선택은 기기 안에서만 동작합니다. 미리보기의 상점·캐치마인드·캐릭터 뽑기도 서버 없이 동작하며 실제 계정에 반영되지 않습니다. 후속 개발 범위는 [2차 계획](docs/plan-v2.md)을 따릅니다.
 
 ## 로컬 시작
 
@@ -64,7 +65,7 @@ npm run preview
 npm run user:create -- --username siwon --deactivate
 ```
 
-운영자 계정은 예측·출제·출석·상점 구매·캐치마인드에 참여하지 않습니다. 현재 운영은 CLI로 수행하며 웹 관리 화면은 아직 없습니다. 초기 예측 출제자는 `min`, `siwon`, `yeseo`로 지정되어 있습니다. 원격 DB 계정을 만들거나 중지하려면 별도로 `--remote`를 지정해야 합니다. 비밀번호를 CLI 인수나 저장소에 기록하지 마세요. 자동화에서는 `YEGOOM_PASSWORD` 환경변수를 사용할 수 있습니다.
+운영자 계정은 예측·출제·출석·상점 구매·캐치마인드·뽑기 플레이 및 코인 구매에 참여하지 않습니다. 뽑기는 데모 기계만 볼 수 있습니다. 현재 운영은 CLI로 수행하며 웹 관리 화면은 아직 없습니다. 초기 예측 출제자는 `min`, `siwon`, `yeseo`로 지정되어 있습니다. 원격 DB 계정을 만들거나 중지하려면 별도로 `--remote`를 지정해야 합니다. 비밀번호를 CLI 인수나 저장소에 기록하지 마세요. 자동화에서는 `YEGOOM_PASSWORD` 환경변수를 사용할 수 있습니다.
 
 ## Cloudflare 연결 후 배포
 
@@ -83,9 +84,9 @@ npm run deploy:check
 npm run deploy
 ```
 
-Phase 5에는 **새 마이그레이션이 없습니다**. Phase 4의 `0005_catchmind.sql`까지 운영 DB에 적용된 상태를 기준으로 하며 기존 마이그레이션도 수정하지 않았습니다. 반영 순서는 PR 리뷰·머지 → main 배포입니다. 이번 개발 작업에서는 원격 DB 변경·머지·배포를 실행하지 않습니다.
+Phase 6은 **`0006_claw.sql` 마이그레이션이 필요합니다**. 기존 `0001`~`0005`는 수정하지 않았습니다. 운영 반영 순서는 **PR 리뷰 → 운영자가 머지 전에 `npm run db:migrate:remote` 실행 → PR 머지 → main 배포**입니다. 새 테이블만 추가하므로 기존 배포와 호환됩니다. 이번 개발 작업에서는 원격 DB 변경·머지·배포를 실행하지 않습니다.
 
-Workers Static Assets와 D1 이외의 서비스는 초기 실행에 필요하지 않습니다. 자동 정답 공개는 서버가 요청 시 공개 시각을 판단하므로 Cron 없이도 동작합니다. bootstrap·게임·기록 조회는 공개됐지만 정산되지 않은 판을 정산하며, 지급 고유 reference로 중복을 막습니다. 점수의 주차는 정산 시각이 아닌 게임 날짜의 KST 월요일입니다. 정답 없는 판은 정산하지 않으며 이미 받은 참여 보상은 유지됩니다. 열린 화면은 30초마다 갱신하며 다시 활성화될 때도 갱신합니다.
+Workers Static Assets와 D1 이외의 서비스는 초기 실행에 필요하지 않습니다. 자동 정답 공개는 서버가 요청 시 공개 시각을 판단하므로 Cron 없이도 동작합니다. bootstrap·게임·기록 조회는 공개됐지만 정산되지 않은 판을 정산하며, 지급 고유 reference로 중복을 막습니다. 점수의 주차는 정산 시각이 아닌 게임 날짜의 KST 월요일입니다. 정답 없는 판은 정산하지 않으며 이미 받은 참여 보상은 유지됩니다. 일반 화면은 30초마다 갱신하며 다시 활성화될 때도 갱신합니다. 뽑기 화면에서는 이 폴링을 중지합니다.
 
 데일리 로또는 bootstrap과 상점 요청에서 추첨 시간이 지난 표를 정산하므로 며칠 뒤 접속해도 누락된 당첨금을 받습니다. 이용권도 append-only 원장의 합계이며 구매는 잔액 검사·차감·결과 저장을 같은 D1 batch로 처리합니다. 구매 응답을 받지 못하면 같은 요청 번호로 결과를 재확인하며, 이미 처리한 구매를 다시 차감하지 않습니다.
 
@@ -95,7 +96,22 @@ Workers Static Assets와 D1 이외의 서비스는 초기 실행에 필요하지
 
 다음 Phase 작업은 이전 Phase PR이 main에 머지되었는지 확인한 뒤 시작합니다. 미머지 상태이면 시작하지 않고 알립니다.
 
-Phase 5는 Phase 4 PR #10의 머지를 확인한 최신 main `18d26e7`에서 시작했습니다.
+Phase 6은 Phase 5 보완 PR #12의 머지를 확인한 최신 main `aa90e5e`에서 `codex/v3-claw`로 시작했습니다. 첫 커밋에 PM 확정 [이식 계획](docs/plan-claw.md)을 그대로 추가했습니다. 원본 `iam-yeseo/yegoom`은 읽기만 했습니다.
+
+## 캐릭터 뽑기 운영
+
+무료 코인은 한국 시간 00·03·06·09·12·15·18·21시에 요청이 오면 5개로 채웁니다. 남은 무료 코인과 놓친 충전은 이월하지 않습니다. 구매 코인은 1개 100G이며 한 번에 1개 또는 5개를 살 수 있고, 무료 코인을 먼저 씁니다. 인형 한 개당 1점·10G, 30개를 모두 뽑으면 추가 5점·300G를 지급합니다. 공개 경제 규칙은 `shared/balance.ts`의 `CLAW_RULES`를 사용합니다.
+
+기계 조회는 저장된 판을 읽으며, bootstrap은 코인 요약만 제공합니다. 시뮬레이션은 새 플레이 요청에서 한 번 실행하고 재시도는 저장된 결과를 반환합니다. 화면 진입·플레이 후·화면 복귀·다음 충전 때만 조회하며 주기적으로 서버를 호출하지 않습니다. 응답이 끊기면 같은 요청 번호로 결과를 확인하고 코인을 중복 사용하지 않습니다. 미리보기는 서버 없이 같은 물리 엔진과 기기 메모리의 코인으로 동작합니다.
+
+확률기 설정은 서버 DB의 `claw_config` 한 행에만 있습니다. 기본값은 강집게 주기 10, 약집게 들어 올리기 45%, 옮기기 30%입니다. 주기는 1~50, 약집게 힘은 각각 5~100 범위이며 강집게 또는 인형 획득 후 개인 카운터를 초기화합니다. API는 현재 판에 사용한 힘만 반환하며 설정과 카운터를 내려주지 않습니다. 운영자가 값을 바꿀 때 사용하는 명령의 예시는 다음과 같습니다(이번 개발 작업에서 실행하지 않음).
+
+```sh
+npx wrangler d1 execute DB --remote --command "SELECT payout_every, weak_pickup, weak_carry FROM claw_config WHERE id = 1;"
+npx wrangler d1 execute DB --remote --command "UPDATE claw_config SET payout_every = 10, weak_pickup = 45, weak_carry = 30, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = 1;"
+```
+
+물리 원본은 `iam-yeseo/yegoom@5a8017247c365b7233f4dfb2209a6bf27a30c678`이며 테스트 fixture와 완전 일치 검증을 유지합니다. 인형 출처·최적화·재생성 방법은 [자산 출처](docs/asset-provenance.md)에 기록했습니다. 원본 결과 장면 그림은 사용하지 않습니다.
 
 ## 검증
 
@@ -112,12 +128,15 @@ Phase 5 검증: `npm run check`의 209개 테스트(Worker·D1 통합 128개 포
 
 터치 효과 가시성 보완은 Phase 5 PR #11이 머지된 main `99841fb`에서 진행했고 두 검증 명령을 다시 통과했습니다. 390px 실제 로그인 홈에서 누른 뒤 90ms 시점의 [크림 배경](docs/screenshots/v2-p5-touch-contrast-home-390.png)·[흰 카드](docs/screenshots/v2-p5-touch-contrast-card-390.png)·[코랄 버튼](docs/screenshots/v2-p5-touch-contrast-button-390.png)을 촬영했습니다.
 
+Phase 6 검증: `npm run check`의 **484개 테스트**(Worker·D1 통합 158개 포함)·타입 검사·빌드, `npm run test:e2e` **39개**가 통과했습니다. 원본 물리 골든 240조합이 전체 JSON과 일치했고, 300회 시뮬레이션의 중앙값은 2.387ms, p99는 8.877ms였습니다. 뽑기 모듈의 D1 읽기량은 기계 조회 2행·bootstrap 요약 1행입니다. 인형 11장은 3,403,205B에서 169,940B로 줄였습니다. 규칙별 검증과 390px·560px 화면 16장은 [Phase 6 검증 보고](docs/phase6-validation.md)에 있습니다.
+
 ## 코드 안내
 
 | 경로 | 역할 |
 | --- | --- |
 | `src/components/PredictionGame.tsx` | 세 예측 게임의 입력·출제·결과 화면 |
-| `src/components/PreviewGames.tsx` | 뽑기 화면 |
+| `src/screens/Claw.tsx`, `src/claw/*` | 물리 뽑기 화면·조작·캔버스·소리·결과 |
+| `src/claw-state.tsx`, `src/claw-preview.ts` | 뽑기 상태·응답 유실 복구·서버 없는 미리보기 |
 | `src/screens/Catchmind.tsx`, `src/catchmind.tsx`, `src/catchmind-preview.ts` | 캐치마인드 화면·서버 상태·서버 없는 미리보기 |
 | `src/components/DrawingCanvas.tsx`, `src/components/ColorPicker.tsx` | 그리기 도구·컬러 피커 |
 | `src/drawing.ts`, `src/color.ts` | 영역 채우기·HSV/HEX 변환 |
@@ -130,13 +149,16 @@ Phase 5 검증: `npm run check`의 209개 테스트(Worker·D1 통합 128개 포
 | `scripts/cutout-characters.py` | 캐릭터 원본의 크림색 배경 제거 (이전 임시 아트용) |
 | `src/styles.css`, `src/preview.css`, `src/screens.css` | 시안에서 옮긴 디자인 값과 반응형 화면 |
 | `shared/types.ts` | 프런트엔드/Worker API 계약 |
-| `shared/balance.ts` | 예측 게임·출석·상점·캐치마인드 규칙과 보상 단일 소스 |
+| `shared/balance.ts` | 예측·출석·상점·캐치마인드·뽑기 공개 경제 규칙과 보상 단일 소스 |
+| `shared/claw-physics.ts` | 원본과 계산이 같은 결정적 뽑기 물리 엔진 |
 | `shared/catchmind-words.ts` | 기존 yegoom에서 가져온 제시어 400개와 원본 blob 식별자 |
 | `shared/characters.ts` | 캐릭터 8종과 기본 매핑 |
 | `src/attendance.ts` | 서버 출석 상태와 서버 없이 동작하는 미리보기 출석 |
 | `worker/index.ts` | 인증, 권한 검사, D1 저장·조회·예측 보상 정산 |
 | `worker/shop.ts` | 원자적 구매·이용권·쿠지판·로또 정산·스피또 결과 |
 | `worker/catchmind.ts` | 캐치마인드 차례·제시어·그림 검증·답변·원자적 정산 |
+| `worker/claw.ts` | 개인 기계·무료/구매 코인·비공개 확률기·물리 플레이·원자적 보상 |
+| `scripts/prepare-claw-dolls.py` | 원본 인형 PNG 11장의 투명 WebP 최적화·검증 |
 | `worker/rules.ts` | 초 단위 입력 검증·차이 계산·KST 날짜 정책 |
 | `migrations/` | 명시적인 D1 스키마 변경 |
 | `scripts/build-sw.mjs` | 파일 내용에 따라 버전이 바뀌는 정적 캐시 |
