@@ -10,6 +10,7 @@ import type {
   ShopState, KujiResponse, KujiPurchaseInput, LottoResponse, LottoPurchaseInput,
   SpeettoResponse, SpeettoPurchaseInput,
   CatchmindAction, CatchmindInput, CatchmindResponse,
+  ClawResponse, ClawPlayInput, ClawCoinInput,
 } from "../shared/types";
 import type { ArtKey } from "../shared/characters";
 
@@ -51,6 +52,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 export const api = {
+  claw: () => request<ClawResponse>("/claw"),
+  buyClawCoins: (input: ClawCoinInput) => request<ClawResponse>("/claw/coins", { method: "POST", body: JSON.stringify(input) }),
+  playClaw: (input: ClawPlayInput) => request<ClawResponse>("/claw/play", { method: "POST", body: JSON.stringify(input) }),
   catchmind: () => request<CatchmindResponse>("/catchmind"),
   catchmindAction: (action: CatchmindAction, input: CatchmindInput) => request<CatchmindResponse>(`/catchmind/${action}`, { method: "POST", body: JSON.stringify(input) }),
   attendance: (month: string) => request<{ attendance: AttendanceState }>(`/me/attendance?month=${encodeURIComponent(month)}`),

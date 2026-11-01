@@ -19,6 +19,13 @@ export const CATCHMIND_RULES = {
   rerolls: 3, hintAfter: 3, endAfter: 6, score: 3, gold: 5,
   pollIntervalMs: 5000, maxImageBytes: 300 * 1024, maxAnswerLength: 80,
 } as const;
+/** Public claw economy only; grip settings and counters stay in the server DB. */
+export const CLAW_RULES = {
+  coinIntervalMs: 3 * 60 * 60 * 1000, freeCoins: 5,
+  coinPrice: 100, purchaseQuantities: [1, 5],
+  dollScore: 1, dollGold: 10, clearScore: 5, clearGold: 300,
+  playDurationMs: 6000, controlDurationMs: 10000, engine: 2,
+} as const;
 /** Shop prices, odds and rewards are shared by the Worker and every screen. */
 export const KUJI_RULES = {
   size: 100, basePrice: 300, higherPrice: 400, basePriceCount: 5, lastOneGold: 1000,

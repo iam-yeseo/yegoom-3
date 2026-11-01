@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ATTENDANCE_RULES, CATCHMIND_RULES, GAME_RULES, LOTTO_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
-import type { CatchmindSummary, GameState } from "../../shared/types";
+import type { CatchmindSummary, ClawSummary, GameState } from "../../shared/types";
 import { useAttendance } from "../attendance";
 import {
   Avatar,
@@ -17,7 +17,6 @@ import {
   type CharState,
 } from "../components/UI";
 import {
-  BALANCE,
   kstDateText,
   kstParts,
   marketOpen,
@@ -45,6 +44,7 @@ export interface HomeData {
   players: HomePlayer[];
   games: GameState[];
   catchmind: CatchmindSummary;
+  claw: ClawSummary;
 }
 type Go = (path: string) => void;
 
@@ -216,8 +216,8 @@ function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
   );
 }
 
-export function SoloGames({ go }: { go: Go }) {
-  const tries = 3;
+export function SoloGames({ go, claw }: { go: Go; claw: ClawSummary }) {
+  const nextGrant = new Date(claw.nextGrantAt).toLocaleTimeString("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false });
   const open = marketOpen();
   return (
     <>
@@ -229,15 +229,7 @@ export function SoloGames({ go }: { go: Go }) {
           </span>
           <span className="solo-text">
             <strong>캐릭터 뽑기</strong>
-            <small>오늘 남은 횟수</small>
-          </span>
-          <span className="tries">
-            {Array.from({ length: BALANCE.claw.dailyTries }, (_, i) => (
-              <i key={i} className={i < tries ? "on" : ""} />
-            ))}
-            <b>
-              {tries}/{BALANCE.claw.dailyTries}
-            </b>
+            <small>{claw.isAdmin ? "데모 기계" : `코인 ${claw.coins}개 · ${nextGrant} 충전`}</small>
           </span>
         </button>
         <button className="card solo-tile" onClick={() => go("/stock")}>
@@ -536,7 +528,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
           onClaimed={celebrateClaim}
         />
         <TodayGames data={data} go={go} />
-        <SoloGames go={go} />
+        <SoloGames go={go} claw={data.claw} />
         <SectionTitle title="상점" right="전체" onClick={() => go("/shop")} />
         <ShopCards go={go} />
         <SectionTitle title="이번 주 랭킹" right={settleText()} />

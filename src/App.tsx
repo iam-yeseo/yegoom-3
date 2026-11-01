@@ -7,6 +7,7 @@ import type {
   LedgerEntry,
   ShopState,
   CatchmindSummary,
+  ClawSummary,
 } from "../shared/types";
 import { ApiFailure, api } from "./api";
 import { anim } from "./motion";
@@ -14,7 +15,9 @@ import { CharacterProvider, CharacterSprite, TabBar, tabs, readLegacyCharacter, 
 import { AttendanceProvider, clearLegacyAttendance, usePreviewAttendance } from "./attendance";
 import { defaultCharacter, type ArtKey } from "../shared/characters";
 import { PredictionGame } from "./components/PredictionGame";
-import { PreviewGames } from "./components/PreviewGames";
+import { Claw } from "./screens/Claw";
+import { ClawProvider } from "./claw-state";
+import { previewClawSummary } from "./claw-preview";
 import {
   previewDaily,
   previewGame,
@@ -25,7 +28,7 @@ import {
   previewViewer,
 } from "./sample";
 import { Attendance } from "./screens/Attendance";
-import { Home, SoloGames, TodayGames, isEvening, type HomeData } from "./screens/Home";
+import { Home, SoloGames, TodayGames, type HomeData } from "./screens/Home";
 import { Profile } from "./screens/Profile";
 import { Ranking } from "./screens/Ranking";
 import { Lotto, ShopMain, Speetto } from "./screens/Shop";
@@ -75,6 +78,7 @@ function previewHome(): HomeData {
     })),
     games: gameIds.map((id) => previewGame(id)),
     catchmind: emptyCatchmind,
+    claw: previewClawSummary(),
   };
 }
 function homeData(data: BootstrapResponse): HomeData {
@@ -86,6 +90,7 @@ function homeData(data: BootstrapResponse): HomeData {
     players: data.players,
     games: data.games,
     catchmind: data.catchmind,
+    claw: data.claw,
   };
 }
 /** Navigation depth: tab pages 0, sub-pages 1, a stock's detail 2. */
@@ -281,10 +286,14 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[] }>({ gold: previewGold, score: 0, ledger: [] });
   const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[] }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [] });
+  const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
   const demo = route.startsWith("/preview");
   const previewAttendance = usePreviewAttendance(demo);
   useEffect(() => {
-    if (demo) setPreviewShop({ gold: previewGold, score: 0, ledger: [] });
+    if (demo) {
+      setPreviewShop({ gold: previewGold, score: 0, ledger: [] });
+      setPreviewClaw({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] });
+    }
   }, [demo]);
   // A refresh may commit only while its generation is current. Mutations
   // invalidate older reads and pause polling until their state is applied.
@@ -342,7 +351,8 @@ export default function App() {
     };
   }, [refresh, demo]);
   useEffect(() => {
-    if (!data || demo) return;
+    // The claw screen owns event-driven reads; it must never poll.
+    if (!data || demo || route.endsWith("/play/claw")) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && navigator.onLine)
         void refresh();
@@ -356,7 +366,7 @@ export default function App() {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [data?.user.id, refresh, demo]);
+  }, [data?.user.id, refresh, demo, route]);
   const path = demo ? route.replace("/preview", "") || "/" : route;
   const gameId = path.match(/^\/game\/(wake|offwork|luck)$/)?.[1] as
     GameId | undefined;
@@ -457,10 +467,10 @@ export default function App() {
   }
   const catchmindReadKey = useRef("");
   const signedIn = !demo && !loading && data !== null;
-  const view = demo ? { ...previewHome(), gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold,
-    catchmind: previewCatchmind.summary,
-    players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score } : player) } : data ? homeData(data) : null;
-  const me = demo ? { ...previewUser, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score } : data?.user;
+  const view = demo ? { ...previewHome(), gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold,
+    catchmind: previewCatchmind.summary, claw: previewClaw.summary,
+    players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : player) } : data ? homeData(data) : null;
+  const me = demo ? { ...previewUser, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : data?.user;
   const tab = tabs.find((t) => t.path === path)?.path;
   let content: React.ReactNode;
   if (!demo && loading) content = <Skeleton />;
@@ -495,17 +505,7 @@ export default function App() {
   else if (!view || !me) content = null;
   else if (play === "kuji") content = <Kuji onBack={home} />;
   else if (play === "catchmind") content = <Catchmind user={me} demo={demo} onBack={home} />;
-  else if (play)
-    content = (
-      <PreviewGames
-        key={play}
-        game={play}
-        me={me.username}
-        gold={me.gold}
-        evening={isEvening()}
-        onBack={home}
-      />
-    );
+  else if (play === "claw") content = <Claw user={me} demo={demo} onBack={home} />;
   else if (gameId && demo) {
     const viewer = previewViewer(gameId);
     content = (
@@ -561,7 +561,7 @@ export default function App() {
         </header>
         <div className="screen-body stack">
           <TodayGames data={view} go={go} />
-          <SoloGames go={go} />
+          <SoloGames go={go} claw={view.claw} />
         </div>
       </div>
     );
@@ -589,7 +589,7 @@ export default function App() {
         attendanceKey={view.attendanceKey}
         gold={me.gold}
         weeklyScore={me.weeklyScore}
-        ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
+        ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
         others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
         onBack={home}
         onCharacterChange={async (character) => {
@@ -633,6 +633,16 @@ export default function App() {
   return (
     <CharacterProvider characters={characterMap} preview={demo}>
       <AttendanceProvider value={attendanceContext}>
+    <ClawProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
+      preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
+      gold={me?.gold ?? 0} transact={transactCatchmind}
+      onServerRead={claw => {
+        setData(current => current ? { ...current, claw } : current);
+        // Recover a failed post-play balance read on the next entry/visibility
+        // or refill event, without adding a polling loop to the machine.
+        if (bootError) void refresh();
+      }}
+      onPreviewChange={(summary, gold, score, ledger) => setPreviewClaw({ summary, gold, score, ledger })}>
     <CatchmindProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
       preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
       viewer={{ id: me?.id ?? "anonymous", username: me?.username ?? "", displayName: me?.displayName ?? "", character: me?.character ?? defaultCharacter(me?.username ?? "") }}
@@ -645,7 +655,7 @@ export default function App() {
     <ShopProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
       preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
       previewGoldBonus={previewAttendance.goldBonus}
-      previewGameGold={demo ? previewCatchmind.gold : 0}
+      previewGameGold={demo ? previewCatchmind.gold + previewClaw.gold : 0}
       previewAttendanceDate={previewAttendance.attendance.today}
       initial={{ gold: demo ? previewGold : me?.gold ?? 0, inventory: data?.inventory ?? { lottoTickets: 0, speettoTickets: 0 },
         canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
@@ -653,7 +663,7 @@ export default function App() {
       onServerRead={state => {
         if (data && (state.gold !== data.user.gold || state.inventory.lottoTickets !== data.inventory.lottoTickets || state.inventory.speettoTickets !== data.inventory.speettoTickets)) void refresh();
       }}
-      onPreviewChange={(state, ledger, score) => setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold, ledger: [...ledger], score })}>
+      onPreviewChange={(state, ledger, score) => setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold, ledger: [...ledger], score })}>
       <aside className="desktop-brand" aria-hidden="true">
         <span className="wordmark">
           예굼방 아케이드<span>3</span>
@@ -688,6 +698,7 @@ export default function App() {
       </main>
     </ShopProvider>
     </CatchmindProvider>
+    </ClawProvider>
       </AttendanceProvider>
     </CharacterProvider>
   );

@@ -12,6 +12,7 @@ for (const file of files) hash.update(await readFile(file));
 const cache = `yegoom3-${hash.digest('hex').slice(0, 12)}`;
 const paths = files.map((file) => file === 'dist/index.html' ? '/' : '/' + file.slice(dir.length + 1));
 const lazySprites = paths.filter((path) => path.startsWith('/characters/sprites/') && !path.endsWith('-idle.webp'));
+// Claw dolls are small shared game assets: all 11 /claw/dolls/*.webp stay in the precache.
 const precachePaths = paths.filter((path) => !lazySprites.includes(path));
 await writeFile(join(dir, 'sw.js'), `
 const CACHE = ${JSON.stringify(cache)};

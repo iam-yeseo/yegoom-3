@@ -1,5 +1,6 @@
 import type { ArtKey } from './characters';
 import type { KUJI_RULES, SPEETTO_RULES } from './balance';
+import type { Board, Doll, AttemptResult } from './claw-physics';
 
 export type GameId = 'wake' | 'offwork' | 'luck';
 export type Role = 'player' | 'admin';
@@ -70,6 +71,7 @@ export interface BootstrapResponse {
   attendance: AttendanceState;
   inventory: Inventory;
   catchmind: CatchmindSummary;
+  claw: ClawSummary;
   serverTime: string;
   timeZone: 'Asia/Seoul';
 }
@@ -163,3 +165,25 @@ export interface CatchmindRerollInput extends CatchmindMutationInput { wordVersi
 export interface CatchmindPublishInput extends CatchmindRerollInput { image: string }
 export interface CatchmindGuessInput extends CatchmindMutationInput { answer: string }
 export type CatchmindInput = CatchmindMutationInput | CatchmindRerollInput | CatchmindPublishInput | CatchmindGuessInput;
+
+export interface ClawSummary {
+  coins: number; freeCoins: number; purchasedCoins: number;
+  nextGrantAt: number; serverNow: number; isAdmin: boolean;
+}
+export interface ClawState extends ClawSummary {
+  board: Board; version: number; generation: number; nextPlayAt: number;
+}
+export interface ClawPlayInput { requestId: string; version: number; x: number; stop?: number | null }
+export interface ClawCoinInput { requestId: string; quantity: 1 | 5 }
+export interface ClawResult {
+  requestId: string; playId: string; engine: number; x: number; stop: number | null;
+  grip: { pickup: number; carry: number; strong: boolean };
+  caught: boolean; prizes: Doll[]; doll: Doll | null; target: Doll | null;
+  /** Total rewards, including the clear bonus. */
+  points: number; gold: number; clearBonus: number; clearGold: number;
+  released: AttemptResult['released']; reason: AttemptResult['reason'];
+}
+export interface ClawResponse extends ClawState {
+  result?: ClawResult; replayed?: boolean;
+  purchase?: { requestId: string; quantity: 1 | 5; cost: number };
+}
