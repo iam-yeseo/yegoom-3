@@ -1,10 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ATTENDANCE_RULES, LOTTO_RULES } from '../shared/balance';
+import { ATTENDANCE_RULES, CATCHMIND_RULES, LOTTO_RULES } from '../shared/balance';
 import { createShopPreview } from '../src/shop-preview';
 
 afterEach(() => vi.useRealTimers());
 
 describe('combined attendance and shop preview cash', () => {
+  it('makes a Catchmind award spendable without replaying it or undoing prior purchases', () => {
+    const engine = createShopPreview(LOTTO_RULES.price * 2 - CATCHMIND_RULES.gold);
+    const buy = (requestId: string) => engine.buyLotto({ requestId, numbers: [1, 2, 3, 4, 5], payment: 'gold' });
+    buy('before-catchmind');
+    expect(() => buy('after-catchmind')).toThrow('골드가 부족해요.');
+    engine.setGameGoldBonus(CATCHMIND_RULES.gold);
+    engine.setGameGoldBonus(CATCHMIND_RULES.gold);
+    expect(buy('after-catchmind').gold).toBe(0);
+    engine.setGameGoldBonus(CATCHMIND_RULES.gold);
+    expect(engine.read().gold).toBe(0);
+    expect(engine.ledger.map(row => row.amount)).toEqual([-LOTTO_RULES.price, -LOTTO_RULES.price]);
+  });
   it('keeps earlier spending and makes a new attendance award spendable exactly once', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-11-01T00:00:00Z'));

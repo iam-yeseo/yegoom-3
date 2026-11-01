@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ATTENDANCE_RULES, GAME_RULES, LOTTO_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, CATCHMIND_RULES, GAME_RULES, LOTTO_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
-import type { GameState } from "../../shared/types";
+import type { CatchmindSummary, GameState } from "../../shared/types";
 import { useAttendance } from "../attendance";
 import {
   Avatar,
@@ -44,6 +44,7 @@ export interface HomeData {
   gold: number;
   players: HomePlayer[];
   games: GameState[];
+  catchmind: CatchmindSummary;
 }
 type Go = (path: string) => void;
 
@@ -132,18 +133,33 @@ function predictionRow(game: GameState, me: string): GameRow {
     right: GAME_RULES[game.id].deadline,
   };
 }
-export function gameRows(games: GameState[], me: string): GameRow[] {
+function catchmindRow(game: CatchmindSummary, me: string): GameRow {
+  const row = { path: "/play/catchmind", name: "캐치마인드", icon: "bread" as const, right: "" };
+  if (game.status === "idle") return {
+    ...row, chip: "try", sub: game.turn ? `${game.turn.displayName}의 그리기 차례` : "먼저 그리기를 맡아 보세요",
+  };
+  const drawer = game.drawer?.displayName ?? "출제자";
+  const mine = game.drawer?.username === me;
+  if (game.status === "draft") return {
+    ...row, chip: mine ? "host" : "open", sub: mine ? "내가 그림 그리는 중" : `${drawer}이 그림 그리는 중`,
+  };
+  if (game.status === "open") return {
+    ...row, chip: mine ? "host" : "try", sub: `${mine ? "내 그림" : `${drawer}의 그림`} · 오답 ${game.wrongCount}회`,
+  };
+  const answer = game.answer ? `정답 「${game.answer}」` : "판 종료";
+  return {
+    ...row, chip: "done",
+    sub: game.winner
+      ? `${answer} · ${game.winner.username === me ? "내가 맞힘" : `${game.winner.displayName} 정답`} · 다음 출제`
+      : `${answer} · 다음 ${game.turn?.displayName ?? drawer}`,
+    right: game.winner?.username === me ? `+${CATCHMIND_RULES.score}점` : "",
+  };
+}
+export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary): GameRow[] {
   const evening = isEvening();
   return [
     ...games.map((game) => predictionRow(game, me)),
-    {
-      path: "/play/catchmind",
-      name: "캐치마인드",
-      icon: "bread",
-      ...(evening
-        ? { chip: "done", sub: "정답 「눈사람」 · 내가 맞힘", right: `+${BALANCE.catchmind.points}점` }
-        : { chip: "try", sub: "siwon의 그림 · 오답 2회", right: "" }),
-    },
+    catchmindRow(catchmind, me),
     {
       path: "/play/kuji",
       name: "예굼쿠지",
@@ -156,9 +172,10 @@ export function gameRows(games: GameState[], me: string): GameRow[] {
 }
 
 export function TodayGames({ data, go }: { data: HomeData; go: Go }) {
-  const rows = gameRows(data.games, data.username);
-  const earned = rows.reduce(
-    (sum, row) => sum + (row.right.startsWith("+") ? parseInt(row.right.slice(1), 10) : 0),
+  const rows = gameRows(data.games, data.username, data.catchmind);
+  // Catchmind rounds can span several days; their result is not today's total.
+  const earned = data.games.reduce(
+    (sum, game) => sum + (game.phase === "revealed" ? game.results.find(result => result.username === data.username)?.score ?? 0 : 0),
     0,
   );
   return (

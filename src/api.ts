@@ -9,6 +9,7 @@ import type {
   AttendanceClaimResponse,
   ShopState, KujiResponse, KujiPurchaseInput, LottoResponse, LottoPurchaseInput,
   SpeettoResponse, SpeettoPurchaseInput,
+  CatchmindAction, CatchmindInput, CatchmindResponse,
 } from "../shared/types";
 import type { ArtKey } from "../shared/characters";
 
@@ -50,6 +51,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 export const api = {
+  catchmind: () => request<CatchmindResponse>("/catchmind"),
+  catchmindAction: (action: CatchmindAction, input: CatchmindInput) => request<CatchmindResponse>(`/catchmind/${action}`, { method: "POST", body: JSON.stringify(input) }),
   attendance: (month: string) => request<{ attendance: AttendanceState }>(`/me/attendance?month=${encodeURIComponent(month)}`),
   claimAttendance: () => request<AttendanceClaimResponse>("/me/attendance", { method: "POST", body: "{}" }),
   character: (character: ArtKey, migrate = false, expectedUserId?: string) => request<AuthResponse>("/me/character", {

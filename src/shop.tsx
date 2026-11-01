@@ -38,12 +38,13 @@ function savedPending(key: string): PendingPurchase | null {
 }
 
 /** The same screens consume server state or an isolated, serverless preview. */
-export function ShopProvider({ children, preview, accountKey, initial, previewGoldBonus, previewAttendanceDate, transact, onPreviewChange, onServerRead }: {
+export function ShopProvider({ children, preview, accountKey, initial, previewGoldBonus, previewGameGold, previewAttendanceDate, transact, onPreviewChange, onServerRead }: {
   children: ReactNode;
   preview: boolean;
   accountKey: string;
   initial: ShopState;
   previewGoldBonus: number;
+  previewGameGold: number;
   previewAttendanceDate: string;
   transact: <T>(action: () => Promise<T>) => Promise<T>;
   onPreviewChange: (state: ShopState, ledger: LedgerEntry[], score: number) => void;
@@ -52,10 +53,11 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   const storageKey = `yegoom3:shop:pending:${accountKey}`;
   const previewEngine = useRef<ReturnType<typeof createShopPreview> | null>(null);
   if (preview && !previewEngine.current) previewEngine.current = createShopPreview(initial.gold, previewGoldBonus, previewAttendanceDate);
-  const latestPreviewBonus = useRef({ amount: previewGoldBonus, date: previewAttendanceDate });
-  latestPreviewBonus.current = { amount: previewGoldBonus, date: previewAttendanceDate };
+  const latestPreviewBonus = useRef({ amount: previewGoldBonus, date: previewAttendanceDate, gameGold: previewGameGold });
+  latestPreviewBonus.current = { amount: previewGoldBonus, date: previewAttendanceDate, gameGold: previewGameGold };
   const syncPreview = useCallback(() => {
     previewEngine.current?.setAttendanceBonus(latestPreviewBonus.current.amount, latestPreviewBonus.current.date);
+    previewEngine.current?.setGameGoldBonus(latestPreviewBonus.current.gameGold);
     return previewEngine.current;
   }, []);
   const [state, setState] = useState<ShopState>(() => previewEngine.current?.read() ?? initial);
@@ -96,7 +98,7 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   useEffect(() => {
     const engine = syncPreview();
     if (engine) apply(engine.read());
-  }, [previewGoldBonus, previewAttendanceDate, syncPreview, apply]);
+  }, [previewGoldBonus, previewGameGold, previewAttendanceDate, syncPreview, apply]);
   const refresh = useCallback(async (kind?: ShopKind) => {
     if (writeInFlight.current) { deferredRead.current = kind ?? "shop"; return; }
     const current = ++generation.current;

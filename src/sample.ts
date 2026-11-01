@@ -1,4 +1,4 @@
-import { ATTENDANCE_RULES, GAME_RULES, PREDICTION_REWARDS, KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank, predictionPoints } from "../shared/balance";
+import { ATTENDANCE_RULES, CATCHMIND_RULES, GAME_RULES, PREDICTION_REWARDS, KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank, predictionPoints } from "../shared/balance";
 import { defaultCharacter } from "../shared/characters";
 import type { AttendanceState, GameHistoryRound, GameId, GameResult, GameState, LedgerEntry } from "../shared/types";
 import type { ArtKey } from "./components/UI";
@@ -8,7 +8,7 @@ export const BALANCE = {
   attendanceGold: ATTENDANCE_RULES.dailyGold,
   participationGold: PREDICTION_REWARDS.participationGold,
   firstPlaceGold: PREDICTION_REWARDS.firstGold,
-  catchmind: { points: 50, hintedPoints: 30, hintAfter: 3, endAfter: 6 },
+  catchmind: { points: CATCHMIND_RULES.score, gold: CATCHMIND_RULES.gold, hintAfter: CATCHMIND_RULES.hintAfter, endAfter: CATCHMIND_RULES.endAfter },
   claw: { cost: 200, dailyTries: 5, points: 30 },
   kuji: { price: KUJI_RULES.basePrice, raisedPrice: KUJI_RULES.higherPrice, raiseFrom: KUJI_RULES.basePriceCount + 1, boughtToday: 4 },
   lotto: { price: LOTTO_RULES.price, picks: LOTTO_RULES.pickCount, max: LOTTO_RULES.maxNumber, drawHour: Number(LOTTO_RULES.drawTime.slice(0, 2)) },
@@ -175,7 +175,6 @@ export function previewLedger(attendance: AttendanceState): LedgerEntry[] {
     [today, "13:02", "예굼쿠지 4장", -kujiCost(0, 4), "gold"],
     [today, "11:20", "데일리 로또 2장", -LOTTO_RULES.price * 2, "gold"],
     [yesterday, "17:48", "주식 매도 · 우파전자", 3140, "gold"],
-    [today, "13:10", "캐치마인드 정답", 50, "score"],
     [today, "13:06", "캐릭터 뽑기", 30, "score"],
     [today, "08:47", "기상시간 맞히기", predictionPoints("wake", 0), "score"],
     [today, "08:47", "기상시간 1등", PREDICTION_REWARDS.firstGold, "gold"],
