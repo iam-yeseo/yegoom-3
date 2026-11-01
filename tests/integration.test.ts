@@ -4,7 +4,7 @@ import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken } from '../worker/crypto';
-import type { BootstrapResponse, GameResponse, GameId, HistoryResponse, User } from '../shared/types';
+import type { BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User } from '../shared/types';
 
 const ORIGIN = 'http://localhost';
 const PASSWORD = 'test-only-password-42!';
@@ -40,7 +40,7 @@ function runtime(script: string) {
   });
 }
 
-async function provision(db: Database, migration: string, passwordHash: string) {
+async function applyMigration(db: Database, migration: string) {
   // D1 exec() splits on newlines, including newlines inside CREATE TABLE.
   // Preserve full statements and trigger bodies while applying the real file.
   let statement = '';
@@ -55,6 +55,10 @@ async function provision(db: Database, migration: string, passwordHash: string) 
     }
   }
   if (statement.trim()) throw new Error('Migration contains an incomplete SQL statement');
+}
+
+async function provision(db: Database, migration: string, passwordHash: string) {
+  await applyMigration(db, migration);
   for (const username of USERS) {
     await db.prepare('INSERT INTO users (id, username, display_name, password_hash, role) VALUES (?, ?, ?, ?, ?)')
       .bind(username, username, username, passwordHash, username === 'admin' ? 'admin' : 'player').run();
@@ -90,7 +94,7 @@ describe('Worker and D1 integration', () => {
     });
   }
 
-  async function login(username: Username, instance?: Miniflare) {
+  async function login(username: string, instance?: Miniflare) {
     const response = await request('/api/auth/login', {
       method: 'POST', body: { username, password: PASSWORD }, instance,
     });
@@ -153,6 +157,306 @@ describe('Worker and D1 integration', () => {
     return (await database.prepare('SELECT user_id, currency, amount, reference, week_start FROM ledger ORDER BY reference')
       .all<{ user_id: string; currency: string; amount: number; reference: string; week_start: string | null }>()).results;
   }
+
+  async function seedAttendance(date: string, streak: number, username: Username = 'min', database: Database = db) {
+    await database.prepare('INSERT INTO attendance (user_id, date, streak, created_at) VALUES (?, ?, ?, ?)')
+      .bind(username, date, streak, `${date}T00:00:00.000Z`).run();
+  }
+
+  describe('server attendance and saved characters', () => {
+    it('claims the first daily 100G once and returns the persisted state on retries', async () => {
+      const { cookie } = await login('min');
+      expect((await bootstrap(cookie)).attendance).toMatchObject({
+        today: TODAY, claimed: false, streak: 1, cycleDay: 1, reward: 100, canClaim: true,
+        month: '2026-10', monthCount: 0, days: [],
+      });
+      for (const awarded of [true, false, false]) {
+        const response = await request('/api/me/attendance', { method: 'POST', cookie, body: {} });
+        expect(response.status).toBe(200);
+        const result = await response.json() as AttendanceClaimResponse;
+        expect(result.awarded).toBe(awarded);
+        expect(result.user.gold).toBe(100);
+        expect(result.attendance).toMatchObject({ today: TODAY, claimed: true, streak: 1,
+          cycleDay: 1, reward: 100, canClaim: false, monthCount: 1, days: [TODAY] });
+      }
+      expect(await ledgerRows()).toEqual([{ user_id: 'min', currency: 'gold', amount: 100,
+        reference: `attendance:${TODAY}:min`, week_start: null }]);
+      expect(await db.prepare('SELECT user_id, date, streak FROM attendance').all()).toMatchObject({
+        results: [{ user_id: 'min', date: TODAY, streak: 1 }],
+      });
+      const view = await bootstrap(cookie);
+      expect(view.user).toMatchObject({ gold: 100, weeklyScore: 0 });
+      expect(view.ledger).toHaveLength(1);
+      expect(view.ledger[0]).toMatchObject({ currency: 'gold', amount: 100, createdAt: `${TODAY}T00:00:00.000Z` });
+    });
+
+    it('serializes simultaneous attendance claims from two sessions into one payout', async () => {
+      const first = await login('min');
+      const second = await login('min');
+      const responses = await Promise.all([first.cookie, second.cookie].map(cookie =>
+        request('/api/me/attendance', { method: 'POST', cookie, body: {} })));
+      expect(responses.map(response => response.status)).toEqual([200, 200]);
+      const claims = await Promise.all(responses.map(response => response.json() as Promise<AttendanceClaimResponse>));
+      expect(claims.map(claim => claim.awarded).sort()).toEqual([false, true]);
+      expect(claims.map(claim => claim.user.gold)).toEqual([100, 100]);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM attendance').first('count')).toBe(1);
+      expect((await ledgerRows()).map(row => [row.reference, row.amount])).toEqual([[`attendance:${TODAY}:min`, 100]]);
+    });
+
+    it.each([
+      { yesterday: 6, streak: 7, cycleDay: 7, reward: 500 },
+      { yesterday: 13, streak: 14, cycleDay: 7, reward: 500 },
+      { yesterday: 7, streak: 8, cycleDay: 1, reward: 100 },
+      { yesterday: 14, streak: 15, cycleDay: 1, reward: 100 },
+    ])('pays the attendance cycle reward for streak $streak', async ({ yesterday, streak, cycleDay, reward }) => {
+      await seedAttendance('2026-10-29', yesterday);
+      const { cookie } = await login('min');
+      expect((await bootstrap(cookie)).attendance).toMatchObject({ claimed: false, streak, cycleDay, reward, monthCount: 1 });
+      const responses = await Promise.all([1, 2].map(() => request('/api/me/attendance', { method: 'POST', cookie, body: {} })));
+      expect(responses.map(response => response.status)).toEqual([200, 200]);
+      const claims = await Promise.all(responses.map(response => response.json() as Promise<AttendanceClaimResponse>));
+      expect(claims.map(claim => claim.awarded).sort()).toEqual([false, true]);
+      for (const claim of claims) {
+        expect(claim.user.gold).toBe(reward);
+        expect(claim.attendance).toMatchObject({ claimed: true, streak, cycleDay, reward, monthCount: 2 });
+      }
+      expect((await ledgerRows()).map(row => row.amount)).toEqual([reward]);
+      expect(await db.prepare('SELECT streak FROM attendance WHERE date = ?').bind(TODAY).first('streak')).toBe(streak);
+    });
+
+    it('resets the attendance streak after a missed day without using another player history', async () => {
+      await seedAttendance('2026-10-28', 13);
+      await seedAttendance('2026-10-29', 6, 'siwon');
+      const { cookie } = await login('min');
+      expect((await bootstrap(cookie)).attendance).toMatchObject({ claimed: false, streak: 1, cycleDay: 1, reward: 100 });
+      const response = await request('/api/me/attendance', { method: 'POST', cookie, body: {} });
+      expect(response.status).toBe(200);
+      expect((await response.json() as AttendanceClaimResponse).attendance).toMatchObject({ streak: 1, cycleDay: 1, reward: 100 });
+      expect((await ledgerRows()).map(row => row.amount)).toEqual([100]);
+    });
+
+    it.each([
+      { instant: '2026-10-31T14:59:59Z', today: '2026-10-31', yesterday: '2026-10-30', previousStreak: 6, streak: 7, reward: 500, month: '2026-10', count: 2 },
+      { instant: '2026-10-31T15:00:00Z', today: '2026-11-01', yesterday: '2026-10-31', previousStreak: 7, streak: 8, reward: 100, month: '2026-11', count: 1 },
+    ])('uses the server KST date across midnight and month changes at $instant', async ({ instant, today, yesterday, previousStreak, streak, reward, month, count }) => {
+      const instance = runtime(await workerAt(instant));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await seedAttendance(yesterday, previousStreak, 'min', database);
+        const { cookie } = await login('min', instance);
+        const response = await request('/api/me/attendance', { method: 'POST', cookie, instance,
+          body: { date: '1999-01-01', today: '2099-01-01', streak: 700, amount: 999999, reward: 999999, userId: 'siwon' } });
+        expect(response.status).toBe(200);
+        const claim = await response.json() as AttendanceClaimResponse;
+        expect(claim.attendance).toMatchObject({ today, claimed: true, streak, reward, month, monthCount: count });
+        expect(claim.user).toMatchObject({ id: 'min', gold: reward });
+        expect((await ledgerRows(database)).map(row => [row.reference, row.amount])).toEqual([[`attendance:${today}:min`, reward]]);
+        expect(await database.prepare('SELECT user_id, date, streak FROM attendance WHERE date = ?').bind(today).all()).toMatchObject({
+          results: [{ user_id: 'min', date: today, streak }],
+        });
+      } finally { await instance.dispose(); }
+    });
+
+    it.each([false, true])('rejects an attendance write crossing KST midnight (next day already claimed: %s)', async (nextDayClaimed) => {
+      const instance = runtime(await workerAt('2026-10-31T14:59:59Z', '2026-10-31T15:00:00Z'));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        if (nextDayClaimed) {
+          // A new-day request has already committed while yesterday's request
+          // was still in flight. The late request must not backfill yesterday.
+          await seedAttendance('2026-11-01', 1, 'min', database);
+          await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+            VALUES ('next-day-attendance', 'min', 'gold', 100, '출석 체크', 'attendance:2026-11-01:min', '2026-10-31T15:00:00Z')`).run();
+        }
+        const { cookie } = await login('min', instance);
+        const response = await request('/api/me/attendance', { method: 'POST', cookie, body: {}, instance });
+        expect(response.status).toBe(409);
+        expect((await database.prepare('SELECT date, streak FROM attendance ORDER BY date').all()).results)
+          .toEqual(nextDayClaimed ? [{ date: '2026-11-01', streak: 1 }] : []);
+        expect((await ledgerRows(database)).map(row => [row.reference, row.amount]))
+          .toEqual(nextDayClaimed ? [['attendance:2026-11-01:min', 100]] : []);
+      } finally { await instance.dispose(); }
+    });
+
+    it('requires authentication and matching Origin and forbids administrator attendance', async () => {
+      expect((await request('/api/me/attendance')).status).toBe(401);
+      expect((await request('/api/me/attendance', { method: 'POST', body: {} })).status).toBe(401);
+      const min = await login('min');
+      for (const origin of [null, 'https://elsewhere.example']) {
+        expect((await request('/api/me/attendance', { method: 'POST', cookie: min.cookie, body: {}, origin })).status).toBe(403);
+      }
+      const admin = await login('admin');
+      expect((await bootstrap(admin.cookie)).attendance.canClaim).toBe(false);
+      expect((await request('/api/me/attendance', { method: 'POST', cookie: admin.cookie, body: {} })).status).toBe(403);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM attendance').first('count')).toBe(0);
+      expect(await ledgerRows()).toEqual([]);
+    });
+
+    it('returns only the authenticated player attendance for the requested calendar month', async () => {
+      for (const [date, streak] of [['2026-09-30', 1], ['2026-10-01', 2], ['2026-10-29', 1]] as const) await seedAttendance(date, streak);
+      await seedAttendance('2026-10-15', 7, 'siwon');
+      const { cookie } = await login('min');
+      const view = await bootstrap(cookie);
+      expect(view.attendance).toMatchObject({ month: '2026-10', monthCount: 2, days: ['2026-10-01', '2026-10-29'], streak: 2 });
+      const previous = await request('/api/me/attendance?month=2026-09&userId=siwon', { cookie });
+      expect(previous.status).toBe(200);
+      expect((await previous.json() as AttendanceResponse).attendance).toMatchObject({ month: '2026-09', monthCount: 1, days: ['2026-09-30'] });
+      const empty = await request('/api/me/attendance?month=2026-08', { cookie });
+      expect(empty.status).toBe(200);
+      expect((await empty.json() as AttendanceResponse).attendance).toMatchObject({ month: '2026-08', monthCount: 0, days: [] });
+      const current = await request('/api/me/attendance', { cookie });
+      expect((await current.json() as AttendanceResponse).attendance).toEqual(view.attendance);
+    });
+
+    it('rejects malformed attendance month parameters', async () => {
+      const { cookie } = await login('min');
+      for (const month of ['', '2026-00', '2026-13', '2026-1', '26-10', '2026-10-01', '2026-10T00:00:00Z', "' OR 1=1 --"]) {
+        expect((await request(`/api/me/attendance?month=${encodeURIComponent(month)}`, { cookie })).status, month).toBe(400);
+      }
+      expect(await ledgerRows()).toEqual([]);
+    });
+
+    it('adds nullable characters without changing existing accounts or ledger rows', async () => {
+      const instance = runtime(script);
+      try {
+        const database = await instance.getD1Database('DB');
+        const oldMigration = (await Promise.all(['0001_initial.sql', '0002_prediction_settlement.sql'].map(file =>
+          readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')))).join('\n');
+        await provision(database, oldMigration, passwordHash);
+        await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+          VALUES ('existing-gold', 'min', 'gold', 123, 'existing balance', 'existing:gold:min', '2026-10-29T00:00:00Z')`).run();
+        const additions = (await readdir(new URL('../migrations/', import.meta.url))).filter(file => file.endsWith('.sql') && file > '0002_prediction_settlement.sql').sort();
+        for (const file of additions) await applyMigration(database, await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8'));
+        expect(await database.prepare('SELECT username, character FROM users ORDER BY username').all()).toMatchObject({ results: [
+          { username: 'admin', character: null }, { username: 'min', character: null },
+          { username: 'siwon', character: null }, { username: 'yeseo', character: null },
+        ] });
+        const { cookie, user } = await login('min', instance);
+        expect(user).toMatchObject({ gold: 123, character: null });
+        const response = await request('/api/bootstrap', { cookie, instance });
+        expect(response.status).toBe(200);
+        const view = await response.json() as BootstrapResponse;
+        expect(view.players.map(player => [player.username, player.character]).sort()).toEqual([
+          ['min', 'axolotl'], ['siwon', 'cat'], ['yeseo', 'bunny'],
+        ]);
+        expect(view.attendance).toMatchObject({ claimed: false, monthCount: 0, days: [] });
+        expect((await ledgerRows(database)).map(row => row.amount)).toEqual([123]);
+        await expect(database.prepare('DELETE FROM ledger').run()).rejects.toThrow('append-only');
+        // Old provisioning INSERTs remain valid after the additive migration.
+        await database.prepare('INSERT INTO users (id, username, display_name, password_hash, role) VALUES (?, ?, ?, ?, ?)')
+          .bind('guest', 'guest', 'guest', passwordHash, 'player').run();
+        const guest = await login('guest', instance);
+        const guestView = await request('/api/bootstrap', { cookie: guest.cookie, instance });
+        expect((await guestView.json() as BootstrapResponse).players.find(player => player.username === 'guest')?.character).toBe('monkey');
+      } finally { await instance.dispose(); }
+    });
+
+    it('persists every permitted character and allows players to share the same character', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      for (const character of ['axolotl', 'drop', 'cat', 'bunny', 'bread', 'manta', 'moon', 'monkey']) {
+        const response = await request('/api/me/character', { method: 'PUT', cookie: min.cookie, body: { character } });
+        expect(response.status, character).toBe(200);
+        expect((await response.json() as { user: User }).user.character).toBe(character);
+        expect(await db.prepare('SELECT character FROM users WHERE id = ?').bind('min').first('character')).toBe(character);
+      }
+      expect((await request('/api/me/character', { method: 'PUT', cookie: siwon.cookie, body: { character: 'monkey' } })).status).toBe(200);
+      const view = await bootstrap(min.cookie);
+      expect(view.players.filter(player => ['min', 'siwon'].includes(player.username)).map(player => player.character)).toEqual(['monkey', 'monkey']);
+      expect(await ledgerRows()).toEqual([]);
+    });
+
+    it('rejects unsupported character values and unauthenticated or cross-origin changes', async () => {
+      const { cookie } = await login('min');
+      for (const character of [null, '', 'dog', 'CAT', ' cat ', '__proto__', 'constructor', 1, {}, ['cat']]) {
+        expect((await request('/api/me/character', { method: 'PUT', cookie, body: { character } })).status).toBe(400);
+      }
+      expect((await request('/api/me/character', { method: 'PUT', cookie, body: {} })).status).toBe(400);
+      expect((await request('/api/me/character', { method: 'PUT', body: { character: 'cat' } })).status).toBe(401);
+      expect((await request('/api/me/character', { method: 'PUT', cookie, origin: null, body: { character: 'cat' } })).status).toBe(403);
+      expect(await db.prepare('SELECT character FROM users WHERE id = ?').bind('min').first('character')).toBeNull();
+    });
+
+    it('keeps character changes scoped to the viewer and shares them across sessions and results', async () => {
+      const first = await login('min');
+      const second = await login('min');
+      const other = await login('siwon');
+      const response = await request('/api/me/character', { method: 'PUT', cookie: first.cookie,
+        body: { character: 'moon', userId: 'siwon', username: 'siwon' } });
+      expect(response.status).toBe(200);
+      const resumed = await request('/api/auth/me', { cookie: second.cookie });
+      expect(resumed.status).toBe(200);
+      expect((await resumed.json() as { user: User }).user.character).toBe('moon');
+      expect(await db.prepare('SELECT character FROM users WHERE id = ?').bind('siwon').first('character')).toBeNull();
+      await seedRound({ game: 'luck', answer: '50', revealedAt: Date.parse(`${TODAY}T00:00:00Z`), predictions: [['min', '50']] });
+      await seedRound({ game: 'luck', date: '2026-10-29', answer: '50', revealedAt: Date.parse('2026-10-29T09:00:00Z'), predictions: [['min', '50']] });
+      const view = await bootstrap(other.cookie);
+      expect(view.players.find(player => player.username === 'min')?.character).toBe('moon');
+      expect(view.games.find(game => game.id === 'luck')?.results[0]?.character).toBe('moon');
+      const history = await request('/api/games/luck/history', { cookie: other.cookie });
+      expect((await history.json() as HistoryResponse).history[0]?.results[0]?.character).toBe('moon');
+    });
+
+    it('migrates a legacy character only while the server field is null', async () => {
+      const { cookie } = await login('min');
+      for (const [body, expected] of [
+        [{ character: 'bread', migrate: true, expectedUserId: 'min' }, 'bread'],
+        [{ character: 'cat', migrate: true, expectedUserId: 'min' }, 'bread'],
+        [{ character: 'moon' }, 'moon'],
+        [{ character: 'manta', migrate: true, expectedUserId: 'min' }, 'moon'],
+      ] as const) {
+        const response = await request('/api/me/character', { method: 'PUT', cookie, body });
+        expect(response.status).toBe(200);
+        expect((await response.json() as { user: User }).user.character).toBe(expected);
+      }
+    });
+
+    it('rejects legacy character migration when its expected account is missing or differs from the session', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      for (const [cookie, expected] of [
+        [min.cookie, {}],
+        [min.cookie, { expectedUserId: 'siwon' }],
+        // Another browser tab switched the shared cookie after min's local
+        // choice was read; it must never become siwon's saved character.
+        [siwon.cookie, { expectedUserId: 'min' }],
+      ] as const) {
+        const response = await request('/api/me/character', { method: 'PUT', cookie,
+          body: { character: 'bread', migrate: true, ...expected } });
+        expect(response.status).toBe(409);
+      }
+      expect((await db.prepare('SELECT character FROM users WHERE id IN (?, ?)').bind('min', 'siwon').all()).results)
+        .toEqual([{ character: null }, { character: null }]);
+    });
+
+    it('lets only one concurrent legacy character migration replace a null value', async () => {
+      const first = await login('min');
+      const second = await login('min');
+      const responses = await Promise.all([
+        request('/api/me/character', { method: 'PUT', cookie: first.cookie, body: { character: 'manta', migrate: true, expectedUserId: 'min' } }),
+        request('/api/me/character', { method: 'PUT', cookie: second.cookie, body: { character: 'bread', migrate: true, expectedUserId: 'min' } }),
+      ]);
+      expect(responses.map(response => response.status)).toEqual([200, 200]);
+      const results = await Promise.all(responses.map(response => response.json() as Promise<{ user: User }>));
+      const saved = await db.prepare('SELECT character FROM users WHERE id = ?').bind('min').first('character');
+      expect(['manta', 'bread']).toContain(saved);
+      expect(results.map(result => result.user.character)).toEqual([saved, saved]);
+    });
+
+    it('never lets a concurrent legacy migration overwrite an explicit character choice', async () => {
+      const first = await login('min');
+      const second = await login('min');
+      const responses = await Promise.all([
+        request('/api/me/character', { method: 'PUT', cookie: first.cookie, body: { character: 'bread', migrate: true, expectedUserId: 'min' } }),
+        request('/api/me/character', { method: 'PUT', cookie: second.cookie, body: { character: 'moon' } }),
+      ]);
+      expect(responses.map(response => response.status)).toEqual([200, 200]);
+      expect(await db.prepare('SELECT character FROM users WHERE id = ?').bind('min').first('character')).toBe('moon');
+      expect((await bootstrap(first.cookie)).user.character).toBe('moon');
+    });
+  });
 
   const scoringCases: { game: GameId; player: Username; thresholds: [number, number][] }[] = [
     { game: 'wake', player: 'siwon', thresholds: [[0, 30], [60, 25], [180, 20], [600, 15], [1800, 10], [3600, 5], [7200, 3]] },

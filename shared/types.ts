@@ -1,3 +1,5 @@
+import type { ArtKey } from './characters';
+
 export type GameId = 'wake' | 'offwork' | 'luck';
 export type Role = 'player' | 'admin';
 export interface User {
@@ -7,17 +9,20 @@ export interface User {
   role: Role;
   gold: number;
   weeklyScore: number;
+  character: ArtKey | null;
 }
 export interface Player {
   id: string;
   username: string;
   displayName: string;
   weeklyScore: number;
+  character: ArtKey;
 }
 export interface GameResult {
   playerId: string;
   username: string;
   displayName: string;
+  character: ArtKey;
   value: string;
   difference: number;
   score: number;
@@ -61,9 +66,25 @@ export interface BootstrapResponse {
   games: GameState[];
   ledger: LedgerEntry[];
   dailyScores: number[];
+  attendance: AttendanceState;
   serverTime: string;
   timeZone: 'Asia/Seoul';
 }
+export interface AttendanceState {
+  today: string;
+  claimed: boolean;
+  /** Today's stored streak, or the streak a claim today would earn. */
+  streak: number;
+  cycleDay: number;
+  reward: number;
+  canClaim: boolean;
+  month: string;
+  monthCount: number;
+  days: string[];
+}
+export interface AttendanceResponse { attendance: AttendanceState }
+export interface AttendanceClaimResponse extends AttendanceResponse { user: User; awarded: boolean }
+export interface CharacterInput { character: ArtKey; migrate?: boolean; expectedUserId?: string }
 export interface AuthResponse { user: User }
 export interface GameResponse { game: GameState }
 export interface HistoryResponse { history: GameHistoryRound[] }
