@@ -1,12 +1,14 @@
 -- Run only through npm run launch:reset:remote after recording a backup bookmark.
 -- D1 imports this entire file atomically; do not execute its statements separately.
--- Keep users, sessions, d1_migrations and claw_config unchanged.
--- PR B must add its announcements/luck_photos records here, while keeping user_photos.
+-- Keep users, sessions, d1_migrations, claw_config and user_photos unchanged.
 
 DROP TRIGGER ledger_no_update;
 DROP TRIGGER ledger_no_delete;
 DROP TRIGGER inventory_no_update;
 DROP TRIGGER inventory_no_delete;
+
+DELETE FROM announcements;
+DELETE FROM luck_photos;
 
 UPDATE catchmind_turn SET drawer_id = NULL, round_id = NULL;
 DELETE FROM catchmind_guesses;
@@ -54,11 +56,14 @@ SELECT 'claw_plays' AS cleared_table, COUNT(*) AS remaining FROM claw_plays;
 SELECT 'claw_coin_purchases' AS cleared_table, COUNT(*) AS remaining FROM claw_coin_purchases;
 SELECT 'claw_accounts' AS cleared_table, COUNT(*) AS remaining FROM claw_accounts;
 SELECT 'login_attempts' AS cleared_table, COUNT(*) AS remaining FROM login_attempts;
+SELECT 'announcements' AS cleared_table, COUNT(*) AS remaining FROM announcements;
+SELECT 'luck_photos' AS cleared_table, COUNT(*) AS remaining FROM luck_photos;
 
 SELECT 'users' AS preserved_table, COUNT(*) AS rows_kept FROM users;
 SELECT 'sessions' AS preserved_table, COUNT(*) AS rows_kept FROM sessions;
 SELECT 'd1_migrations' AS preserved_table, COUNT(*) AS rows_kept FROM d1_migrations;
 SELECT 'claw_config' AS preserved_table, COUNT(*) AS rows_kept FROM claw_config;
+SELECT 'user_photos' AS preserved_table, COUNT(*) AS rows_kept FROM user_photos;
 
 SELECT id, drawer_id, round_id FROM catchmind_turn;
 SELECT COUNT(*) AS restored_append_only_triggers FROM sqlite_master

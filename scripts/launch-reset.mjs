@@ -39,7 +39,8 @@ console.log('초기화 전 보존 테이블 행 수입니다. 초기화 후 결�
 execute(['--command', `SELECT 'users' AS preserved_table, COUNT(*) AS rows_kept FROM users;
 SELECT 'sessions' AS preserved_table, COUNT(*) AS rows_kept FROM sessions;
 SELECT 'd1_migrations' AS preserved_table, COUNT(*) AS rows_kept FROM d1_migrations;
-SELECT 'claw_config' AS preserved_table, COUNT(*) AS rows_kept FROM claw_config;`]);
+SELECT 'claw_config' AS preserved_table, COUNT(*) AS rows_kept FROM claw_config;
+SELECT 'user_photos' AS preserved_table, COUNT(*) AS rows_kept FROM user_photos;`]);
 execute(['--file', 'scripts/launch-reset.sql']);
 // Remote file imports return an import summary, not the SELECT result rows.
 // Re-run only the file's read-only verification block so operators can inspect them.
