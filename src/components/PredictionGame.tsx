@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { GameState, User } from "../../shared/types";
-import { BALANCE, predictionPoints, rankOf } from "../sample";
+import type { GameHistoryRound, GameId, GameResult, GameState, User } from "../../shared/types";
+import { GAME_RULES, PREDICTION_REWARDS, SCORE_TABLES, predictionPoints } from "../../shared/balance";
+import { api } from "../api";
+import { previewHistory, rankOf } from "../sample";
 import {
   anim,
   confetti,
@@ -31,8 +33,8 @@ type Props = {
   onBack: () => void;
   onSave: (value: string, hint: string, author: boolean) => Promise<void>;
   onReveal: () => Promise<void>;
+  onWake: () => Promise<void>;
 };
-const deadlines = { wake: "10:30", offwork: "17:00", luck: "17:00" };
 const questions = {
   wake: "min은 몇 시에 일어날까?",
   offwork: "siwon은 몇 시에 퇴근할까?",
@@ -167,12 +169,14 @@ function WheelColumn({
         <span className="sr-only">{label}</span>
         <input
           type="number"
+          inputMode="numeric"
+          step="1"
           min={low}
           max={high}
           value={String(value).padStart(2, "0")}
           onChange={(event) => {
             const n = Number(event.target.value);
-            if (Number.isInteger(n) && n >= 0 && n <= (label === "분" ? 59 : 23)) onChange(n);
+            if (Number.isInteger(n) && n >= low && n <= high) onChange(n);
           }}
           disabled={disabled}
         />
@@ -192,20 +196,23 @@ function TimeWheel({
   /** Inclusive hour range the wheel cycles through. */
   hours?: [number, number];
 }) {
-  const [hour, minute] = value.split(":").map(Number);
+  const [hour, minute, second] = value.split(":").map(Number);
   const set = (part: number) => (n: number) => {
-    const next = [hour, minute];
+    const next = [hour, minute, second];
     next[part] = n;
     onChange(next.map((v) => String(v).padStart(2, "0")).join(":"));
   };
   return (
-    <div className="time-wheel" role="group" aria-label="예측 시간 선택">
+    <div className="time-wheel" role="group" aria-label="시각 선택">
       <div className="wheel-selection" />
       <WheelColumn value={hour} low={hours[0]} high={hours[1]} label="시" disabled={disabled} onChange={set(0)} />
       <WheelColumn value={minute} low={0} high={59} label="분" disabled={disabled} onChange={set(1)} />
-      <span className="wheel-colon" aria-hidden="true">
-        :
-      </span>
+      <WheelColumn value={second} low={0} high={59} label="초" disabled={disabled} onChange={set(2)} />
+      <span className="wheel-unit" aria-hidden="true">시</span>
+      <span className="wheel-unit" aria-hidden="true">분</span>
+      <span className="wheel-unit" aria-hidden="true">초</span>
+      <span className="wheel-colon" aria-hidden="true">:</span>
+      <span className="wheel-colon second" aria-hidden="true">:</span>
     </div>
   );
 }
@@ -232,49 +239,95 @@ function SubmissionRow({
     </div>
   );
 }
-export function PredictionGame({
-  game,
-  user,
-  serverTime,
-  demo,
-  onBack,
-  onSave,
-  onReveal,
-}: Props) {
-  const author =
-    user.role === "player" && user.username === game.authorUsername;
+function differenceText(id: GameId, difference: number) {
+  return difference === 0 ? "정확히 맞힘" : `${difference}${id === "luck" ? "점" : "초"} 차이`;
+}
+function ResultCards({ id, results, username }: { id: GameId; results: GameResult[]; username: string }) {
+  return results.length ? results.map((result) => {
+    const rank = rankOf(results, result);
+    return <article className="card result-card" key={result.playerId}>
+      <div className="result-player">
+        <span className={`rank-badge ${result.isFirst ? "first" : ""}`}>{rank}</span>
+        <Avatar username={result.username} size={46} />
+        <div className="result-name">
+          <strong>{result.displayName}{result.username === username ? " (나)" : ""}</strong>
+          <span>{differenceText(id, result.difference)}</span>
+        </div>
+        <strong className="result-guess">{result.value}{id === "luck" ? "점" : ""}</strong>
+      </div>
+      <div className="result-rewards">
+        <span className="reward points">{result.score > 0 ? "+" : ""}{result.score}점</span>
+        <span className="reward gold"><Coin size={20} />+{result.participationGold} 참여</span>
+        {result.isFirst && <span className="reward bonus"><Coin size={20} />+{result.firstGold} 1등 보너스</span>}
+      </div>
+    </article>;
+  }) : <div className="card empty-state">이번 라운드에는 제출한 예측이 없어요.</div>;
+}
+function GameHistory({ game, username, demo }: { game: GameState; username: string; demo?: boolean }) {
+  const [history, setHistory] = useState<GameHistoryRound[]>(() => demo ? previewHistory(game.id) : []);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(!demo);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (demo) { setHistory(previewHistory(game.id)); setLoading(false); return; }
+    let active = true;
+    setLoading(true);
+    setError("");
+    void api.history(game.id).then(({ history: next }) => {
+      if (active) setHistory(next);
+    }).catch((e: unknown) => {
+      if (active) setError(e instanceof Error ? e.message : "기록을 불러오지 못했어요.");
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [game.id, game.roundDate, demo, retry]);
+  return <section className="screen-body prediction-history" aria-label="최근 결과 기록">
+    <h2>최근 결과 기록</h2>
+    {loading ? <p className="subtle-note" role="status">기록을 불러오는 중…</p> : error ?
+      <div className="card empty-state"><p role="alert">{error}</p><button className="text-button" onClick={() => setRetry(n => n + 1)}>다시 시도</button></div> :
+      history.length ? history.map(round => <section className="history-round" key={round.roundDate}>
+        <div className="history-heading"><h3>{round.roundDate}</h3><span>정답 <strong>{round.answer}{game.id === "luck" ? "점" : ""}</strong></span></div>
+        <ResultCards id={game.id} results={round.results} username={username} />
+      </section>) : <p className="card empty-state">아직 공개된 지난 기록이 없어요.</p>}
+  </section>;
+}
+function GameHelp({ id }: { id: GameId }) {
+  const rules = GAME_RULES[id];
+  return <div className="screen-body prediction-help"><details className="card">
+    <summary>게임 방법</summary>
+    <div className="help-content">
+      <p>매일 {rules.deadline} (KST)까지 예측할 수 있어요. 정답이 먼저 공개되면 예측도 바로 마감돼요.</p>
+      <p>{id === "wake" ? 'min이 “기상했어요”를 누른 서버 시각이 정답이 되어 바로 공개돼요.' : id === "offwork" ? 'siwon이 정한 퇴근 시각에 자동 공개돼요. 미리 공개할 수도 있어요.' : `yeseo의 점수와 힌트를 보고 예측해요. ${GAME_RULES.luck.revealTime}에 자동 공개되며 미리 공개할 수도 있어요.`}</p>
+      <p>첫 예측 저장 즉시 참여 보상 {PREDICTION_REWARDS.participationGold}G를 받아요. 수정해도 다시 지급되지 않아요. 정답과 가장 가까운 1등은 {PREDICTION_REWARDS.firstGold}G를 받고, 동점이면 모두 받아요.</p>
+      <table><caption>정답과의 차이에 따른 점수</caption><thead><tr><th scope="col">차이</th><th scope="col">점수</th></tr></thead><tbody>
+        {SCORE_TABLES[id].map(tier => <tr key={tier.maxDifference}><th scope="row">{tier.maxDifference === 0 ? "정확히 일치" : `${tier.maxDifference}${id === "luck" ? "점" : "초"} 이하`}</th><td>{tier.points}점</td></tr>)}
+        <tr><th scope="row">그 밖</th><td>{predictionPoints(id, Infinity)}점</td></tr>
+      </tbody></table>
+      <p>출제자는 자기 게임을 예측할 수 없어요. 정답이 없는 날은 결과 대기 상태로 남고 참여 보상은 유지돼요.</p>
+    </div>
+  </details></div>;
+}
+export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, onReveal, onWake }: Props) {
+  const author = user.role === "player" && user.username === game.authorUsername;
   const initial = author ? game.answer : game.prediction;
-  const [value, setValue] = useState(
-    initial ??
-      (game.id === "luck" ? "65" : game.id === "wake" ? "08:40" : "18:00"),
-  );
+  const defaultValue = game.id === "luck" ? "65" : game.id === "wake" ? "08:40:00" : "18:00:00";
+  const [value, setValue] = useState(initial ?? defaultValue);
   const [hint, setHint] = useState(game.hint);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [now, setNow] = useState(Date.parse(serverTime));
+  const confirmation = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const offset = Date.parse(serverTime) - Date.now();
     setNow(Date.now() + offset);
     const timer = window.setInterval(() => setNow(Date.now() + offset), 1000);
     return () => clearInterval(timer);
   }, [serverTime]);
-  useEffect(() => {
-    setValue(
-      initial ??
-        (game.id === "luck" ? "65" : game.id === "wake" ? "08:40" : "18:00"),
-    );
-  }, [game.id, initial]);
-  useEffect(() => {
-    setHint(game.hint);
-  }, [game.hint]);
-  const deadline = /^\d{2}:\d{2}$/.test(game.deadline)
-    ? `${game.roundDate}T${game.deadline}:00+09:00`
-    : game.deadline;
+  useEffect(() => { setValue(initial ?? defaultValue); }, [game.id, initial, defaultValue]);
+  useEffect(() => { setHint(game.hint); }, [game.hint]);
+  const deadline = /^\d{2}:\d{2}:\d{2}$/.test(game.deadline) ? `${game.roundDate}T${game.deadline}+09:00` : game.deadline;
   const left = Math.max(0, Math.ceil((Date.parse(deadline) - now) / 1000));
-  const editable =
-    demo || (author ? game.canEditAnswer : game.canPredict && left > 0);
+  const editable = demo || (author ? game.canEditAnswer : game.canPredict && left > 0);
   const revealed = game.phase === "revealed";
-  // Remember the last saved value so the button turns to 제출 완료 right away.
   const [savedValue, setSavedValue] = useState<string | null>(null);
   const saved = (savedValue ?? initial) === value && (savedValue ?? initial) !== null;
   const urgent = !revealed && left > 0 && left < 600;
@@ -282,9 +335,7 @@ export function PredictionGame({
   const luckNumber = useRef<HTMLLabelElement>(null);
   const heroKey = useCharacter(game.authorUsername);
   const [oneShot, setOneShot] = useState<CharState | null>(null);
-  const playJump = useCallback(() => {
-    setOneShot((state) => state === "jump" ? state : "jump");
-  }, []);
+  const playJump = useCallback(() => { setOneShot(state => state === "jump" ? state : "jump"); }, []);
   const finish = useCallback(() => setOneShot(null), []);
   const results = useRef<HTMLDivElement>(null);
   const answerRef = useRef<HTMLElement>(null);
@@ -298,15 +349,13 @@ export function PredictionGame({
     void preloadSprites(heroKey, revealed ? ["jump"] : ["greet", "jump"]);
     setOneShot(null);
     if (revealed) return;
-    const timer = window.setTimeout(() => setOneShot((state) => state ?? "greet"), 320);
+    const timer = window.setTimeout(() => setOneShot(state => state ?? "greet"), 320);
     return () => window.clearTimeout(timer);
     // Only read the reveal state on entry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.id, heroKey]);
   useEffect(() => {
     if (!revealed) return;
-    // Result reveal: answer flips, cards rise by rank, chips pop one by one,
-    // then confetti for 1st place and the setter's jump sprite.
     flipY(answerRef.current);
     const cards = [...(results.current?.querySelectorAll(".result-card") ?? [])];
     cards.forEach((card, i) => rise(card, { delay: 520 + i * 140 }));
@@ -318,31 +367,14 @@ export function PredictionGame({
       playJump();
     }, reduced() ? 0 : done);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealed, playJump]);
-  
-  const update = (next: string) => {
-    setValue(next);
-    setError("");
-  };
+  const update = (next: string) => { setValue(next); setError(""); };
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
-    if (!editable) return;
-    if (
-      game.id === "luck"
-        ? !/^\d{1,3}$/.test(value) || Number(value) > 100
-        : !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)
-    ) {
-      setError(
-        game.id === "luck"
-          ? "0~100 사이의 정수를 입력해 주세요."
-          : "올바른 시간을 입력해 주세요.",
-      );
-      return;
-    }
-    if (author && game.id === "luck" && !hint.trim()) {
-      setError("함께 볼 힌트를 입력해 주세요.");
+    if (!editable || busy) return;
+    if (game.id === "luck" ? !/^(?:0|[1-9][0-9]?|100)$/.test(value) : !/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(value)) {
+      setError(game.id === "luck" ? "0~100 사이의 정수를 입력해 주세요." : "올바른 시·분·초를 입력해 주세요.");
       return;
     }
     setBusy(true);
@@ -350,290 +382,90 @@ export function PredictionGame({
       await onSave(value, hint, author);
       setSavedValue(value);
       toast(author ? "정답을 저장했어요" : "예측을 저장했어요");
-    } catch (e) {
-      setError(
-        e instanceof Error
-          ? e.message
-          : "저장하지 못했어요. 다시 시도해 주세요.",
-      );
-    } finally {
-      setBusy(false);
-    }
+    } catch (e) { setError(e instanceof Error ? e.message : "저장하지 못했어요. 다시 시도해 주세요."); }
+    finally { setBusy(false); }
   }
-  async function reveal() {
+  async function reveal(wake = false) {
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
-      await onReveal();
-      toast("정답을 공개했어요");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "공개하지 못했어요.");
-    } finally {
-      setBusy(false);
-    }
+      await (wake ? onWake() : onReveal());
+      confirmation.current?.close();
+      toast(wake ? "기상 시각을 공개했어요" : "정답을 공개했어요");
+    } catch (e) { setError(e instanceof Error ? e.message : "공개하지 못했어요."); confirmation.current?.close(); }
+    finally { setBusy(false); }
   }
-  return (
-    <div className={`prediction-page ${game.id} ${revealed ? "revealed" : ""}`}>
-      <div className="prediction-hero">
-        <Toolbar
-          title={game.title}
-          onBack={onBack}
-          gold={user.gold}
-        />
-        <div className="character-stage">
-          <div className="character-shadow" />
-          <button
-            type="button"
-            className="hero-character-button"
-            aria-label={`${game.authorUsername}의 캐릭터`}
-            data-nopress
-            onClick={playJump}
-          >
-            <span className="hero-character-wrap">
-              <CharacterSprite
-                username={game.authorUsername}
-                state={oneShot ?? "idle"}
-                className="hero-character"
-                onDone={finish}
-              />
-            </span>
-          </button>
-          <span className="author-pill" style={{ color: playerColor[game.authorUsername] }}>
-            출제 {game.authorUsername}
-          </span>
-        </div>
+  const participants = <div className="card submission-list">{[...game.participants]
+    .sort((a, b) => Number(a.username === user.username) - Number(b.username === user.username))
+    .map(player => <SubmissionRow key={player.playerId} player={demo && player.username === user.username && savedValue !== null ? { ...player, submitted: true } : player} me={player.username === user.username} />)}</div>;
+  return <div className={`prediction-page ${game.id} ${revealed ? "revealed" : ""}`}>
+    <div className="prediction-hero">
+      <Toolbar title={game.title} onBack={onBack} gold={user.gold} />
+      <div className="character-stage">
+        <div className="character-shadow" />
+        <button type="button" className="hero-character-button" aria-label={`${game.authorUsername}의 캐릭터`} data-nopress onClick={playJump}>
+          <span className="hero-character-wrap"><CharacterSprite username={game.authorUsername} state={oneShot ?? "idle"} className="hero-character" onDone={finish} /></span>
+        </button>
+        <span className="author-pill" style={{ color: playerColor[game.authorUsername] }}>출제 {game.authorUsername}</span>
       </div>
-      <div className="countdown-row">
-        <div className="countdown">
-          <span>
-            {revealed ? "정답" : author ? "예측 마감까지" : "마감까지"}
-          </span>
-          <strong
-            ref={revealed ? answerRef : countdownRef}
-            className={revealed ? "answer-number" : urgent ? "urgent" : ""}
-          >
-            {revealed
-              ? `${game.answer ?? "—"}${game.id === "luck" ? "점" : ""}`
-              : clock(left)}
-          </strong>
-        </div>
-        <div className="deadline-block">
-          <span className={`pill ${revealed ? "yellow" : "mint"}`}>
-            {revealed ? "결과 공개" : `${deadlines[game.id]} 마감`}
-          </span>
-          {game.id === "luck" && !revealed && <small>18:00 공개</small>}
-        </div>
-      </div>
-      {revealed ? (
-        <div className="screen-body result-list" ref={results}>
-          {game.results.length ? (
-            game.results.map((result) => {
-              const rank = rankOf(game.results, result);
-              return (
-                <article className="card result-card" key={result.playerId}>
-                  <div className="result-player">
-                    <span className={`rank-badge ${rank === 1 ? "first" : ""}`}>
-                      {rank}
-                    </span>
-                    <Avatar username={result.username} size={46} />
-                    <div className="result-name">
-                      <strong>
-                        {result.displayName}
-                        {result.username === user.username ? " (나)" : ""}
-                      </strong>
-                      <span>
-                        {result.difference === 0
-                          ? "정확히 맞힘"
-                          : `${result.difference}${game.id === "luck" ? "점" : "분"} 차이`}
-                      </span>
-                    </div>
-                    <strong className="result-guess">
-                      {result.value}
-                      {game.id === "luck" ? "점" : ""}
-                    </strong>
-                  </div>
-                  <div className="result-rewards">
-                    <span className="reward points">+{predictionPoints(rank)}점</span>
-                    <span className="reward gold">
-                      <Coin size={20} />+{BALANCE.participationGold} 참여
-                    </span>
-                    {rank === 1 && (
-                      <span className="reward bonus">
-                        <Coin size={20} />+{BALANCE.firstPlaceGold} 1등 보너스
-                      </span>
-                    )}
-                  </div>
-                </article>
-              );
-            })
-          ) : (
-            <div className="card empty-state">
-              이번 라운드에는 제출한 예측이 없어요.
-            </div>
-          )}
-          <div className="result-caption">
-            <span />
-            {game.authorUsername} {game.answer}
-            {game.id === "offwork"
-              ? " 퇴근"
-              : game.id === "wake"
-                ? " 기상"
-                : "점"}
-            <span />
-          </div>
-        </div>
-      ) : (
-        <form onSubmit={submit}>
-          <div className="screen-body input-cards">
-            {author && (
-              <div className="pill author-note">내가 출제하는 게임이에요</div>
-            )}
-            {game.id === "luck" && !author && (
-              <div className="hint-card">
-                <span aria-hidden="true">“</span>
-                <p>{game.hint || "yeseo가 오늘의 힌트를 준비하고 있어요."}</p>
-              </div>
-            )}
-            <section className="card prediction-input">
-              <h2>
-                {author
-                  ? game.id === "luck"
-                    ? "오늘의 행운 점수"
-                    : "오늘의 실제 시간"
-                  : questions[game.id]}
-              </h2>
-              {game.id === "luck" ? (
-                <div className="luck-input">
-                  <label className="luck-number" ref={luckNumber}>
-                    <span className="sr-only">
-                      {author ? "정답 점수" : "예측 점수"}
-                    </span>
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={value}
-                      disabled={!editable || busy}
-                      onChange={(e) => update(e.target.value)}
-                    />
-                    <span>점</span>
-                  </label>
-                  <input
-                    aria-label="행운 점수 슬라이더"
-                    className="luck-slider"
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={Number(value) || 0}
-                    disabled={!editable || busy}
-                    onChange={(e) => update(e.target.value)}
-                    style={
-                      {
-                        "--progress": `${Number(value) || 0}%`,
-                      } as React.CSSProperties
-                    }
-                  />
-                  <div className="range-labels">
-                    <span>0</span>
-                    <span>50</span>
-                    <span>100</span>
-                  </div>
-                </div>
-              ) : (
-                <TimeWheel
-                  value={value}
-                  onChange={update}
-                  disabled={!editable || busy}
-                  hours={game.id === "wake" && !author ? [5, 12] : [0, 23]}
-                />
-              )}
-              {author && game.id === "luck" && (
-                <label className="field-label">
-                  함께 볼 힌트
-                  <textarea
-                    value={hint}
-                    onChange={(e) => setHint(e.target.value)}
-                    placeholder="오늘의 기분은 어때요?"
-                    maxLength={200}
-                    required
-                    disabled={!editable || busy}
-                  />
-                </label>
-              )}
-            </section>
-            {!author && game.participants.length > 0 && (
-              <div className="card submission-list">
-                {[...game.participants]
-                  .sort((a, b) => Number(a.username === user.username) - Number(b.username === user.username))
-                  .map((player) => (
-                    <SubmissionRow
-                      key={player.playerId}
-                      player={
-                        // The preview has no server, so mark my row once saved.
-                        demo && player.username === user.username && savedValue !== null
-                          ? { ...player, submitted: true }
-                          : player
-                      }
-                      me={player.username === user.username}
-                    />
-                  ))}
-              </div>
-            )}
-            {error && (
-              <p className="form-message error" role="alert">
-                {error}
-              </p>
-            )}
-            {!editable && (
-              <p className="form-message" role="status">
-                {user.role === "admin"
-                  ? "운영자 계정은 게임에 참여하지 않아요."
-                  : author
-                    ? "정답 입력이 마감되었어요."
-                    : "예측이 마감되었어요. 결과를 기다려 주세요."}
-              </p>
-            )}
-          </div>
-          <div className="game-actions">
-            <button
-              className={`primary-button ${saved ? "saved" : ""}`}
-              disabled={!editable || busy}
-              type="submit"
-            >
-              {saved && !author && (
-                <svg className="saved-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M5 12.5l4.5 4.5L19 7.5" pathLength="1" />
-                </svg>
-              )}
-              <span key={busy ? "busy" : saved ? "saved" : "idle"} className="button-label">
-                {busy
-                  ? "저장 중…"
-                  : author
-                    ? "정답 저장"
-                    : saved
-                      ? "제출 완료 · 마감 전까지 수정 가능"
-                      : `${value}${game.id === "luck" ? "점" : ""}으로 예측`}
-              </span>
-            </button>
-            {author && game.canReveal && !demo && (
-              <button
-                className="secondary-button reveal-button"
-                type="button"
-                onClick={reveal}
-                disabled={busy}
-              >
-                정답 공개 · 예측 마감
-              </button>
-            )}
-            {author && game.canReveal && (
-              <p className="subtle-note">
-                공개하면 지금부터 예측을 받을 수 없어요.
-              </p>
-            )}
-          </div>
-        </form>
-      )}
     </div>
-  );
+    {author && <p className="author-date">{game.roundDate} · {GAME_RULES[game.id].deadline} 마감 · 내가 출제하는 게임</p>}
+    <div className="countdown-row">
+      <div className="countdown"><span>{revealed ? "정답" : author ? "예측 마감까지" : "마감까지"}</span>
+        <strong ref={revealed ? answerRef : countdownRef} className={revealed ? "answer-number" : urgent ? "urgent" : ""}>{revealed ? `${game.answer ?? "—"}${game.id === "luck" ? "점" : ""}` : clock(left)}</strong>
+      </div>
+      <div className="deadline-block">
+        <span className={`pill ${revealed ? "yellow" : "mint"}`}>{revealed ? "결과 공개" : `${GAME_RULES[game.id].deadline} 마감`}</span>
+        {game.id === "luck" && !revealed && <small>{GAME_RULES.luck.revealTime} 공개</small>}
+      </div>
+    </div>
+    {revealed ? <div className="screen-body result-list" ref={results}>
+      <ResultCards id={game.id} results={game.results} username={user.username} />
+      <div className="result-caption"><span />{game.authorUsername} {game.answer}{game.id === "offwork" ? " 퇴근" : game.id === "wake" ? " 기상" : "점"}<span /></div>
+    </div> : <form onSubmit={submit}>
+      <div className="screen-body input-cards">
+        {game.id === "luck" && !author && <div className="hint-card"><span aria-hidden="true">“</span><p>{game.hint || "yeseo가 오늘의 힌트를 준비하고 있어요."}</p></div>}
+        {author && game.id === "wake" ? <section className="card wake-author">
+          <h2>오늘도 잘 잤나요?</h2>
+          <span className="subtle-note">현재 시각 (KST)</span>
+          <strong className="wake-clock">{new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(11, 19)}</strong>
+          <button className="primary-button" type="button" disabled={!editable || busy} onClick={() => confirmation.current?.showModal()}>기상했어요</button>
+          <p className="subtle-note">확인하는 순간의 시각이 정답으로 바로 공개돼요.</p>
+        </section> : <section className="card prediction-input">
+          <h2>{author ? game.id === "luck" ? "오늘의 행운 점수" : "오늘의 퇴근 시각" : questions[game.id]}</h2>
+          {game.id === "luck" ? <div className="luck-input">
+            <label className="luck-number" ref={luckNumber}><span className="sr-only">{author ? "정답 점수" : "예측 점수"}</span>
+              <input type="number" inputMode="numeric" min="0" max="100" step="1" value={value} disabled={!editable || busy} onChange={e => update(e.target.value)} /><span>점</span>
+            </label>
+            <input aria-label="행운 점수 슬라이더" className="luck-slider" type="range" min="0" max="100" value={Number(value) || 0} disabled={!editable || busy} onChange={e => update(e.target.value)} style={{ "--progress": `${Number(value) || 0}%` } as React.CSSProperties} />
+            <div className="range-labels"><span>0</span><span>50</span><span>100</span></div>
+          </div> : <TimeWheel value={value} onChange={update} disabled={!editable || busy} />}
+          {author && game.id === "luck" && <label className="field-label">함께 볼 힌트
+            <textarea value={hint} onChange={e => setHint(e.target.value)} placeholder="오늘의 기분은 어때요?" maxLength={200} disabled={!editable || busy} />
+            <span className="subtle-note">{hint.length}/200</span>
+          </label>}
+          {author && <p className="subtle-note">{game.id === "luck" ? `${GAME_RULES.luck.revealTime}에 자동 공개` : game.answer ? `${game.answer}에 자동 공개` : "퇴근 시각을 저장하면 그 시각에 자동 공개돼요."}</p>}
+        </section>}
+        {game.participants.length > 0 && participants}
+        {error && <p className="form-message error" role="alert">{error}</p>}
+        {!editable && <p className="form-message" role="status">{user.role === "admin" ? "운영자 계정은 게임에 참여하지 않아요." : author ? "정답 입력이 마감되었어요." : "예측이 마감되었어요. 결과를 기다려 주세요."}</p>}
+      </div>
+      {!(author && game.id === "wake") && <div className="game-actions">
+        <button className={`primary-button ${saved ? "saved" : ""}`} disabled={!editable || busy} type="submit">
+          {saved && !author && <svg className="saved-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" pathLength="1" /></svg>}
+          <span key={busy ? "busy" : saved ? "saved" : "idle"} className="button-label">{busy ? "저장 중…" : author ? "정답 저장" : saved ? "제출 완료 · 마감 전까지 수정 가능" : `${value}${game.id === "luck" ? "점" : ""}으로 예측`}</span>
+        </button>
+        {author && game.canReveal && <><button className="secondary-button reveal-button" type="button" onClick={() => void reveal()} disabled={busy}>지금 공개</button><p className="subtle-note">공개하면 지금부터 예측을 받을 수 없어요.</p></>}
+      </div>}
+    </form>}
+    <GameHistory game={game} username={user.username} demo={demo} />
+    <GameHelp id={game.id} />
+    <dialog className="wake-confirmation" ref={confirmation} aria-labelledby="wake-confirm-title" aria-describedby="wake-confirm-description" onClick={e => { if (e.target === e.currentTarget && !busy) e.currentTarget.close(); }} onCancel={e => { if (busy) e.preventDefault(); }}>
+      <h2 id="wake-confirm-title">기상 시각을 공개할까요?</h2>
+      <p id="wake-confirm-description">확인을 누른 순간의 서버 시각이 정답이 돼요. 공개 후에는 되돌릴 수 없고 예측도 마감돼요.</p>
+      <button className="primary-button" type="button" disabled={busy} onClick={() => void reveal(true)}>{busy ? "공개 중…" : "기상 시각 확정"}</button>
+      <button className="text-button" type="button" disabled={busy} onClick={() => confirmation.current?.close()}>취소</button>
+    </dialog>
+  </div>;
 }

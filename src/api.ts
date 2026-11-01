@@ -4,6 +4,7 @@ import type {
   BootstrapResponse,
   GameId,
   GameResponse,
+  HistoryResponse,
 } from "../shared/types";
 
 export class ApiFailure extends Error {
@@ -44,6 +45,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 export const api = {
+  history: (id: GameId) => request<HistoryResponse>(`/games/${id}/history`),
+  wake: (roundDate: string) => request<GameResponse>("/games/wake/wake", {
+    method: "POST",
+    body: JSON.stringify({ roundDate }),
+  }),
   bootstrap: () => request<BootstrapResponse>("/bootstrap"),
   login: (username: string, password: string) =>
     request<AuthResponse>("/auth/login", {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { GAME_RULES } from "../../shared/balance";
 import type { GameState } from "../../shared/types";
 import { claimToday, useAttendance } from "../attendance";
 import {
@@ -19,8 +20,6 @@ import {
   kstDateText,
   kstParts,
   marketOpen,
-  predictionPoints,
-  rankOf,
   weekdayNames,
 } from "../sample";
 import {
@@ -70,17 +69,13 @@ const icons: Record<GameState["id"], ArtKey> = {
   offwork: "manta",
   luck: "monkey",
 };
-const deadlines: Record<GameState["id"], string> = {
-  wake: "10:30",
-  offwork: "17:00",
-  luck: "17:00",
-};
+
 
 export const isEvening = () => kstParts().hour >= 18;
 
 function left(deadline: string, roundDate: string) {
-  const at = /^\d{2}:\d{2}$/.test(deadline)
-    ? Date.parse(`${roundDate}T${deadline}:00+09:00`)
+  const at = /^\d{2}:\d{2}:\d{2}$/.test(deadline)
+    ? Date.parse(`${roundDate}T${deadline}+09:00`)
     : Date.parse(deadline);
   const minutes = Math.max(0, Math.floor((at - Date.now()) / 60_000));
   const h = Math.floor(minutes / 60);
@@ -102,7 +97,7 @@ function predictionRow(game: GameState, me: string): GameRow {
       ...row,
       chip: "done",
       sub: mine ? `${answer} · 내 예측 ${unit(mine.value)}` : answer,
-      right: mine ? `+${predictionPoints(rankOf(game.results, mine))}점` : "",
+      right: mine ? `+${mine.score}점` : "",
     };
   }
   if (author)
@@ -113,18 +108,18 @@ function predictionRow(game: GameState, me: string): GameRow {
         game.id === "wake"
           ? game.answerEntered
             ? "정답 입력 완료"
-            : "정답 입력 대기"
+            : "기상했어요로 바로 공개"
           : game.id === "offwork"
             ? "퇴근하면 자동 공개"
-            : "18:00 공개",
-      right: deadlines[game.id],
+            : `${GAME_RULES.luck.revealTime} 공개`,
+      right: GAME_RULES[game.id].deadline,
     };
   if (game.phase === "closed")
     return {
       ...row,
       chip: "closed",
       sub: game.prediction ? `내 예측 ${unit(game.prediction)}` : "결과 대기",
-      right: deadlines[game.id],
+      right: GAME_RULES[game.id].deadline,
     };
   return {
     ...row,
@@ -134,7 +129,7 @@ function predictionRow(game: GameState, me: string): GameRow {
       : game.id === "luck" && game.hint
         ? `힌트 「${game.hint.split(/[.。]/)[0]}」`
         : left(game.deadline, game.roundDate),
-    right: deadlines[game.id],
+    right: GAME_RULES[game.id].deadline,
   };
 }
 export function gameRows(games: GameState[], me: string): GameRow[] {
@@ -292,7 +287,7 @@ export function standings(players: HomePlayer[]) {
 }
 function settleText() {
   const days = 6 - kstParts().weekday;
-  return days ? `정산까지 ${days}일` : "오늘 정산";
+  return days ? `이번 주 종료까지 ${days}일` : "오늘 주간 집계 종료";
 }
 
 function AttendanceCard({
@@ -527,10 +522,6 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
                   <span className="bar">
                     <i style={{ width: `${Math.round((player.weeklyScore / max) * 100)}%`, background: bar }} />
                   </span>
-                </span>
-                <span className="reward-chip">
-                  <Coin size={16} />
-                  {(BALANCE.weeklyRewards[player.rank - 1] ?? 0).toLocaleString("ko-KR")}
                 </span>
               </span>
             );
