@@ -8,7 +8,9 @@ import type {
   ShopState,
   CatchmindSummary,
   ClawSummary,
+  LaunchGiftResponse,
 } from "../shared/types";
+import { FEATURES } from "../shared/balance";
 import { ApiFailure, api } from "./api";
 import { anim } from "./motion";
 import { CharacterProvider, CharacterSprite, TabBar, tabs, readLegacyCharacter, clearLegacyCharacter, choosePreviewCharacter } from "./components/UI";
@@ -37,6 +39,7 @@ import { Kuji } from "./screens/Kuji";
 import { ShopProvider } from "./shop";
 import { CatchmindProvider } from "./catchmind";
 import { Catchmind } from "./screens/Catchmind";
+import { LaunchGiftProvider, StockNotice } from "./launch-gift";
 
 function navigate(path: string) {
   window.location.hash = path;
@@ -284,6 +287,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [bootError, setBootError] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
+  const [stockNoticeOpen, setStockNoticeOpen] = useState(false);
   const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[] }>({ gold: previewGold, score: 0, ledger: [] });
   const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[] }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [] });
   const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
@@ -367,13 +371,24 @@ export default function App() {
       document.removeEventListener("visibilitychange", visible);
     };
   }, [data?.user.id, refresh, demo, route]);
-  const path = demo ? route.replace("/preview", "") || "/" : route;
+  const requestedPath = demo ? route.replace("/preview", "") || "/" : route;
+  const stockBlocked = !FEATURES.stock && /^\/stock(?:\/|$)/.test(requestedPath);
+  const path = stockBlocked ? "/" : requestedPath;
+  useEffect(() => {
+    if (stockBlocked) {
+      setStockNoticeOpen(true);
+      window.location.replace(demo ? "#/preview" : "#/");
+    }
+  }, [stockBlocked, demo, route]);
   const gameId = path.match(/^\/game\/(wake|offwork|luck)$/)?.[1] as
     GameId | undefined;
   const play = path.match(/^\/play\/(catchmind|kuji|claw)$/)?.[1] as
     "catchmind" | "kuji" | "claw" | undefined;
   const stockId = path.match(/^\/stock\/([a-z]+)$/)?.[1];
-  const go = (to: string) => navigate(demo ? `/preview${to === "/" ? "" : to}` : to);
+  const go = (to: string) => {
+    if (!FEATURES.stock && /^\/stock(?:\/|$)/.test(to)) { setStockNoticeOpen(true); return; }
+    navigate(demo ? `/preview${to === "/" ? "" : to}` : to);
+  };
   const home = () => go("/");
   function mutate<T>(
     action: () => Promise<T>,
@@ -436,6 +451,17 @@ export default function App() {
       return api.bootstrap();
     }, applyBootstrap);
     return result;
+  };
+  const claimLaunchGift = async () => {
+    const owner = data?.user.id;
+    let receipt!: LaunchGiftResponse;
+    await mutate(async () => { receipt = await api.launchGift(); return receipt; }, result => {
+      serverClockOffset.current = Date.parse(result.serverTime) - Date.now();
+      setData(current => current && current.user.id === owner ? { ...current, launchGift: result.launchGift, inventory: result.inventory, serverTime: result.serverTime } : current);
+    });
+    // The receipt already carries the grant; a later read failure cannot undo it.
+    await refresh();
+    return receipt;
   };
   const loadAttendanceMonth = async (month: string) => (await api.attendance(month)).attendance;
   const characterMap: Record<string, ArtKey | null> = {};
@@ -664,6 +690,9 @@ export default function App() {
         if (data && (state.gold !== data.user.gold || state.inventory.lottoTickets !== data.inventory.lottoTickets || state.inventory.speettoTickets !== data.inventory.speettoTickets)) void refresh();
       }}
       onPreviewChange={(state, ledger, score) => setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold, ledger: [...ledger], score })}>
+    <LaunchGiftProvider preview={demo} role={me?.role} state={data?.launchGift ?? { available: false, claimed: false }}
+      serverTime={new Date(Date.now() + (demo ? 0 : serverClockOffset.current)).toISOString()}
+      path={path} suspended={stockNoticeOpen || stockBlocked} claim={claimLaunchGift}>
       <aside className="desktop-brand" aria-hidden="true">
         <span className="wordmark">
           예굼방 아케이드<span>3</span>
@@ -695,7 +724,9 @@ export default function App() {
           {content}
         </div>
         {showTabs && <TabBar active={tab ?? "/"} onNavigate={go} />}
+        {stockNoticeOpen && <StockNotice onClose={() => setStockNoticeOpen(false)} />}
       </main>
+    </LaunchGiftProvider>
     </ShopProvider>
     </CatchmindProvider>
     </ClawProvider>

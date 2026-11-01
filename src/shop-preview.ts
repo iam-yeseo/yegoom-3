@@ -1,4 +1,4 @@
-import { KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
 import type {
   Inventory, KujiCell, KujiGrade, KujiPurchase, KujiPurchaseInput, KujiResponse,
   LedgerEntry, LottoPurchaseInput, LottoResponse, LottoTicket, ShopKind, ShopPayment,
@@ -29,6 +29,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   let gameGoldBonus = 0;
   let score = 0;
   const inventory: Inventory = { lottoTickets: 2, speettoTickets: 2 };
+  let launchGiftClaimed = false;
   const ledger: LedgerEntry[] = [];
   let boardId = 1;
   let layout: KujiGrade[] = [];
@@ -206,6 +207,18 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     return speetto(now, purchase);
   }
   return { read, buyKuji, buyLotto, buySpeetto,
+    claimLaunchGift() {
+      const now = new Date();
+      if (kstDate(now) !== LAUNCH_GIFT.date) throw new Error('런칭 선물은 오픈 당일에만 받을 수 있어요.');
+      if (attendanceDate !== LAUNCH_GIFT.date || attendanceBonus <= 0) throw new Error('오늘 출석 체크를 먼저 해 주세요.');
+      const awarded = !launchGiftClaimed;
+      if (awarded) {
+        inventory.lottoTickets += LAUNCH_GIFT.lottoTickets;
+        inventory.speettoTickets += LAUNCH_GIFT.speettoTickets;
+        launchGiftClaimed = true;
+      }
+      return { state: state(now), awarded };
+    },
     setGameGoldBonus(next: number) {
       gold += next - gameGoldBonus;
       gameGoldBonus = next;

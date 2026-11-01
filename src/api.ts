@@ -11,6 +11,7 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput,
   CatchmindAction, CatchmindInput, CatchmindResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput,
+  LaunchGiftResponse,
 } from "../shared/types";
 import type { ArtKey } from "../shared/characters";
 
@@ -52,6 +53,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 export const api = {
+  launchGift: () => request<LaunchGiftResponse>("/events/launch-gift", { method: "POST", body: "{}" }),
   claw: () => request<ClawResponse>("/claw"),
   buyClawCoins: (input: ClawCoinInput) => request<ClawResponse>("/claw/coins", { method: "POST", body: JSON.stringify(input) }),
   playClaw: (input: ClawPlayInput) => request<ClawResponse>("/claw/play", { method: "POST", body: JSON.stringify(input) }),
