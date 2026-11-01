@@ -1,0 +1,160 @@
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import type { KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState } from "../shared/types";
+import { api, ApiFailure } from "./api";
+import { createShopPreview } from "./shop-preview";
+
+export type PendingPurchase =
+  | { kind: "kuji"; input: KujiPurchaseInput }
+  | { kind: "lotto"; input: LottoPurchaseInput }
+  | { kind: "speetto"; input: SpeettoPurchaseInput };
+type ShopResponse = ShopState | KujiResponse | LottoResponse | SpeettoResponse;
+interface ShopContextValue extends ShopState {
+  kuji: KujiState | null;
+  lotto: LottoState | null;
+  speetto: SpeettoState | null;
+  loading: boolean;
+  error: string;
+  pending: PendingPurchase | null;
+  refresh: (kind?: ShopKind) => Promise<void>;
+  buyKuji: (input: KujiPurchaseInput) => Promise<KujiResponse>;
+  buyLotto: (input: LottoPurchaseInput) => Promise<LottoResponse>;
+  buySpeetto: (input: SpeettoPurchaseInput) => Promise<SpeettoResponse>;
+}
+const ShopContext = createContext<ShopContextValue | null>(null);
+export function useShop(): ShopContextValue {
+  const value = useContext(ShopContext);
+  if (!value) throw new Error("ShopProvider is missing");
+  return value;
+}
+function savedPending(key: string): PendingPurchase | null {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(key) ?? "null") as PendingPurchase | null;
+    if (!value || typeof value.input?.requestId !== "string") return null;
+    if (value.kind === "kuji") return Number.isSafeInteger(value.input.boardId) && Array.isArray(value.input.positions) ? value : null;
+    if (value.kind === "lotto") return Array.isArray(value.input.numbers) && ["gold", "ticket"].includes(value.input.payment) ? value : null;
+    if (value.kind === "speetto") return ["gold", "ticket"].includes(value.input.payment) ? value : null;
+    return null;
+  } catch { return null; }
+}
+
+/** The same screens consume server state or an isolated, serverless preview. */
+export function ShopProvider({ children, preview, accountKey, initial, previewGoldBonus, transact, onPreviewChange, onServerRead }: {
+  children: ReactNode;
+  preview: boolean;
+  accountKey: string;
+  initial: ShopState;
+  previewGoldBonus: number;
+  transact: <T>(action: () => Promise<T>) => Promise<T>;
+  onPreviewChange: (state: ShopState, ledger: LedgerEntry[], score: number) => void;
+  onServerRead: (state: ShopState) => void;
+}) {
+  const storageKey = `yegoom3:shop:pending:${accountKey}`;
+  const previewEngine = useRef<ReturnType<typeof createShopPreview> | null>(null);
+  if (preview && !previewEngine.current) previewEngine.current = createShopPreview(initial.gold, previewGoldBonus);
+  const latestPreviewBonus = useRef(previewGoldBonus);
+  latestPreviewBonus.current = previewGoldBonus;
+  const syncPreview = useCallback(() => {
+    previewEngine.current?.setAttendanceBonus(latestPreviewBonus.current);
+    return previewEngine.current;
+  }, []);
+  const [state, setState] = useState<ShopState>(() => previewEngine.current?.read() ?? initial);
+  const [kuji, setKuji] = useState<KujiState | null>(null);
+  const [lotto, setLotto] = useState<LottoState | null>(null);
+  const [speetto, setSpeetto] = useState<SpeettoState | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState<PendingPurchase | null>(() => preview ? null : savedPending(storageKey));
+  const pendingRef = useRef(pending);
+  const writeInFlight = useRef(false);
+  const deferredRead = useRef<ShopKind | "shop" | null>(null);
+  const mounted = useRef(true);
+  const generation = useRef(0);
+  const callbacks = useRef({ transact, onPreviewChange, onServerRead });
+  callbacks.current = { transact, onPreviewChange, onServerRead };
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
+  useEffect(() => {
+    if (!preview && !writeInFlight.current) setState(initial);
+  }, [preview, initial.gold, initial.inventory.lottoTickets, initial.inventory.speettoTickets, initial.canPurchase, initial.serverTime]);
+  const remember = useCallback((value: PendingPurchase | null) => {
+    pendingRef.current = value;
+    if (mounted.current) setPending(value);
+    if (preview) return;
+    try {
+      if (value) sessionStorage.setItem(storageKey, JSON.stringify(value));
+      else sessionStorage.removeItem(storageKey);
+    } catch { /* In-memory retry still works when browser storage is unavailable. */ }
+  }, [preview, storageKey]);
+  const apply = useCallback((next: ShopResponse) => {
+    if (!mounted.current) return;
+    setState({ gold: next.gold, inventory: next.inventory, canPurchase: next.canPurchase, serverTime: next.serverTime });
+    if ("kuji" in next) setKuji(next.kuji);
+    if ("lotto" in next) setLotto(next.lotto);
+    if ("speetto" in next) setSpeetto(next.speetto);
+    if (previewEngine.current) callbacks.current.onPreviewChange(next, previewEngine.current.ledger, previewEngine.current.score);
+  }, []);
+  useEffect(() => {
+    const engine = syncPreview();
+    if (engine) apply(engine.read());
+  }, [previewGoldBonus, syncPreview, apply]);
+  const refresh = useCallback(async (kind?: ShopKind) => {
+    if (writeInFlight.current) { deferredRead.current = kind ?? "shop"; return; }
+    const current = ++generation.current;
+    setLoading(true);
+    try {
+      const engine = syncPreview();
+      const next = engine ? engine.read(kind)
+        : await (kind ? api[kind]() : api.shop());
+      if (!mounted.current || current !== generation.current) return;
+      apply(next);
+      setError("");
+      if (!previewEngine.current) callbacks.current.onServerRead(next);
+    } catch (e) {
+      if (mounted.current && current === generation.current) setError(e instanceof Error ? e.message : "상점을 불러오지 못했어요.");
+    } finally {
+      if (mounted.current && current === generation.current) setLoading(false);
+    }
+  }, [apply, syncPreview]);
+  const purchase = useCallback(async <T extends ShopResponse>(attempt: PendingPurchase, action: () => Promise<T>): Promise<T> => {
+    if (writeInFlight.current) throw new Error("구매를 확인하고 있어요. 잠시 기다려 주세요.");
+    const previous = pendingRef.current;
+    if (previous && JSON.stringify(previous) !== JSON.stringify(attempt)) {
+      throw new Error("진행 중인 구매 화면에서 구매 결과를 먼저 확인해 주세요.");
+    }
+    generation.current++;
+    writeInFlight.current = true;
+    remember(attempt);
+    setLoading(true);
+    setError("");
+    try {
+      const next = await callbacks.current.transact(action);
+      apply(next);
+      remember(null);
+      return next;
+    } catch (e) {
+      // A lost response may follow a committed purchase. Keep the same request
+      // and payload across routes/reloads until its persisted receipt is read.
+      if (preview || (e instanceof ApiFailure && e.status >= 400 && e.status < 500)) remember(null);
+      if (mounted.current) setError(e instanceof Error ? e.message : "구매 결과를 확인하지 못했어요. 다시 확인해 주세요.");
+      throw e;
+    } finally {
+      writeInFlight.current = false;
+      if (mounted.current) setLoading(false);
+      const nextRead = deferredRead.current;
+      deferredRead.current = null;
+      if (mounted.current && nextRead) void refresh(nextRead === "shop" ? undefined : nextRead);
+    }
+  }, [apply, preview, remember, refresh]);
+  const buyKuji = useCallback((input: KujiPurchaseInput) => purchase({ kind: "kuji", input }, async () => {
+    const engine = syncPreview();
+    return engine ? engine.buyKuji(input) : api.buyKuji(input);
+  }), [purchase, syncPreview]);
+  const buyLotto = useCallback((input: LottoPurchaseInput) => purchase({ kind: "lotto", input }, async () => {
+    const engine = syncPreview();
+    return engine ? engine.buyLotto(input) : api.buyLotto(input);
+  }), [purchase, syncPreview]);
+  const buySpeetto = useCallback((input: SpeettoPurchaseInput) => purchase({ kind: "speetto", input }, async () => {
+    const engine = syncPreview();
+    return engine ? engine.buySpeetto(input) : api.buySpeetto(input);
+  }), [purchase, syncPreview]);
+  return <ShopContext.Provider value={{ ...state, kuji, lotto, speetto, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto }}>{children}</ShopContext.Provider>;
+}

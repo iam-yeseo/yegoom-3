@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ATTENDANCE_RULES, GAME_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, GAME_RULES, LOTTO_RULES } from "../../shared/balance";
+import { useShop } from "../shop";
 import type { GameState } from "../../shared/types";
 import { useAttendance } from "../attendance";
 import {
@@ -243,7 +244,7 @@ export function SoloGames({ go }: { go: Go }) {
 }
 
 export function ShopCards({ go }: { go: Go }) {
-  const drawn = kstParts().hour >= BALANCE.lotto.drawHour;
+  const { inventory } = useShop();
   return (
     <div className="tile-grid">
       <button className="card shop-tile" onClick={() => go("/shop/lotto")}>
@@ -253,8 +254,9 @@ export function ShopCards({ go }: { go: Go }) {
           <i>21</i>
         </span>
         <span className="solo-text">
-          <strong>로또</strong>
-          <small className={drawn ? "gain" : ""}>{drawn ? "4등 당첨" : "17:00 추첨"}</small>
+          <strong>데일리 로또</strong>
+          <small>{LOTTO_RULES.drawTime.slice(0, 5)} 추첨</small>
+          <small>이용권 {inventory.lottoTickets}장</small>
         </span>
       </button>
       <button className="card shop-tile" onClick={() => go("/shop/speetto")}>
@@ -266,6 +268,7 @@ export function ShopCards({ go }: { go: Go }) {
         <span className="solo-text">
           <strong>스피또</strong>
           <small>바로 긁기</small>
+          <small>이용권 {inventory.speettoTickets}장</small>
         </span>
       </button>
     </div>

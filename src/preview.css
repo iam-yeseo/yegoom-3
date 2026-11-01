@@ -1007,3 +1007,51 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* The server-backed kuji keeps the original board and bottom-sheet design. */
+.kuji-legend-buttons > button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(120, 90, 60, .05);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  text-align: left;
+}
+.kuji-legend-buttons > button > span { font-size: 13px; font-weight: 700; white-space: nowrap; }
+.kuji-legend-buttons > button > span.gone { color: #cfc6ce; }
+.kuji-legend-buttons .kuji-last-one { grid-column: 1 / -1; }
+.kuji-last-one b { background: #ffd866; color: #5c4300; }
+.kuji-last-one > small { margin-left: auto; color: #94700a; }
+.kuji-next-price { margin: 0; text-align: center; font-size: 13px; color: #7c7383; }
+.kuji-modal {
+  position: fixed;
+  top: auto;
+  bottom: 0;
+  margin: 0 auto;
+  padding: 0;
+  width: min(100%, var(--app-width));
+  max-width: 100%;
+  max-height: calc(100% - 24px);
+  border: 0;
+  border-radius: 28px 28px 0 0;
+  color: #3a3340;
+  background: transparent;
+  overflow: auto;
+}
+.kuji-modal::backdrop { background: rgba(58, 51, 64, .28); }
+.kuji-modal .kuji-sheet { width: 100%; }
+.kuji-modal h2 { font-size: 20px; margin: 0; }
+.kuji-modal .primary-button { width: 100%; }
+.kuji-sheet-note { margin: 0; text-align: center; color: #7c7383; font-size: 14px; line-height: 1.6; }
+.kuji-reward-summary { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.kuji-reward-summary > span { background: #fff4cc; color: #94700a; padding: 8px 12px; border-radius: 14px; font-size: 14px; font-weight: 800; }
+.kuji-earned { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.kuji-earned > p { margin: 0; font-size: 13px; color: #7c7383; }
+@media (max-width: 359px) {
+  .kuji-legend-buttons > button { gap: 4px; padding: 0 6px; }
+  .kuji-legend-buttons > button > span { font-size: 11px; }
+}

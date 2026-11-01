@@ -19,7 +19,6 @@ import {
   reduced,
   rise,
   shake,
-  sparkle,
   toast,
   tween,
   useMountMotion,
@@ -27,7 +26,7 @@ import {
 } from "../motion";
 import { Avatar, CharacterSprite, Chevron, Coin, Toolbar, artSrc, preloadSprites, type ArtKey } from "./UI";
 
-type Game = "catchmind" | "kuji" | "claw";
+type Game = "catchmind" | "claw";
 type CatchView = "guess" | "draw" | "result";
 
 // These games have no server yet: boards, tries and gold change only on this
@@ -54,14 +53,7 @@ export function PreviewGames({
   );
   const [won, setWon] = useState(false);
   const spend = (amount: number) => setGold((value) => value - amount);
-  const title =
-    game === "kuji"
-      ? "예굼쿠지"
-      : game === "claw"
-        ? "캐릭터 뽑기"
-        : catchView === "draw"
-          ? "그림 그리기"
-          : "캐치마인드";
+  const title = game === "claw" ? "캐릭터 뽑기" : catchView === "draw" ? "그림 그리기" : "캐치마인드";
   return (
     <section className={`preview-game pg-${game} ${won ? "won" : ""}`}>
       <Toolbar title={title} onBack={onBack} gold={gold} />
@@ -73,8 +65,6 @@ export function PreviewGames({
         ) : (
           <CatchResult canDraw={me === NEXT_DRAWER} onDraw={() => setCatchView("draw")} />
         )
-      ) : game === "kuji" ? (
-        <Kuji spend={spend} />
       ) : (
         <Claw spend={spend} onWon={setWon} onBack={onBack} />
       )}
@@ -435,161 +425,6 @@ function Drawing() {
         {posted ? "올렸어요" : "올리기"}
       </button>
     </div>
-  );
-}
-
-const gradeColors = ["#FFD866", "#FF8E7A", "#B9A3F0", "#8CC8F2", "#8FD9C0", "#FFE6DF", "#EEE8FC", "#E3F1FC"];
-const gradeText = ["#5C4300", "#fff", "#fff", "#fff", "#fff", "#C9533E", "#7556C4", "#3B7FB3"];
-const totals = [1, 2, 3, 6, 10, 15, 25, 38];
-function makeBoard() {
-  let seed = 7;
-  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const pool = totals.flatMap((count, grade) => Array.from({ length: count }, () => grade));
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  const indices = Array.from({ length: 100 }, (_, i) => i);
-  for (let i = indices.length - 1; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1));
-    [indices[i], indices[j]] = [indices[j], indices[i]];
-  }
-  const used = new Set(indices.slice(0, 37));
-  return pool.map((grade, i) => ({ grade, taken: used.has(i) }));
-}
-function KujiSheet({ grades, onClose }: { grades: number[]; onClose: () => void }) {
-  const [shown, setShown] = useState(0);
-  const sheet = useRef<HTMLDivElement>(null);
-  const best = Math.min(...grades);
-  const done = shown >= grades.length;
-  useEffect(() => {
-    anim(sheet.current?.parentElement, [{ opacity: 0 }, { opacity: 1 }], { dur: 200 });
-    anim(sheet.current, [{ translate: "0 100%" }, { translate: "0 0" }], { dur: 420, ease: "spring" });
-    const timers = grades.map((_, i) => setTimeout(() => setShown(i + 1), reduced() ? 0 : 420 + i * 750));
-    return () => timers.forEach(clearTimeout);
-  }, [grades]);
-  useEffect(() => {
-    if (!shown) return;
-    const ticket = sheet.current?.querySelectorAll(".kuji-ticket")[shown - 1];
-    const grade = grades[shown - 1];
-    flipY(ticket);
-    if (grade === 0) {
-      setTimeout(() => {
-        pop(ticket, 1.12);
-        confetti(ticket, { n: 44, spread: 190 });
-        sparkle(ticket, { n: 10, r: 46 });
-        hop(document.querySelector(".pg-kuji-heading img"));
-      }, 300);
-    } else if (grade <= 2) sparkle(ticket, { delay: 260 });
-  }, [shown, grades]);
-  return (
-    <div className="kuji-scrim" onClick={(e) => e.target === e.currentTarget && done && onClose()}>
-      <div className="kuji-sheet" ref={sheet} role="dialog" aria-label="뽑은 쿠지">
-        <strong aria-live="polite">{done && best === 0 ? "A상 당첨!" : "뽑은 쿠지"}</strong>
-        <div className="kuji-tickets">
-          {grades.map((grade, i) => (
-            <span
-              key={i}
-              className={`kuji-ticket ${i < shown ? "open" : ""} ${i < shown && grade === 0 ? "grand" : ""}`}
-              style={i < shown ? { background: gradeColors[grade], color: gradeText[grade] } : undefined}
-            >
-              {i < shown ? `${String.fromCharCode(65 + grade)}상` : "?"}
-            </span>
-          ))}
-        </div>
-        <button className="primary-button" disabled={!done} onClick={onClose}>
-          확인
-        </button>
-      </div>
-    </div>
-  );
-}
-function Kuji({ spend }: { spend: (amount: number) => void }) {
-  const { price, raisedPrice, raiseFrom, boughtToday } = BALANCE.kuji;
-  const [board, setBoard] = useState(makeBoard);
-  const [selected, setSelected] = useState<number[]>([]);
-  const [drawn, setDrawn] = useState<number[]>([]);
-  const [count, setCount] = useState(boughtToday);
-  const remaining = board.filter((cell) => !cell.taken).length;
-  const cost = selected.reduce((sum, _, i) => sum + (count + i + 1 >= raiseFrom ? raisedPrice : price), 0);
-  function draw() {
-    if (!selected.length) return;
-    spend(cost);
-    setDrawn(selected.map((i) => board[i].grade));
-    setBoard((previous) => previous.map((cell, i) => (selected.includes(i) ? { ...cell, taken: true } : cell)));
-    setCount((value) => value + selected.length);
-    setSelected([]);
-  }
-  return (
-    <>
-      <div className="pg-kuji-heading">
-        <div>
-          <span>남은 칸</span>
-          <strong>
-            {remaining}
-            <small>/ 100</small>
-          </strong>
-        </div>
-        <img src={artSrc("drop")} alt="" />
-      </div>
-      <div className="pg-stack">
-        <div className="pg-card pg-kuji-board" aria-label="쿠지판 100칸">
-          {board.map((cell, i) => (
-            <button
-              key={i}
-              type="button"
-              data-nopress
-              aria-label={`${i + 1}번 칸${cell.taken ? `, 이미 뽑힌 ${String.fromCharCode(65 + cell.grade)}상` : selected.includes(i) ? ", 선택됨" : ""}`}
-              aria-pressed={selected.includes(i)}
-              disabled={cell.taken}
-              className={selected.includes(i) ? "selected" : ""}
-              onClick={(e) => {
-                const on = selected.includes(i);
-                anim(e.currentTarget, on ? [{ scale: ".85" }, { scale: "1" }] : [{ scale: ".6" }, { scale: "1.15", offset: 0.6 }, { scale: "1" }], {
-                  dur: on ? 200 : 320,
-                  ease: "out",
-                  fill: "none",
-                });
-                setSelected((value) => (on ? value.filter((n) => n !== i) : [...value, i]));
-              }}
-            >
-              {cell.taken ? String.fromCharCode(65 + cell.grade) : selected.includes(i) ? "✓" : ""}
-            </button>
-          ))}
-        </div>
-        <div className="pg-kuji-legend">
-          {totals.map((total, i) => {
-            const left = board.filter((cell) => cell.grade === i && !cell.taken).length;
-            return (
-              <div key={i}>
-                <b style={{ background: gradeColors[i], color: gradeText[i] }}>{String.fromCharCode(65 + i)}</b>
-                <span className={left ? "" : "gone"}>
-                  {left}
-                  <small>/{total}</small>
-                </span>
-              </div>
-            );
-          })}
-        </div>
-        <div className="pg-kuji-cost">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94700A" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M12 19V5M6 11l6-6 6 6" />
-          </svg>
-          <span>
-            오늘 {count}장 · {raiseFrom}장째부터 장당 {raisedPrice}G
-          </span>
-          <div aria-hidden="true">
-            {Array.from({ length: raiseFrom - 1 }, (_, i) => (
-              <i key={i} style={{ background: i < count + selected.length ? "#F2C94C" : "#EDE3C4" }} />
-            ))}
-          </div>
-        </div>
-        <button className="primary-button pg-full" disabled={!selected.length} onClick={draw}>
-          {selected.length ? `${selected.length}장 뽑기 · ${cost.toLocaleString("ko-KR")}G` : "칸을 골라주세요"}
-        </button>
-      </div>
-      {drawn.length > 0 && <KujiSheet grades={drawn} onClose={() => setDrawn([])} />}
-    </>
   );
 }
 

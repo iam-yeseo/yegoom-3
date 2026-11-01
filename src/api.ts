@@ -7,6 +7,8 @@ import type {
   HistoryResponse,
   AttendanceState,
   AttendanceClaimResponse,
+  ShopState, KujiResponse, KujiPurchaseInput, LottoResponse, LottoPurchaseInput,
+  SpeettoResponse, SpeettoPurchaseInput,
 } from "../shared/types";
 import type { ArtKey } from "../shared/characters";
 
@@ -53,6 +55,13 @@ export const api = {
   character: (character: ArtKey, migrate = false, expectedUserId?: string) => request<AuthResponse>("/me/character", {
     method: "PUT", body: JSON.stringify({ character, migrate, ...(migrate ? { expectedUserId } : {}) }),
   }),
+  shop: () => request<ShopState>("/shop"),
+  kuji: () => request<KujiResponse>("/shop/kuji"),
+  lotto: () => request<LottoResponse>("/shop/lotto"),
+  speetto: () => request<SpeettoResponse>("/shop/speetto"),
+  buyKuji: (input: KujiPurchaseInput) => request<KujiResponse>("/shop/kuji", { method: "POST", body: JSON.stringify(input) }),
+  buyLotto: (input: LottoPurchaseInput) => request<LottoResponse>("/shop/lotto", { method: "POST", body: JSON.stringify(input) }),
+  buySpeetto: (input: SpeettoPurchaseInput) => request<SpeettoResponse>("/shop/speetto", { method: "POST", body: JSON.stringify(input) }),
   history: (id: GameId) => request<HistoryResponse>(`/games/${id}/history`),
   wake: (roundDate: string) => request<GameResponse>("/games/wake/wake", {
     method: "POST",
