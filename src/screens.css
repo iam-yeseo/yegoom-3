@@ -2164,6 +2164,39 @@ em.delisted {
   overflow: hidden;
   pointer-events: none;
 }
+.fx-touch-effect {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  pointer-events: none;
+}
+.fx-touch-effect[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+}
+.fx-touch-effect::backdrop {
+  background: transparent;
+  pointer-events: none;
+}
+.fx-touch-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ff8e7a40 0%, #ff8e7a26 54%, #ff8e7a00 72%);
+}
+.fx-touch-dot {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
 .fx-coin {
   position: absolute;
   width: 24px;
