@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import type { KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState } from "../shared/types";
+import type { Inventory, KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState } from "../shared/types";
 import { api, ApiFailure } from "./api";
 import { createShopPreview } from "./shop-preview";
 
@@ -19,6 +19,7 @@ interface ShopContextValue extends ShopState {
   buyKuji: (input: KujiPurchaseInput) => Promise<KujiResponse>;
   buyLotto: (input: LottoPurchaseInput) => Promise<LottoResponse>;
   buySpeetto: (input: SpeettoPurchaseInput) => Promise<SpeettoResponse>;
+  claimPreviewLaunchGift: () => { inventory: Inventory; awarded: boolean };
 }
 const ShopContext = createContext<ShopContextValue | null>(null);
 export function useShop(): ShopContextValue {
@@ -159,5 +160,14 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     const engine = syncPreview();
     return engine ? engine.buySpeetto(input) : api.buySpeetto(input);
   }), [purchase, syncPreview]);
-  return <ShopContext.Provider value={{ ...state, kuji, lotto, speetto, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto }}>{children}</ShopContext.Provider>;
+  const claimPreviewLaunchGift = useCallback(() => {
+    const engine = syncPreview();
+    if (!engine) throw new Error("미리보기에서만 사용할 수 있어요.");
+    if (writeInFlight.current || pendingRef.current) throw new Error("진행 중인 구매 결과를 먼저 확인해 주세요.");
+    generation.current++;
+    const result = engine.claimLaunchGift();
+    apply(result.state);
+    return { inventory: result.state.inventory, awarded: result.awarded };
+  }, [syncPreview, apply]);
+  return <ShopContext.Provider value={{ ...state, kuji, lotto, speetto, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto, claimPreviewLaunchGift }}>{children}</ShopContext.Provider>;
 }

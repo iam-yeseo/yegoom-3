@@ -5,28 +5,33 @@ import { build } from 'esbuild';
 
 const wrangler = 'node_modules/wrangler/bin/wrangler.js';
 const env = { ...process.env, CI: 'true' };
+// Extra launch-date browser fixtures run in their own local Worker and D1.
+// These options belong only to this test harness, never the production Worker.
+const port = Number(process.env.E2E_PORT ?? 8788);
+const timestamp = Date.parse(process.env.E2E_NOW ?? '2026-10-30T00:00:00Z');
+if (!Number.isInteger(port) || port < 1024 || port > 55000 || !Number.isFinite(timestamp)) throw new Error('Invalid E2E_PORT or E2E_NOW fixture');
 mkdirSync('.test-build', { recursive: true });
 // Every run gets a fresh local database. Keep the append-only ledger triggers
 // intact instead of deleting accounting rows between browser test runs.
-const state = mkdtempSync('.test-build/e2e-');
+const state = mkdtempSync(`.test-build/e2e-${port}-`);
 const cleanup = () => rmSync(state, { recursive: true, force: true });
-const configPath = '.test-build/e2e.wrangler.json';
+process.once('exit', cleanup);
+const configPath = `${state}/wrangler.json`;
 const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
-config.main = './e2e-worker.js';
-config.assets.directory = '../dist';
-for (const database of config.d1_databases) database.migrations_dir = '../migrations';
+config.main = './worker.js';
+config.assets.directory = '../../dist';
+for (const database of config.d1_databases) database.migrations_dir = '../../migrations';
 writeFileSync(configPath, JSON.stringify(config));
 
 // Freeze time only in the compiled test artifact, just like integration tests.
 // This still runs real login, Worker and D1 code. Production has no clock hook,
 // header, environment override or test seed endpoint.
-const timestamp = Date.parse('2026-10-30T00:00:00Z'); // 09:00 KST, before all deadlines.
 const artifact = await build({
   entryPoints: ['worker/index.ts'], bundle: true, format: 'esm', platform: 'browser', write: false,
   define: { Date: 'TestDate' },
   banner: { js: `class TestDate extends Date { constructor(...args) { super(...(args.length ? args : [${timestamp}])); } static now() { return ${timestamp}; } }` },
 });
-writeFileSync('.test-build/e2e-worker.js', artifact.outputFiles[0].text.replaceAll("unixepoch('now') * 1000", String(timestamp)));
+writeFileSync(`${state}/worker.js`, artifact.outputFiles[0].text.replaceAll("unixepoch('now') * 1000", String(timestamp)));
 const run = (args) => {
   const result = spawnSync(process.execPath, [wrangler, ...args, '--config', configPath], { env, stdio: 'inherit' });
   if (result.status !== 0) { cleanup(); process.exit(result.status || 1); }
@@ -104,9 +109,10 @@ for (const [game, author, answer, secondGuess] of [
   }
   statements.push(`INSERT INTO game_rounds (game_id, round_date, updated_at) VALUES ('${game}', '2026-10-28', ${timestamp});`);
 }
-writeFileSync('.test-build/browser-users.sql', statements.join('\n'), { mode: 0o600 });
-try { run(['d1', 'execute', 'DB', '--local', '--persist-to', state, '--file', '.test-build/browser-users.sql', '--yes']); }
-finally { unlinkSync('.test-build/browser-users.sql'); }
-const child = spawn(process.execPath, [wrangler, 'dev', '--local', '--port', '8788', '--persist-to', state, '--config', configPath], { env, stdio: 'inherit' });
+const seedPath = `${state}/users.sql`;
+writeFileSync(seedPath, statements.join('\n'), { mode: 0o600 });
+try { run(['d1', 'execute', 'DB', '--local', '--persist-to', state, '--file', seedPath, '--yes']); }
+finally { unlinkSync(seedPath); }
+const child = spawn(process.execPath, [wrangler, 'dev', '--local', '--port', String(port), '--inspector-port', String(port + 10000), '--persist-to', state, '--config', configPath], { env, stdio: 'inherit' });
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
 child.on('exit', code => { cleanup(); process.exit(code ?? 0); });

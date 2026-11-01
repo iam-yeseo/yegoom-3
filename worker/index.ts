@@ -6,6 +6,7 @@ import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZO
 import { readInventory, settleDueLotto, ShopError, shopRoute } from './shop';
 import { CatchmindError, catchmindRoute, readCatchmindImage, readCatchmindSummary } from './catchmind';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw } from './claw';
+import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null }
@@ -276,7 +277,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   // Complete payments before reading balances and weekly rankings in parallel.
   await settlePublishedRounds(env.DB, now);
   await settleDueLotto(env.DB, now);
-  const [viewer, players, games, ledger, dailyScores, attendance, inventory, catchmind, claw] = await Promise.all([
+  const [viewer, players, games, ledger, dailyScores, attendance, inventory, catchmind, claw, launchGift] = await Promise.all([
     publicUser(env.DB, user, now),
     env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, u.character, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Omit<Player, 'character'> & { character: ArtKey | null }>(),
     Promise.all(GAME_IDS.map(id => readGame(env.DB, user, id, now))),
@@ -286,9 +287,10 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     readInventory(env.DB, user.id),
     readCatchmindSummary(env.DB),
     getClawSummary(env.DB, user, now.getTime()),
+    getLaunchGiftState(env.DB, user, now),
   ]);
   return { user: viewer, players: players.results.map(player => ({ ...player, character: player.character ?? defaultCharacter(player.username) })),
-    games, ledger: ledger.results, dailyScores, attendance, inventory, catchmind, claw, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    games, ledger: ledger.results, dailyScores, attendance, inventory, catchmind, claw, launchGift, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId, action: string, now: Date): Promise<Response> {
   const input = await body(request);
@@ -364,6 +366,12 @@ async function api(request: Request, env: Env): Promise<Response> {
   const user = await requireUser(request, env, now.getTime());
   if (url.pathname === '/api/auth/me' && request.method === 'GET') return json({ user: await publicUser(env.DB, user, now) });
   if (url.pathname === '/api/bootstrap' && request.method === 'GET') return json(await bootstrap(env, user, now));
+  if (url.pathname === '/api/events/launch-gift') {
+    if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    if (user.role !== 'player') throw new HttpError(403, 'CANNOT_CLAIM_GIFT', '플레이어만 런칭 선물을 받을 수 있어요.');
+    await body(request);
+    return json(await claimLaunchGift(env.DB, user, new Date()));
+  }
   if (url.pathname === '/api/claw') {
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     return json(await getClawState(env.DB, user, now.getTime()));
@@ -419,7 +427,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

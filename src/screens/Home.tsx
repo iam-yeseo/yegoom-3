@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ATTENDANCE_RULES, CATCHMIND_RULES, GAME_RULES, LOTTO_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, CATCHMIND_RULES, FEATURES, GAME_RULES, LOTTO_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
 import type { CatchmindSummary, ClawSummary, GameState } from "../../shared/types";
 import { useAttendance } from "../attendance";
+import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import {
   Avatar,
   CharacterSprite,
@@ -218,7 +219,7 @@ function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
 
 export function SoloGames({ go, claw }: { go: Go; claw: ClawSummary }) {
   const nextGrant = new Date(claw.nextGrantAt).toLocaleTimeString("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false });
-  const open = marketOpen();
+  const open = FEATURES.stock && marketOpen();
   return (
     <>
       <SectionTitle title="혼자 하기" />
@@ -240,11 +241,11 @@ export function SoloGames({ go, claw }: { go: Go; claw: ClawSummary }) {
           </span>
           <span className="solo-text">
             <strong>주식 시장</strong>
-            <small>{open ? "내 수익 +1,240G" : "오늘 수익 +860G"}</small>
+            <small>{FEATURES.stock ? open ? "내 수익 +1,240G" : "오늘 수익 +860G" : "곧 문을 열어요"}</small>
           </span>
           <span className={`market-state ${open ? "open" : ""}`}>
             <i />
-            {open ? "장 열림" : "장 마감"}
+            {FEATURES.stock ? open ? "장 열림" : "장 마감" : "준비 중"}
           </span>
         </button>
       </div>
@@ -307,6 +308,7 @@ function AttendanceCard({ data, go, onClaimed }: {
   onClaimed: () => Promise<void>;
 }) {
   const { today, claimed, cycleDay, reward, canClaim, claim } = useAttendance(data.attendanceKey);
+  const gift = useLaunchGift();
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -334,6 +336,7 @@ function AttendanceCard({ data, go, onClaimed }: {
   async function receive(button: HTMLElement) {
     if (pending.current || !canClaim) return;
     pending.current = true;
+    const finishGiftWait = gift.beginAttendance();
     setBusy(true);
     setError("");
     try {
@@ -344,12 +347,14 @@ function AttendanceCard({ data, go, onClaimed }: {
         if (!mounted.current) return;
         toast(`+${result.attendance.reward}G 받았어요`);
         await onClaimed();
+        await waitForAttendanceEffects(card.current?.closest(".home") ?? null);
       } else toast("오늘 출석은 이미 완료했어요");
       if (mounted.current) setExpanded(false);
     } catch (e) {
       if (mounted.current) setError(e instanceof Error ? e.message : "출석하지 못했어요. 다시 시도해 주세요.");
     } finally {
       pending.current = false;
+      finishGiftWait();
       if (mounted.current) setBusy(false);
     }
   }
@@ -389,6 +394,7 @@ function AttendanceCard({ data, go, onClaimed }: {
       </div>
       {error && <p className="form-message error" role="alert">{error}</p>}
     </div>
+    {gift.available && !busy && <button className="attendance-gift-button" type="button" onClick={gift.openGift}>선물 받기</button>}
   </section>;
 }
 

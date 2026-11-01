@@ -10,6 +10,7 @@
     "preview": "wrangler dev --local --port 8787 --ip 0.0.0.0",
     "db:migrate": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "launch:reset:remote": "node scripts/launch-reset.mjs",
     "user:create": "node scripts/provision-user.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

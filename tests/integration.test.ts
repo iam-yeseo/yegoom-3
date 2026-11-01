@@ -9,7 +9,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken } from '../worker/crypto';
 import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
 import { getClawState, getClawSummary, playClaw } from '../worker/claw';
-import type { ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
+import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
+import type { LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
 const ORIGIN = 'http://localhost';
 const PASSWORD = 'test-only-password-42!';
@@ -42,6 +43,45 @@ async function workerAt(instant: string, sqlInstant: string = instant, speettoRo
     artifact = artifact.replace(signature, (match, maximum: string) => `${match} if (${maximum} === 100) return ${speettoRoll};`);
   }
   return artifact;
+}
+
+/** Test-bundle-only instrumentation includes authentication in real HTTP request totals. */
+function workerWithD1Metrics(script: string): string {
+  const exported = /export\s*\{\s*(\w+)\s+as\s+default\s*\};?\s*$/;
+  const match = script.match(exported);
+  if (!match) throw new Error('Compiled worker default export was not found');
+  return `${script.replace(exported, '')}
+export default {
+  async fetch(request, env, context) {
+    let rowsRead = 0;
+    const originals = new WeakMap();
+    const record = result => { rowsRead += result.meta.rows_read; return result; };
+    const wrap = statement => {
+      const wrapped = {
+        bind: (...values) => wrap(statement.bind(...values)),
+        all: async () => record(await statement.all()),
+        run: async () => record(await statement.run()),
+        first: async column => {
+          const result = record(await statement.all());
+          return column ? result.results[0]?.[column] ?? null : result.results[0] ?? null;
+        }
+      };
+      originals.set(wrapped, statement);
+      return wrapped;
+    };
+    const DB = {
+      prepare: sql => wrap(env.DB.prepare(sql)),
+      batch: async statements => {
+        const results = await env.DB.batch(statements.map(statement => originals.get(statement)));
+        return results.map(record);
+      }
+    };
+    const response = await ${match[1]}.fetch(request, { ...env, DB }, context);
+    const headers = new Headers(response.headers);
+    headers.set('X-Test-D1-Rows-Read', String(rowsRead));
+    return new Response(response.body, { status: response.status, headers });
+  }
+};`;
 }
 
 function runtime(script: string, persistence?: string) {
@@ -112,7 +152,7 @@ const DRAWING_WEBP_LOSSY = 'data:image/webp;base64,UklGRjoAAABXRUJQVlA4IC4AAADQA
 const NONSQUARE_WEBP = 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAQAAAAdQqMKXp/+BiOh/AAA=';
 
 /** Observe real D1 metadata without adding diagnostic headers to production APIs. */
-function measuredClawDatabase(database: Database, now: number) {
+function measuredDatabase(database: Database, now: number) {
   const queries: { sql: string; rowsRead: number; rowsWritten: number }[] = [];
   const originals = new WeakMap<object, { statement: ReturnType<Database['prepare']>; sql: string }>();
   const record = (sql: string, result: { meta: { rows_read?: number; rows_written?: number } }) => {
@@ -276,6 +316,241 @@ describe('Worker and D1 integration', () => {
     await database.prepare('UPDATE claw_accounts SET board_json = ?, power_counter = ?, next_play_at = 0 WHERE user_id = ?')
       .bind(JSON.stringify(board), counter, 'min').run();
   }
+
+  describe('launch gift event', () => {
+    const launchInstant = '2026-11-02T00:00:00Z'; // 09:00 KST on launch day.
+    let launchScript: string;
+    beforeAll(async () => { launchScript = await workerAt(launchInstant); });
+    beforeEach(async () => {
+      await worker.dispose();
+      worker = runtime(launchScript);
+      db = await worker.getD1Database('DB');
+      await provision(db, migration, passwordHash);
+    });
+    async function attend(cookie: string, instance?: Miniflare) {
+      const response = await request('/api/me/attendance', { method: 'POST', cookie, body: {}, instance });
+      expect(response.status).toBe(200);
+      expect((await response.json() as AttendanceClaimResponse).attendance.claimed).toBe(true);
+    }
+    async function claim(cookie: string, instance?: Miniflare) {
+      const response = await request('/api/events/launch-gift', { method: 'POST', cookie, body: {}, instance });
+      expect(response.status).toBe(200);
+      return response.json() as Promise<LaunchGiftResponse>;
+    }
+    async function giftRows(database: Database = db) {
+      return (await database.prepare(`SELECT user_id, item, amount, reference FROM inventory_ledger
+        WHERE reference LIKE 'event:launch:%' ORDER BY reference`).all<{
+          user_id: string; item: string; amount: number; reference: string;
+        }>()).results;
+    }
+
+    it.each([
+      { instant: '2026-11-01T14:59:59Z', date: '2026-11-01' },
+      { instant: '2026-11-02T15:00:00Z', date: '2026-11-03' },
+    ])('rejects the gift on KST $date even with attendance and a forged client date', async ({ instant }) => {
+      const instance = runtime(await workerAt(instant));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        await seedAttendance('2026-11-02', 1, 'min', database);
+        const response = await request('/api/events/launch-gift', { method: 'POST', cookie, instance,
+          body: { date: '2026-11-02', serverTime: launchInstant, lottoTickets: 999, speettoTickets: 999 } });
+        expect(response.status).toBe(409);
+        expect(await giftRows(database)).toEqual([]);
+        const view = await request('/api/bootstrap', { cookie, instance });
+        expect((await view.json() as BootstrapResponse).launchGift).toEqual({ available: false, claimed: false });
+      } finally { await instance.dispose(); }
+    });
+
+    it('requires attendance on launch day rather than an earlier attendance or client claim', async () => {
+      const { cookie } = await login('min');
+      await seedAttendance('2026-11-01', 1);
+      expect((await bootstrap(cookie)).launchGift).toEqual({ available: false, claimed: false });
+      expect((await request('/api/events/launch-gift', { method: 'POST', cookie,
+        body: { attendance: true, date: '2026-11-02' } })).status).toBe(409);
+      expect(await giftRows()).toEqual([]);
+      await attend(cookie);
+      expect((await bootstrap(cookie)).launchGift).toEqual({ available: true, claimed: false });
+      // Merely revisiting bootstrap does not claim or lose the available gift.
+      expect((await bootstrap(cookie)).launchGift).toEqual({ available: true, claimed: false });
+      expect(await giftRows()).toEqual([]);
+    });
+
+    it('grants exactly five of each ticket after attendance and reflects them in bootstrap and shop', async () => {
+      const { cookie } = await login('min');
+      await attend(cookie);
+      const result = await claim(cookie);
+      expect(result).toMatchObject({ awarded: true, launchGift: { available: false, claimed: true },
+        inventory: { lottoTickets: 5, speettoTickets: 5 }, serverTime: new Date(launchInstant).toISOString() });
+      expect(await giftRows()).toEqual([
+        { user_id: 'min', item: 'lotto_ticket', amount: 5, reference: 'event:launch:2026-11-02:min:lotto' },
+        { user_id: 'min', item: 'speetto_ticket', amount: 5, reference: 'event:launch:2026-11-02:min:speetto' },
+      ]);
+      const view = await bootstrap(cookie);
+      expect(view).toMatchObject({ launchGift: { available: false, claimed: true },
+        inventory: { lottoTickets: 5, speettoTickets: 5 }, user: { gold: 100, weeklyScore: 0 } });
+      const shopResponse = await request('/api/shop', { cookie });
+      expect((await shopResponse.json() as ShopState).inventory).toEqual({ lottoTickets: 5, speettoTickets: 5 });
+      expect((await ledgerRows()).map(row => row.reference)).toEqual(['attendance:2026-11-02:min']);
+    });
+
+    it('grants once across simultaneous sessions and repeated requests', async () => {
+      const first = await login('min');
+      const second = await login('min');
+      await attend(first.cookie);
+      const results = await Promise.all([first.cookie, second.cookie, first.cookie, second.cookie].map(cookie => claim(cookie)));
+      expect(results.filter(result => result.awarded)).toHaveLength(1);
+      expect(results.every(result => result.launchGift.claimed && !result.launchGift.available)).toBe(true);
+      expect(results.every(result => result.inventory.lottoTickets === 5 && result.inventory.speettoTickets === 5)).toBe(true);
+      const repeated = await claim(first.cookie);
+      expect(repeated).toMatchObject({ awarded: false, inventory: { lottoTickets: 5, speettoTickets: 5 } });
+      expect(await giftRows()).toHaveLength(2);
+    });
+
+    it('keeps claim history after a ticket is spent instead of replenishing the gift', async () => {
+      const { cookie } = await login('min');
+      await attend(cookie);
+      await claim(cookie);
+      const purchase = await request('/api/shop/lotto', { method: 'POST', cookie,
+        body: { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'ticket' } });
+      expect(purchase.status).toBe(200);
+      expect((await bootstrap(cookie)).launchGift).toEqual({ available: false, claimed: true });
+      expect(await claim(cookie)).toMatchObject({ awarded: false, inventory: { lottoTickets: 4, speettoTickets: 5 } });
+      expect(await giftRows()).toHaveLength(2);
+    });
+
+    it('allows each active player to claim their own gift and ignores a forged recipient', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      await attend(min.cookie);
+      await attend(siwon.cookie);
+      const first = await request('/api/events/launch-gift', { method: 'POST', cookie: min.cookie,
+        body: { userId: 'siwon', lottoTickets: 999, speettoTickets: 999 } });
+      expect(first.status).toBe(200);
+      expect((await giftRows()).map(row => row.user_id)).toEqual(['min', 'min']);
+      expect((await bootstrap(siwon.cookie)).launchGift).toEqual({ available: true, claimed: false });
+      await claim(siwon.cookie);
+      expect(await giftRows()).toHaveLength(4);
+      expect((await bootstrap(min.cookie)).inventory).toEqual({ lottoTickets: 5, speettoTickets: 5 });
+      expect((await bootstrap(siwon.cookie)).inventory).toEqual({ lottoTickets: 5, speettoTickets: 5 });
+    });
+
+    it('requires login and rejects an admin even with a seeded attendance record', async () => {
+      expect((await request('/api/events/launch-gift', { method: 'POST', body: {} })).status).toBe(401);
+      const { cookie } = await login('admin');
+      await seedAttendance('2026-11-02', 1, 'admin');
+      expect((await bootstrap(cookie)).launchGift).toEqual({ available: false, claimed: false });
+      expect((await request('/api/events/launch-gift', { method: 'POST', cookie, body: {} })).status).toBe(403);
+      expect(await giftRows()).toEqual([]);
+    });
+
+    it('does not grant to a deactivated player or trust a stale authenticated actor', async () => {
+      const { cookie } = await login('min');
+      await attend(cookie);
+      await db.prepare('UPDATE users SET active = 0 WHERE id = ?').bind('min').run();
+      expect((await request('/api/events/launch-gift', { method: 'POST', cookie, body: {} })).status).toBe(401);
+      const observed = measuredDatabase(db, Date.parse(launchInstant));
+      const actor = { id: 'min', role: 'player' as const };
+      expect(await getLaunchGiftState(observed.binding, actor, new Date(launchInstant))).toEqual({ available: false, claimed: false });
+      await expect(claimLaunchGift(observed.binding, actor, new Date(launchInstant))).rejects.toMatchObject({ status: 403 });
+      expect(await giftRows()).toEqual([]);
+    });
+
+    it('rolls back both ticket rows when the speetto grant fails and permits a clean retry', async () => {
+      const { cookie } = await login('min');
+      await attend(cookie);
+      await db.prepare(`CREATE TRIGGER reject_launch_speetto BEFORE INSERT ON inventory_ledger
+        WHEN NEW.reference = 'event:launch:2026-11-02:min:speetto'
+        BEGIN SELECT RAISE(ABORT, 'test launch second ticket failure'); END;`).run();
+      expect((await request('/api/events/launch-gift', { method: 'POST', cookie, body: {} })).status).toBe(500);
+      expect(await giftRows()).toEqual([]);
+      expect((await bootstrap(cookie)).launchGift).toEqual({ available: true, claimed: false });
+      await db.prepare('DROP TRIGGER reject_launch_speetto').run();
+      expect(await claim(cookie)).toMatchObject({ awarded: true, inventory: { lottoTickets: 5, speettoTickets: 5 } });
+      expect(await giftRows()).toHaveLength(2);
+    });
+
+    it('rejects a grant if the D1 write crosses into November 3 even though JavaScript began on launch day', async () => {
+      const instance = runtime(await workerAt('2026-11-02T14:59:59Z', '2026-11-02T15:00:00Z'));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        await seedAttendance('2026-11-02', 1, 'min', database);
+        expect((await request('/api/events/launch-gift', { method: 'POST', cookie, body: {}, instance })).status).toBe(409);
+        expect(await giftRows(database)).toEqual([]);
+      } finally { await instance.dispose(); }
+    });
+
+    it('accepts the exact KST launch midnight and retains claimed state after the event closes', async () => {
+      const instant = '2026-11-01T15:00:00Z';
+      const instance = runtime(await workerAt(instant));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        await attend(cookie, instance);
+        expect(await claim(cookie, instance)).toMatchObject({ awarded: true, launchGift: { available: false, claimed: true } });
+        const after = new Date('2026-11-02T15:00:00Z');
+        const observed = measuredDatabase(database, after.getTime());
+        const actor = { id: 'min', role: 'player' as const };
+        expect(await getLaunchGiftState(observed.binding, actor, after)).toEqual({ available: false, claimed: true });
+        await expect(claimLaunchGift(observed.binding, actor, after)).rejects.toMatchObject({ status: 409 });
+        expect(await giftRows(database)).toHaveLength(2);
+      } finally { await instance.dispose(); }
+    });
+
+    it('measures the whole authenticated gift API request including session lookup', async () => {
+      const instance = runtime(workerWithD1Metrics(launchScript));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        await attend(cookie, instance);
+        const totals: number[] = [];
+        for (const awarded of [true, false]) {
+          const response = await request('/api/events/launch-gift', { method: 'POST', cookie, body: {}, instance });
+          expect(response.status).toBe(200);
+          expect(await response.json()).toMatchObject({ awarded, inventory: { lottoTickets: 5, speettoTickets: 5 } });
+          const header = response.headers.get('X-Test-D1-Rows-Read');
+          expect(header).not.toBeNull();
+          const rowsRead = Number(header);
+          expect(rowsRead).toBeGreaterThan(10); // Business-only measurement is 10; this includes auth.
+          expect(rowsRead).toBeLessThanOrEqual(30);
+          totals.push(rowsRead);
+        }
+        console.log(`Launch gift full authenticated POST D1 rows_read: initial claim=${totals[0]}, saved retry=${totals[1]} (empty prior inventory, test-bundle-only instrumentation)`);
+      } finally { await instance.dispose(); }
+    });
+
+    it('reports actual D1 rows_read for the gift summary, initial claim and saved retry', async () => {
+      const { cookie } = await login('min');
+      await attend(cookie);
+      const observed = measuredDatabase(db, Date.parse(launchInstant));
+      const actor = { id: 'min', role: 'player' as const };
+      const now = new Date(launchInstant);
+      expect(await getLaunchGiftState(observed.binding, actor, now)).toEqual({ available: true, claimed: false });
+      const summaryRowsRead = observed.rowsRead();
+      observed.reset();
+      expect((await claimLaunchGift(observed.binding, actor, now)).awarded).toBe(true);
+      const claimRowsRead = observed.rowsRead();
+      // D1 rows_written includes index writes; inspect business rows separately.
+      expect(await giftRows()).toHaveLength(2);
+      observed.reset();
+      expect(await getLaunchGiftState(observed.binding, actor, now)).toEqual({ available: false, claimed: true });
+      const claimedSummaryRowsRead = observed.rowsRead();
+      observed.reset();
+      expect((await claimLaunchGift(observed.binding, actor, now)).awarded).toBe(false);
+      const retryRowsRead = observed.rowsRead();
+      expect(observed.queries.reduce((total, query) => total + query.rowsWritten, 0)).toBe(0);
+      expect(summaryRowsRead).toBeLessThanOrEqual(12);
+      expect(claimedSummaryRowsRead).toBeLessThanOrEqual(12);
+      expect(claimRowsRead).toBeLessThanOrEqual(40);
+      expect(retryRowsRead).toBeLessThanOrEqual(30);
+      console.log(`Launch gift D1 meta rows_read: bootstrap gift summary unclaimed/claimed=${summaryRowsRead}/${claimedSummaryRowsRead}, POST initial claim=${claimRowsRead}, POST saved retry=${retryRowsRead} (authenticated module calls, empty prior inventory; auth and unrelated bootstrap queries excluded)`);
+    });
+  });
 
   describe('server claw machine', () => {
     it('creates a private 30-doll machine and keeps bootstrap wallet summaries small and config-free', async () => {
@@ -593,7 +868,7 @@ describe('Worker and D1 integration', () => {
     it.each([0, 1])('uses injected random=%s for the weak grip jitter bounds without exposing configuration', async random => {
       const { cookie } = await login('min');
       const state = await getClaw(cookie);
-      const observed = measuredClawDatabase(db, Date.parse(`${TODAY}T00:00:00Z`));
+      const observed = measuredDatabase(db, Date.parse(`${TODAY}T00:00:00Z`));
       const played = await playClaw(observed.binding, { id: 'min', role: 'player' },
         { requestId: crypto.randomUUID(), version: state.version, x: .05, stop: null }, Date.parse(`${TODAY}T00:00:00Z`), () => random);
       expect(played.result!.grip).toEqual({ strong: false, pickup: random === 0 ? .405 : .495, carry: random === 0 ? .27 : .33 });
@@ -606,7 +881,7 @@ describe('Worker and D1 integration', () => {
       await db.prepare('UPDATE claw_config SET payout_every = 50, weak_pickup = 100, weak_carry = 100 WHERE id = 1').run();
       await seedClawBoard(db, createBoard(1, 1), 4);
       const now = Date.parse(`${TODAY}T00:00:00Z`);
-      const observed = measuredClawDatabase(db, now);
+      const observed = measuredDatabase(db, now);
       const played = await playClaw(observed.binding, { id: 'min', role: 'player' },
         { requestId: crypto.randomUUID(), version: state.version, x: .23, stop: null }, now, () => .5);
       expect(played.result).toMatchObject({ caught: true, grip: { strong: false, pickup: 1, carry: 1 } });
@@ -644,7 +919,7 @@ describe('Worker and D1 integration', () => {
       await getClaw(other.cookie);
       await db.prepare('UPDATE claw_accounts SET free_coins = 1, last_grant_slot = last_grant_slot - 1 WHERE user_id = ?').bind('siwon').run();
       const now = Date.parse(`${TODAY}T00:00:00Z`);
-      const observed = measuredClawDatabase(db, now);
+      const observed = measuredDatabase(db, now);
       const user = { id: 'min', role: 'player' as const };
       await getClawState(observed.binding, user, now);
       const machineRowsRead = observed.rowsRead();

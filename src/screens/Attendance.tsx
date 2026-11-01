@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ATTENDANCE_RULES } from "../../shared/balance";
 import { useAttendance } from "../attendance";
+import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import { Chevron, Coin, Gold, Toolbar } from "../components/UI";
 import { anim, coinFly, pop, sparkle, toast, useCountUp, useOnChange } from "../motion";
 
@@ -13,6 +14,7 @@ export function Attendance({ attendanceKey, gold, onBack }: {
   onBack: () => void;
 }) {
   const { today, days, claimed, cycleDay, reward, monthCount, canClaim, claim, loadMonth } = useAttendance(attendanceKey);
+  const gift = useLaunchGift();
   const root = useRef<HTMLDivElement>(null);
   const mounted = useRef(true);
   const pending = useRef(false);
@@ -47,6 +49,7 @@ export function Attendance({ attendanceKey, gold, onBack }: {
   async function receive(button: HTMLElement) {
     if (pending.current || !canClaim) return;
     pending.current = true;
+    const finishGiftWait = gift.beginAttendance();
     setBusy(true);
     setError("");
     try {
@@ -54,12 +57,15 @@ export function Attendance({ attendanceKey, gold, onBack }: {
       if (!mounted.current) return;
       if (result.awarded) {
         await new Promise<void>(resolve => coinFly(button, root.current?.querySelector(".game-toolbar .gold"), resolve));
-        if (mounted.current) toast(`+${result.attendance.reward}G 받았어요`);
+        if (!mounted.current) return;
+        toast(`+${result.attendance.reward}G 받았어요`);
+        await waitForAttendanceEffects(root.current);
       } else toast("오늘 출석은 이미 완료했어요");
     } catch (e) {
       if (mounted.current) setError(e instanceof Error ? e.message : "출석하지 못했어요. 다시 시도해 주세요.");
     } finally {
       pending.current = false;
+      finishGiftWait();
       if (mounted.current) setBusy(false);
     }
   }
@@ -93,6 +99,7 @@ export function Attendance({ attendanceKey, gold, onBack }: {
     </div>
     <div className="screen-body stack">
       {error && <p className="form-message error" role="alert">{error}</p>}
+      {gift.available && !busy && <button className="attendance-gift-button" type="button" onClick={gift.openGift}>선물 받기</button>}
       <section className="card streak-card">
         <div className="card-head"><h2>{cycleDay}일째</h2><span>{ATTENDANCE_RULES.cycleLength}일째 +{ATTENDANCE_RULES.cycleGold}G</span></div>
         <div className="streak-path" aria-label={`${ATTENDANCE_RULES.cycleLength}일 출석 진행`}>

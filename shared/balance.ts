@@ -1,5 +1,8 @@
 import type { GameId } from './types';
 
+export const FEATURES = { stock: false };
+export const LAUNCH_GIFT = { date: '2026-11-02', lottoTickets: 5, speettoTickets: 5 } as const;
+
 /** The published prediction rules, shared by settlement, help, and previews. */
 export const GAME_RULES = {
   wake: { title: '기상시간 맞히기', author: 'min', deadline: '10:30:00' },

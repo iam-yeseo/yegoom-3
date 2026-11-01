@@ -1,0 +1,32 @@
+.launch-dialog {
+  width: min(400px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  overflow: auto;
+  padding: 32px 24px 24px;
+  border: 0;
+  border-radius: 26px;
+  background: var(--cream);
+  color: var(--text);
+  box-shadow: var(--card-shadow);
+  text-align: center;
+}
+.launch-dialog::backdrop { background: rgba(58, 51, 64, .28); }
+.launch-dialog-close { position: absolute; top: 7px; right: 7px; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: transparent; }
+.launch-dialog h2 { margin: 8px 0 14px; font-size: 22px; line-height: 1.5; font-weight: 800; word-break: keep-all; }
+.launch-dialog p { margin: 0 0 20px; font-size: 14px; line-height: 1.7; color: var(--muted); word-break: keep-all; }
+.launch-dialog .primary-button { width: 100%; }
+.launch-gift-tickets { display: flex; gap: 12px; margin: 22px 0; }
+.launch-gift-tickets > div { flex: 1; min-width: 0; padding: 16px 6px; border-radius: 20px; background: #fff4cc; display: flex; flex-direction: column; align-items: center; gap: 9px; }
+.launch-gift-tickets > div + div { background: #eee8fc; }
+.launch-gift-tickets span { font-size: 12px; word-break: keep-all; }
+.launch-gift-tickets strong { font-size: 24px; font-weight: 800; }
+.launch-ticket-lotto { color: #ffd866; }
+.launch-ticket-speetto { color: #b9a3f0; }
+.launch-dialog .launch-gift-complete { color: #2e8c6e; font-weight: 800; }
+.attendance-gift-button { width: 100%; margin-top: 12px; padding: 12px; border: 0; border-radius: 16px; background: #eee8fc; color: #7556c4; font-size: 14px; font-weight: 800; }
+.attendance-card.collapsed:has(.attendance-gift-button) { padding-bottom: 14px; }
+@media (max-width: 359px) {
+  .launch-dialog { padding-inline: 18px; }
+  .launch-dialog h2 { font-size: 20px; }
+  .launch-gift-tickets { gap: 8px; }
+}
