@@ -1,10 +1,11 @@
-import { GAME_RULES, PREDICTION_REWARDS, predictionPoints } from "../shared/balance";
-import type { GameHistoryRound, GameId, GameResult, GameState, LedgerEntry } from "../shared/types";
+import { ATTENDANCE_RULES, GAME_RULES, PREDICTION_REWARDS, predictionPoints } from "../shared/balance";
+import { defaultCharacter } from "../shared/characters";
+import type { AttendanceState, GameHistoryRound, GameId, GameResult, GameState, LedgerEntry } from "../shared/types";
 import type { ArtKey } from "./components/UI";
 
 // Unimplemented games remain preview-only; prediction rewards use the shared rules.
 export const BALANCE = {
-  attendanceGold: 100,
+  attendanceGold: ATTENDANCE_RULES.dailyGold,
   participationGold: PREDICTION_REWARDS.participationGold,
   firstPlaceGold: PREDICTION_REWARDS.firstGold,
   catchmind: { points: 50, hintedPoints: 30, hintAfter: 3, endAfter: 6 },
@@ -143,7 +144,7 @@ function previewResults(id: GameId, answer: string, values: string[]): GameResul
   const minimum = Math.min(...differences);
   return values.map((value, i) => {
     const firstGold = differences[i] === minimum ? PREDICTION_REWARDS.firstGold : 0;
-    return { playerId: players[i], username: players[i], displayName: players[i], value, difference: differences[i],
+    return { playerId: players[i], username: players[i], displayName: players[i], character: defaultCharacter(players[i]), value, difference: differences[i],
       score: predictionPoints(id, differences[i]), isFirst: differences[i] === minimum,
       participationGold: PREDICTION_REWARDS.participationGold, firstGold, gold: PREDICTION_REWARDS.participationGold + firstGold };
   }).sort((a, b) => a.difference - b.difference);
@@ -160,7 +161,7 @@ export function previewHistory(id: GameId): GameHistoryRound[] {
 }
 
 /** Sample gold and score history for the preview's 내 정보 screen. */
-export function previewLedger(): LedgerEntry[] {
+export function previewLedger(attendance: AttendanceState): LedgerEntry[] {
   const today = Date.now();
   const yesterday = today - 86_400_000;
   const at = (base: number, time: string) => {
@@ -173,9 +174,7 @@ export function previewLedger(): LedgerEntry[] {
     [today, "13:06", "캐릭터 뽑기", -200, "gold"],
     [today, "13:02", "쿠지 4장", -1200, "gold"],
     [today, "11:20", "로또 2장", -1000, "gold"],
-    [today, "09:12", "출석", 100, "gold"],
     [yesterday, "17:48", "주식 매도 · 우파전자", 3140, "gold"],
-    [yesterday, "08:55", "출석", 100, "gold"],
     [today, "13:10", "캐치마인드 정답", 50, "score"],
     [today, "13:06", "캐릭터 뽑기", 30, "score"],
     [today, "08:47", "기상시간 맞히기", predictionPoints("wake", 0), "score"],
@@ -185,11 +184,16 @@ export function previewLedger(): LedgerEntry[] {
     [yesterday, "18:00", "행운 점수 맞히기", predictionPoints("luck", 1), "score"],
     [yesterday, "08:31", "기상시간 맞히기", predictionPoints("wake", 61), "score"],
   ];
-  return rows.map(([base, time, reason, amount, currency], i) => ({
+  const entries: LedgerEntry[] = rows.map(([base, time, reason, amount, currency], i) => ({
     id: `preview-${i}`,
     currency,
     amount,
     reason,
     createdAt: at(base, time),
   }));
+  if (attendance.claimed) entries.unshift({
+    id: `preview-attendance-${attendance.today}`, currency: "gold", amount: attendance.reward,
+    reason: "출석 체크", createdAt: new Date(`${attendance.today}T09:12:00+09:00`).toISOString(),
+  });
+  return entries;
 }

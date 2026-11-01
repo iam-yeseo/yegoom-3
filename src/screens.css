@@ -2449,3 +2449,17 @@ em.ring::after {
     width: var(--app-width);
   }
 }
+
+/* Completed attendance changes height immediately; only its contents fade. */
+.attendance-card.collapsed { padding: 16px 18px; gap: 0; }
+.attendance-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 0; background: none; text-align: left; font-size: 14px; font-weight: 800; }
+.attendance-chevron { display: inline-flex; transform: rotate(90deg); }
+.attendance-chevron.expanded { transform: rotate(-90deg); }
+.attendance-content { display: flex; flex-direction: column; gap: 20px; }
+.attendance-content[hidden] { display: none; }
+.cycle-bonus { font-size: 10px; color: #94700a; }
+.attendance .streak-path { margin-right: 18px; margin-bottom: 24px; }
+.attendance .streak-node { width: 52px; margin-left: -26px; }
+.attendance .streak-node small { font-size: 12px; line-height: 1.3; text-align: center; white-space: nowrap; }
+.attendance .hero-number-row > .subtle-note { max-width: 150px; text-align: right; }
+.claim-button:disabled, .claim-big:disabled { opacity: .65; }
