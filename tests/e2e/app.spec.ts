@@ -350,10 +350,10 @@ test('seventh attendance claim waits for the celebration, collapses and loads pa
     expect.objectContaining({ currency: 'gold', amount: 500 }),
   ]);
   await expect(page.locator('.room-top .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
-  await captureWidths(page, 'authenticated-home', info, 3);
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(card.locator('.week-path')).toBeVisible();
+  await captureWidths(page, 'authenticated-home', info, 3);
   await page.reload();
   await expect(card.getByRole('button', { name: '오늘 출석 완료 · 7일째', exact: true })).toHaveAttribute('aria-expanded', 'false');
   const duplicate = await page.request.post('/api/me/attendance', { data: {}, headers: { Origin: new URL(page.url()).origin } });
@@ -482,6 +482,8 @@ test('preview attendance and character choices stay local at both target widths'
   await expect(card).toContainText('500G');
   await card.getByRole('button', { name: '받기', exact: true }).click();
   await expect(card.getByRole('button', { name: '오늘 출석 완료 · 7일째', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await card.getByRole('button', { name: '오늘 출석 완료 · 7일째', exact: true }).click();
+  await expect(card.locator('.week-path')).toBeVisible();
   await captureWidths(page, 'preview-home', info, 3);
   await page.goto('/#/preview/attendance');
   await expect(page.locator('.claim-big')).toContainText('500');
