@@ -242,13 +242,13 @@ function SubmissionRow({
 function differenceText(id: GameId, difference: number) {
   return difference === 0 ? "정확히 맞힘" : `${difference}${id === "luck" ? "점" : "초"} 차이`;
 }
-function ResultCards({ id, results, username }: { id: GameId; results: GameResult[]; username: string }) {
+function ResultCards({ id, results, username, demo }: { id: GameId; results: GameResult[]; username: string; demo?: boolean }) {
   return results.length ? results.map((result) => {
     const rank = rankOf(results, result);
     return <article className="card result-card" key={result.playerId}>
       <div className="result-player">
         <span className={`rank-badge ${result.isFirst ? "first" : ""}`}>{rank}</span>
-        <Avatar username={result.username} size={46} />
+        <Avatar username={result.username} artKey={demo ? undefined : result.character} size={46} />
         <div className="result-name">
           <strong>{result.displayName}{result.username === username ? " (나)" : ""}</strong>
           <span>{differenceText(id, result.difference)}</span>
@@ -286,9 +286,17 @@ function GameHistory({ game, username, demo }: { game: GameState; username: stri
       <div className="card empty-state"><p role="alert">{error}</p><button className="text-button" onClick={() => setRetry(n => n + 1)}>다시 시도</button></div> :
       history.length ? history.map(round => <section className="history-round" key={round.roundDate}>
         <div className="history-heading"><h3>{round.roundDate}</h3><span>정답 <strong>{round.answer}{game.id === "luck" ? "점" : ""}</strong></span></div>
-        <ResultCards id={game.id} results={round.results} username={username} />
+        <ResultCards id={game.id} results={round.results} username={username} demo={demo} />
       </section>) : <p className="card empty-state">아직 공개된 지난 기록이 없어요.</p>}
   </section>;
+}
+function thresholdLabel(id: GameId, difference: number): string {
+  if (difference === 0) return "정확히 일치";
+  if (id === "luck") return `${difference}점 차이 이내`;
+  const hours = Math.floor(difference / 3600);
+  const minutes = Math.floor((difference % 3600) / 60);
+  const seconds = difference % 60;
+  return [hours ? `${hours}시간` : "", minutes ? `${minutes}분` : "", seconds ? `${seconds}초` : ""].filter(Boolean).join(" ") + " 이내";
 }
 function GameHelp({ id }: { id: GameId }) {
   const rules = GAME_RULES[id];
@@ -299,7 +307,7 @@ function GameHelp({ id }: { id: GameId }) {
       <p>{id === "wake" ? 'min이 “기상했어요”를 누른 서버 시각이 정답이 되어 바로 공개돼요.' : id === "offwork" ? 'siwon이 정한 퇴근 시각에 자동 공개돼요. 미리 공개할 수도 있어요.' : `yeseo의 점수와 힌트를 보고 예측해요. ${GAME_RULES.luck.revealTime}에 자동 공개되며 미리 공개할 수도 있어요.`}</p>
       <p>첫 예측 저장 즉시 참여 보상 {PREDICTION_REWARDS.participationGold}G를 받아요. 수정해도 다시 지급되지 않아요. 정답과 가장 가까운 1등은 {PREDICTION_REWARDS.firstGold}G를 받고, 동점이면 모두 받아요.</p>
       <table><caption>정답과의 차이에 따른 점수</caption><thead><tr><th scope="col">차이</th><th scope="col">점수</th></tr></thead><tbody>
-        {SCORE_TABLES[id].map(tier => <tr key={tier.maxDifference}><th scope="row">{tier.maxDifference === 0 ? "정확히 일치" : `${tier.maxDifference}${id === "luck" ? "점" : "초"} 이하`}</th><td>{tier.points}점</td></tr>)}
+        {SCORE_TABLES[id].map(tier => <tr key={tier.maxDifference}><th scope="row">{thresholdLabel(id, tier.maxDifference)}</th><td>{tier.points}점</td></tr>)}
         <tr><th scope="row">그 밖</th><td>{predictionPoints(id, Infinity)}점</td></tr>
       </tbody></table>
       <p>출제자는 자기 게임을 예측할 수 없어요. 정답이 없는 날은 결과 대기 상태로 남고 참여 보상은 유지돼요.</p>
@@ -421,7 +429,7 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
       </div>
     </div>
     {revealed ? <div className="screen-body result-list" ref={results}>
-      <ResultCards id={game.id} results={game.results} username={user.username} />
+      <ResultCards id={game.id} results={game.results} username={user.username} demo={demo} />
       <div className="result-caption"><span />{game.authorUsername} {game.answer}{game.id === "offwork" ? " 퇴근" : game.id === "wake" ? " 기상" : "점"}<span /></div>
     </div> : <form onSubmit={submit}>
       <div className="screen-body input-cards">
