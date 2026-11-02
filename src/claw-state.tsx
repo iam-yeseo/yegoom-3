@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Board } from "../shared/claw-physics";
+import type { AdminClawConfig } from "../shared/admin";
 import type { ClawCoinInput, ClawPlayInput, ClawResponse, ClawSummary, LedgerEntry } from "../shared/types";
 import { api, ApiFailure } from "./api";
 import { createClawPreview } from "./claw-preview";
@@ -9,6 +10,7 @@ export interface PendingClawPurchase { input: ClawCoinInput }
 interface ClawContextValue {
   preview: boolean; state: ClawResponse | null; loading: boolean; busy: boolean; error: string;
   pendingPlay: PendingClawPlay | null; pendingPurchase: PendingClawPurchase | null;
+  forceStrong: boolean; setForceStrong(value: boolean): void;
   load(): Promise<ClawResponse | void>;
   buy(quantity: 1 | 5): Promise<ClawResponse>;
   play(input: ClawPlayInput): Promise<ClawResponse>;
@@ -38,17 +40,19 @@ export function clawSummaryOf(state: ClawSummary): ClawSummary {
 }
 /** Keep request identities and the pre-play board across navigation/reloads.
  * Screen entry/visibility/refill events own reads; there is no polling here. */
-export function ClawProvider({ children, preview, accountKey, gold, transact, onServerRead, onPreviewChange }: {
-  children: ReactNode; preview: boolean; accountKey: string; gold: number;
+export function ClawProvider({ children, preview, adminPreview = false, previewConfig, accountKey, gold, transact, onServerRead, onPreviewChange }: {
+  children: ReactNode; preview: boolean; adminPreview?: boolean; previewConfig?: AdminClawConfig; accountKey: string; gold: number;
   transact: <T>(action: () => Promise<T>) => Promise<T>;
   onServerRead: (summary: ClawSummary) => void;
   onPreviewChange: (summary: ClawSummary, gold: number, score: number, ledger: LedgerEntry[]) => void;
 }) {
+  const config = useRef(previewConfig); config.current = previewConfig;
   const engine = useRef<ReturnType<typeof createClawPreview> | null>(null);
-  if (preview && !engine.current) engine.current = createClawPreview();
+  if (preview && !engine.current) engine.current = createClawPreview({ admin: adminPreview, getConfig: () => config.current });
   const key = `yegoom3:claw:pending:${accountKey}`;
   const saved = useRef(preview ? { play: null, purchase: null } : restore(key));
   const [state, setState] = useState<ClawResponse | null>(null);
+  const [forceStrong, setForceStrong] = useState(false);
   const stateRef = useRef(state);
   const [pendingPlay, setPendingPlay] = useState<PendingClawPlay | null>(saved.current.play);
   const [pendingPurchase, setPendingPurchase] = useState<PendingClawPurchase | null>(saved.current.purchase);
@@ -122,7 +126,7 @@ export function ClawProvider({ children, preview, accountKey, gold, transact, on
     if (!pending) throw new Error("확인할 플레이가 없어요.");
     return play(pending.input);
   }, [play]);
-  const completePlay = useCallback(() => { if (!writing.current) remember(null, purchaseRef.current); }, [remember]);
+  const completePlay = useCallback(() => { if (!writing.current) { remember(null, purchaseRef.current); setForceStrong(false); } }, [remember]);
   const buy = useCallback(async (quantity: 1 | 5) => {
     if (writing.current || playRef.current) throw new Error("진행 중인 요청 결과를 먼저 확인해 주세요.");
     const previous = purchaseRef.current;
@@ -132,5 +136,5 @@ export function ClawProvider({ children, preview, accountKey, gold, transact, on
     return run(async () => engine.current ? engine.current.buy(attempt.input, callbacks.current.gold) : api.buyClawCoins(attempt.input),
       () => remember(null, null), () => remember(null, null));
   }, [remember, run]);
-  return <Context.Provider value={{ preview, state, loading, busy, error, pendingPlay, pendingPurchase, load, buy, play, retryPlay, completePlay }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ preview, state, loading, busy, error, pendingPlay, pendingPurchase, forceStrong, setForceStrong, load, buy, play, retryPlay, completePlay }}>{children}</Context.Provider>;
 }

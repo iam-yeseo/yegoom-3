@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, GAME_RULES, KUJI_RULES, LOTTO_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, KUJI_RULES, LOTTO_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
 import type { CatchmindSummary, ClawSummary, GameState, KujiSummary } from "../../shared/types";
 import { useAttendance } from "../attendance";
@@ -60,6 +60,7 @@ const chips = {
   open: ["진행 중", "#E3F1FC", "#3B7FB3"],
   host: ["출제", "#EEE8FC", "#7556C4"],
   waiting: ["새 판 대기", "#F3EEE8", "#8A8190"],
+  off: ["오늘은 쉬어요", "#F3EEE8", "#8A8190"],
 } as const;
 type ChipKind = keyof typeof chips;
 interface GameRow {
@@ -95,6 +96,7 @@ function predictionRow(game: GameState, me: string): GameRow {
     name: game.title,
     icon: icons[game.id],
   };
+  if (!game.rules.enabled) return { ...row, chip: "off", sub: "오늘은 이 게임을 쉬어요", right: "" };
   const author = game.authorUsername === me;
   if (game.phase === "revealed") {
     const mine = game.results.find((result) => result.username === me);
@@ -117,15 +119,15 @@ function predictionRow(game: GameState, me: string): GameRow {
             : "기상했어요로 바로 공개"
           : game.id === "offwork"
             ? "퇴근하면 자동 공개"
-            : `${GAME_RULES.luck.revealTime} 공개`,
-      right: GAME_RULES[game.id].deadline,
+            : `${game.rules.revealTime} 공개`,
+      right: game.rules.deadline,
     };
   if (game.phase === "closed")
     return {
       ...row,
       chip: "closed",
       sub: game.prediction ? `내 예측 ${unit(game.prediction)}` : "결과 대기",
-      right: GAME_RULES[game.id].deadline,
+      right: game.rules.deadline,
     };
   return {
     ...row,
@@ -134,8 +136,8 @@ function predictionRow(game: GameState, me: string): GameRow {
       ? `내 예측 ${unit(game.prediction)}`
       : game.id === "luck" && game.hint
         ? `힌트 「${game.hint.split(/[.。]/)[0]}」`
-        : left(game.deadline, game.roundDate),
-    right: GAME_RULES[game.id].deadline,
+        : left(game.rules.deadline, game.roundDate),
+    right: game.rules.deadline,
   };
 }
 type DisplayNameLookup = (username: string, fallback?: string) => string;
@@ -235,7 +237,7 @@ export function SoloGames({ go, claw }: { go: Go; claw: ClawSummary }) {
           </span>
           <span className="solo-text">
             <strong>캐릭터 뽑기</strong>
-            <small>{claw.isAdmin ? "데모 기계" : `코인 ${claw.coins}개 · ${nextGrant} 충전`}</small>
+            <small>{claw.isAdmin ? "무제한 플레이 · 보상 없음" : `코인 ${claw.coins}개 · ${nextGrant} 충전`}</small>
           </span>
         </button>
         <button className="card solo-tile" onClick={() => go("/stock")}>

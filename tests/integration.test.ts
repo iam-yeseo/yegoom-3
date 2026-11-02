@@ -9,10 +9,13 @@ import { Miniflare } from 'miniflare';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken, verifyPassword } from '../worker/crypto';
 import { PASSWORD_RULES } from '../shared/password';
+import type { AdminState, PredictionRules } from '../shared/admin';
+import { defaultPredictionRules } from '../shared/game-settings';
 import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
 import { getClawState, getClawSummary, playClaw } from '../worker/claw';
 import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
 import { readAnnouncements } from '../worker/announcements';
+import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
 import type { CatchmindGalleryResponse } from '../shared/types';
 import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
@@ -536,9 +539,9 @@ describe('Worker and D1 integration', () => {
     expect(response.status).toBe(200);
     return response.json() as Promise<ClawResponse>;
   }
-  async function seedClawBoard(database: Database, board: Board, counter = 0) {
+  async function seedClawBoard(database: Database, board: Board, counter = 0, userId = 'min') {
     await database.prepare('UPDATE claw_accounts SET board_json = ?, power_counter = ?, next_play_at = 0 WHERE user_id = ?')
-      .bind(JSON.stringify(board), counter, 'min').run();
+      .bind(JSON.stringify(board), counter, userId).run();
   }
 
   async function uploadLuck(cookie: string, image = LUCK_PHOTO, instance?: Miniflare, roundDate = TODAY) {
@@ -1202,6 +1205,451 @@ describe('Worker and D1 integration', () => {
     });
   });
 
+  describe('admin console prediction settings', () => {
+    const tomorrow = '2026-10-31';
+    const customRules = (game: GameId, overrides: Partial<PredictionRules> = {}): PredictionRules => ({
+      ...defaultPredictionRules(game), ...overrides,
+    });
+    async function readAdmin(cookie: string, instance?: Miniflare): Promise<AdminState> {
+      const response = await request('/api/admin', { cookie, instance });
+      expect(response.status).toBe(200);
+      return response.json() as Promise<AdminState>;
+    }
+    const save = (cookie: string, game: GameId, rules: unknown, effectiveFrom: unknown = TODAY, instance?: Miniflare) =>
+      request(`/api/admin/games/${game}`, { method: 'PUT', cookie, instance, body: { rules, effectiveFrom } });
+    const readGame = async (cookie: string, game: GameId, instance?: Miniflare) => {
+      const response = await request(`/api/games/${game}`, { cookie, instance });
+      expect(response.status).toBe(200);
+      return (await response.json() as GameResponse).game;
+    };
+
+    it('requires an active administrator for every settings endpoint and leaves no rejected audit', async () => {
+      const { cookie } = await login('min');
+      for (const [path, method, body] of [
+        ['/api/admin', 'GET', undefined],
+        ['/api/admin/games/wake', 'PUT', { rules: customRules('wake'), effectiveFrom: tomorrow }],
+        ['/api/admin/claw', 'PUT', { payoutEvery: 10, weakPickup: .45, weakCarry: .3 }],
+      ] as const) {
+        expect((await request(path, { method, body })).status).toBe(401);
+        const forbidden = await request(path, { method, body, cookie });
+        expect(forbidden.status).toBe(403);
+        expect(await forbidden.json()).toMatchObject({ error: { code: 'ADMIN_ONLY' } });
+      }
+      const admin = await login('admin');
+      await db.prepare("UPDATE users SET active = 0 WHERE id = 'admin'").run();
+      expect((await request('/api/admin', { cookie: admin.cookie })).status).toBe(401);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM admin_changes').first('n')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM game_settings').first('n')).toBe(0);
+    });
+
+    it('returns shared defaults and schedules omitted effectiveFrom for tomorrow without changing today', async () => {
+      const admin = await login('admin'); const min = await login('min');
+      const before = await readAdmin(admin.cookie);
+      expect(before).toMatchObject({ today: TODAY, tomorrow, changes: [] });
+      expect(before.games.map(game => game.id).sort()).toEqual(['luck', 'offwork', 'wake']);
+      expect(before.games.every(game => game.canApplyToday && game.scheduledRules === null)).toBe(true);
+      expect(before.games.find(game => game.id === 'wake')?.rules).toMatchObject({
+        enabled: true, deadline: '10:30:00', participationGold: 100, firstGold: 100,
+      });
+      const updated = customRules('offwork', { participationGold: 321, firstGold: 654, deadline: '16:45:30' });
+      const saved = await request('/api/admin/games/offwork', { method: 'PUT', cookie: admin.cookie, body: { rules: updated } });
+      expect(saved.status).toBe(200);
+      const view = await saved.json() as AdminState;
+      expect(view.games.find(game => game.id === 'offwork')).toMatchObject({ rules: before.games.find(game => game.id === 'offwork')!.rules, scheduledRules: updated });
+      expect((await readGame(min.cookie, 'offwork')).rules.participationGold).toBe(100);
+      const row = await db.prepare('SELECT effective_from, settings_json FROM game_settings WHERE game_id = ?').bind('offwork').first<{ effective_from: string; settings_json: string }>();
+      expect(row?.effective_from).toBe(tomorrow);
+      expect(JSON.parse(row!.settings_json)).toEqual(updated);
+      const audit = await db.prepare('SELECT admin_id, before_json, after_json, effective_from FROM admin_changes').first<{ admin_id: string; before_json: string; after_json: string; effective_from: string }>();
+      expect(audit).toMatchObject({ admin_id: 'admin', effective_from: tomorrow });
+      expect(JSON.parse(audit!.before_json)).toEqual(customRules('offwork'));
+      expect(JSON.parse(audit!.after_json)).toEqual(updated);
+    });
+
+    it('activates scheduled rules at KST midnight and keeps the prior day unchanged', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-admin-midnight-'));
+      let instance = runtime(await workerAt('2026-10-30T14:59:59Z'), persistence);
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const admin = await login('admin', instance); const min = await login('min', instance);
+        const updated = customRules('wake', { enabled: false, participationGold: 333 });
+        expect((await save(admin.cookie, 'wake', updated, tomorrow, instance)).status).toBe(200);
+        expect((await readGame(min.cookie, 'wake', instance)).rules.enabled).toBe(true);
+        await instance.dispose();
+        instance = runtime(await workerAt('2026-10-30T15:00:00Z'), persistence);
+        const after = await readGame(min.cookie, 'wake', instance);
+        expect(after.roundDate).toBe(tomorrow); expect(after.rules).toEqual(updated);
+        expect((await readAdmin(admin.cookie, instance)).today).toBe(tomorrow);
+        const persisted = await instance.getD1Database('DB');
+        expect(await persisted.prepare('SELECT COUNT(*) AS n FROM game_rounds').first('n')).toBe(0);
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it('applies today when an existing round is empty and replaces only its unused snapshot', async () => {
+      const admin = await login('admin'); const min = await login('min');
+      await seedRound({ game: 'offwork' });
+      await db.prepare('UPDATE game_rounds SET settings_json = ? WHERE game_id = ? AND round_date = ?')
+        .bind(JSON.stringify(customRules('offwork')), 'offwork', TODAY).run();
+      const updated = customRules('offwork', { participationGold: 70, firstGold: 80, deadline: '16:00:00' });
+      expect((await readAdmin(admin.cookie)).games.find(game => game.id === 'offwork')?.canApplyToday).toBe(true);
+      expect((await save(admin.cookie, 'offwork', updated)).status).toBe(200);
+      expect((await readGame(min.cookie, 'offwork')).rules).toEqual(updated);
+      expect(JSON.parse((await db.prepare('SELECT settings_json FROM game_rounds WHERE game_id = ? AND round_date = ?').bind('offwork', TODAY).first<string>('settings_json'))!)).toEqual(updated);
+      const predicted = await request('/api/games/offwork/prediction', { method: 'PUT', cookie: min.cookie, body: { value: '18:00:00' } });
+      expect(predicted.status).toBe(200);
+      expect((await ledgerRows()).map(row => [row.currency, row.amount])).toEqual([['gold', 70]]);
+    });
+
+    it.each(['prediction', 'answer'] as const)('rejects today after a %s and keeps the next-day choice available', async activity => {
+      const admin = await login('admin'); const min = await login('min'); const siwon = await login('siwon');
+      expect((await request(`/api/games/offwork/${activity}`, { method: 'PUT', cookie: activity === 'prediction' ? min.cookie : siwon.cookie, body: { value: '18:01:00' } })).status).toBe(200);
+      const before = await readAdmin(admin.cookie);
+      const state = before.games.find(game => game.id === 'offwork')!;
+      expect(state.canApplyToday).toBe(false); expect(state.activityReason).toBeTruthy();
+      const updated = customRules('offwork', { enabled: false });
+      const response = await save(admin.cookie, 'offwork', updated);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: { code: 'TODAY_HAS_ACTIVITY' } });
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM admin_changes').first('n')).toBe(0);
+      expect((await save(admin.cookie, 'offwork', updated, tomorrow)).status).toBe(200);
+      expect((await readGame(min.cookie, 'offwork')).rules.enabled).toBe(true);
+    });
+
+    it('serializes a today-OFF save racing the first prediction so exactly one operation wins', async () => {
+      const admin = await login('admin'); const min = await login('min');
+      const [setting, prediction] = await Promise.all([
+        save(admin.cookie, 'offwork', customRules('offwork', { enabled: false })),
+        request('/api/games/offwork/prediction', { method: 'PUT', cookie: min.cookie, body: { value: '18:01:00' } }),
+      ]);
+      expect([setting.status, prediction.status].sort()).toEqual([200, 409]);
+      const count = await db.prepare("SELECT COUNT(*) AS n FROM predictions WHERE game_id = 'offwork'").first('n');
+      if (setting.status === 200) {
+        expect(count).toBe(0); expect(await ledgerRows()).toEqual([]);
+        expect(await db.prepare("SELECT COUNT(*) AS n FROM game_rounds WHERE game_id = 'offwork'").first('n')).toBe(0);
+      } else {
+        expect(count).toBe(1);
+        expect((await ledgerRows()).map(row => row.amount)).toEqual([100]);
+        expect(await db.prepare('SELECT COUNT(*) AS n FROM game_settings').first('n')).toBe(0);
+      }
+    });
+
+    it('settles yesterday only from its stored rules even if the underlying settings row later changes', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-admin-snapshot-'));
+      let instance = runtime(script, persistence);
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const admin = await login('admin', instance); const min = await login('min', instance); const siwon = await login('siwon', instance);
+        const original = customRules('offwork', { participationGold: 70, firstGold: 80, scoreTable: [{ maxDifference: 30, points: 42 }] });
+        expect((await save(admin.cookie, 'offwork', original, TODAY, instance)).status).toBe(200);
+        expect((await request('/api/games/offwork/prediction', { method: 'PUT', cookie: min.cookie, instance, body: { value: '18:00:15' } })).status).toBe(200);
+        expect((await request('/api/games/offwork/answer', { method: 'PUT', cookie: siwon.cookie, instance, body: { value: '18:00:00' } })).status).toBe(200);
+        const snapshot = await database.prepare("SELECT settings_json FROM game_rounds WHERE game_id = 'offwork' AND round_date = ?").bind(TODAY).first<string>('settings_json');
+        expect(JSON.parse(snapshot!)).toEqual(original);
+        const replacement = customRules('offwork', { participationGold: 1, firstGold: 2, scoreTable: [{ maxDifference: 30, points: 3 }] });
+        expect((await save(admin.cookie, 'offwork', replacement, tomorrow, instance)).status).toBe(200);
+        // Deliberately make the lookup row disagree: settlement must use the round,
+        // even if a maintenance correction ever changes historical configuration.
+        await database.prepare('UPDATE game_settings SET settings_json = ? WHERE game_id = ? AND effective_from = ?')
+          .bind(JSON.stringify(replacement), 'offwork', TODAY).run();
+        await instance.dispose(); instance = runtime(await workerAt('2026-10-31T00:00:00Z'), persistence);
+        const response = await request('/api/bootstrap', { cookie: min.cookie, instance });
+        expect(response.status).toBe(200);
+        const view = await response.json() as BootstrapResponse;
+        expect(view.user).toMatchObject({ gold: 150, weeklyScore: 42 });
+        expect(view.games.find(game => game.id === 'offwork')!.rules).toEqual(replacement);
+        const history = await request('/api/games/offwork/history', { cookie: min.cookie, instance });
+        const past = (await history.json() as HistoryResponse).history[0]!;
+        expect(past.roundDate).toBe(TODAY);
+        expect(past.results[0]).toMatchObject({ score: 42, participationGold: 70, firstGold: 80, gold: 150 });
+        const persisted = await instance.getD1Database('DB'); const paid = await ledgerRows(persisted);
+        await request('/api/bootstrap', { cookie: min.cookie, instance });
+        expect(await ledgerRows(persisted)).toEqual(paid);
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it('keeps legacy rounds without snapshots on their historical default rules', async () => {
+      const admin = await login('admin'); const min = await login('min');
+      await seedRound({ game: 'offwork', date: '2026-10-29', answer: '18:00:00', revealedAt: Date.parse('2026-10-29T09:00:00Z'), predictions: [['min', '18:00:15']] });
+      expect((await save(admin.cookie, 'offwork', customRules('offwork', { firstGold: 777, scoreTable: [{ maxDifference: 99, points: 99 }] }))).status).toBe(200);
+      const view = await bootstrap(min.cookie);
+      expect(view.user).toMatchObject({ gold: 100, weeklyScore: 25 });
+      const history = await request('/api/games/offwork/history', { cookie: min.cookie });
+      expect((await history.json() as HistoryResponse).history[0]!.results[0]).toMatchObject({ score: 25, firstGold: 100, participationGold: 100 });
+    });
+
+    it('accepts zero rewards and score without inserting forbidden zero-value ledger entries', async () => {
+      const admin = await login('admin'); const min = await login('min'); const siwon = await login('siwon');
+      expect((await save(admin.cookie, 'offwork', customRules('offwork', { participationGold: 0, firstGold: 0, scoreTable: [{ maxDifference: 0, points: 0 }] }))).status).toBe(200);
+      expect((await request('/api/games/offwork/prediction', { method: 'PUT', cookie: min.cookie, body: { value: '18:00:00' } })).status).toBe(200);
+      expect((await request('/api/games/offwork/answer', { method: 'PUT', cookie: siwon.cookie, body: { value: '18:00:00' } })).status).toBe(200);
+      const reveal = await request('/api/games/offwork/reveal', { method: 'POST', cookie: siwon.cookie, body: {} });
+      expect(reveal.status).toBe(200);
+      expect((await reveal.json() as GameResponse).game.results[0]).toMatchObject({ score: 0, participationGold: 0, firstGold: 0, gold: 0, isFirst: true });
+      expect(await ledgerRows()).toEqual([]);
+      expect(await db.prepare("SELECT settled_at FROM game_rounds WHERE game_id = 'offwork' AND round_date = ?").bind(TODAY).first('settled_at')).not.toBeNull();
+    });
+
+    it.each([{ deadline: '09:00:00', status: 409 }, { deadline: '09:00:01', status: 200 }])('uses the configured cutoff $deadline for reads and writes at exactly 09:00:00', async ({ deadline, status }) => {
+      const admin = await login('admin'); const min = await login('min');
+      expect((await save(admin.cookie, 'offwork', customRules('offwork', { deadline }))).status).toBe(200);
+      const game = await readGame(min.cookie, 'offwork');
+      expect(game.deadline).toBe(deadline); expect(game.canPredict).toBe(status === 200);
+      expect((await request('/api/games/offwork/prediction', { method: 'PUT', cookie: min.cookie, body: { value: '18:00:00' } })).status).toBe(status);
+    });
+
+    it('rejects a prediction when the SQL write crosses the configured cutoff', async () => {
+      const instance = runtime(await workerAt(`${TODAY}T00:00:00Z`, `${TODAY}T00:00:01Z`));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const admin = await login('admin', instance); const min = await login('min', instance);
+        expect((await save(admin.cookie, 'offwork', customRules('offwork', { deadline: '09:00:01' }), TODAY, instance)).status).toBe(200);
+        const response = await request('/api/games/offwork/prediction', { method: 'PUT', cookie: min.cookie, instance, body: { value: '18:00:00' } });
+        expect(response.status).toBe(409);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM predictions').first('n')).toBe(0);
+        expect(await ledgerRows(database)).toEqual([]);
+      } finally { await instance.dispose(); }
+    });
+
+    it.each(['wake', 'offwork', 'luck'] as const)('rejects every OFF-day action without creating a %s round', async game => {
+      const admin = await login('admin'); const author = await login(game === 'wake' ? 'min' : game === 'offwork' ? 'siwon' : 'yeseo');
+      const predictor = await login(game === 'wake' ? 'siwon' : 'min');
+      expect((await save(admin.cookie, game, customRules(game, { enabled: false }))).status).toBe(200);
+      expect((await readGame(predictor.cookie, game)).rules.enabled).toBe(false);
+      const actions = [
+        { action: 'prediction', method: 'PUT', cookie: predictor.cookie, body: { value: game === 'luck' ? '77' : '18:00:00' } },
+        { action: 'answer', method: 'PUT', cookie: author.cookie, body: { value: game === 'luck' ? '77' : '18:00:00' } },
+        { action: game === 'wake' ? 'wake' : 'reveal', method: 'POST', cookie: author.cookie, body: {} },
+      ];
+      if (game === 'luck') actions.push({ action: 'photo', method: 'PUT', cookie: author.cookie, body: { image: LUCK_PHOTO } } as typeof actions[number]);
+      for (const action of actions) {
+        const response = await request(`/api/games/${game}/${action.action}`, action);
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ error: { code: 'GAME_OFF' } });
+      }
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM game_rounds').first('n')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM predictions').first('n')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM luck_photos').first('n')).toBe(0);
+      expect(await ledgerRows()).toEqual([]);
+    });
+
+    it('rejects invalid tables, gold, fixed times and malformed rules without an audit or settings row', async () => {
+      const { cookie } = await login('admin');
+      const invalid: [GameId, unknown][] = [
+        ['offwork', null], ['offwork', {}], ['offwork', { ...customRules('offwork'), enabled: 'true' }],
+        ['offwork', customRules('offwork', { scoreTable: [] })],
+        ['offwork', customRules('offwork', { scoreTable: Array.from({ length: 11 }, (_, index) => ({ maxDifference: index, points: 1 })) })],
+        ['offwork', customRules('offwork', { scoreTable: [{ maxDifference: 10, points: 10 }, { maxDifference: 10, points: 5 }] })],
+        ['offwork', customRules('offwork', { scoreTable: [{ maxDifference: 10, points: 10 }, { maxDifference: 9, points: 5 }] })],
+        ['offwork', customRules('offwork', { scoreTable: [{ maxDifference: 0, points: 5 }, { maxDifference: 1, points: 6 }] })],
+        ...[-1, .5, 101].map(points => ['offwork', customRules('offwork', { scoreTable: [{ maxDifference: 0, points }] })] as [GameId, unknown]),
+        ...[-1, .5, Number.MAX_SAFE_INTEGER + 1].map(maxDifference => ['luck', customRules('luck', { scoreTable: [{ maxDifference, points: 1 }] })] as [GameId, unknown]),
+        ...[-1, .5, 1001].map(participationGold => ['offwork', customRules('offwork', { participationGold })] as [GameId, unknown]),
+        ...[-1, .5, 10001].map(firstGold => ['offwork', customRules('offwork', { firstGold })] as [GameId, unknown]),
+        ...['9:00:00', '24:00:00', '12:60:00', '12:00:60', '12:00'].map(deadline => ['offwork', customRules('offwork', { deadline })] as [GameId, unknown]),
+        ['wake', customRules('wake', { deadline: '10:29:59' })],
+        ['luck', customRules('luck', { deadline: '18:00:00' })], ['luck', customRules('luck', { deadline: '18:00:01' })],
+        ['luck', customRules('luck', { revealTime: '19:00:00' })], ['wake', customRules('wake', { revealTime: '18:00:00' })],
+      ];
+      for (const [game, rules] of invalid) {
+        const response = await save(cookie, game, rules, tomorrow);
+        expect(response.status, JSON.stringify(rules)).toBe(400);
+      }
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM game_settings').first('n')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM admin_changes').first('n')).toBe(0);
+    });
+
+    it('accepts one and ten ordered rows, equal descending points and gold endpoints', async () => {
+      const { cookie } = await login('admin');
+      for (const rules of [
+        customRules('luck', { scoreTable: [{ maxDifference: 0, points: 100 }], participationGold: 1000, firstGold: 10000, deadline: '17:59:59' }),
+        customRules('luck', { scoreTable: Array.from({ length: 10 }, (_, index) => ({ maxDifference: index, points: 0 })), participationGold: 0, firstGold: 0, deadline: '00:00:00' }),
+      ]) expect((await save(cookie, 'luck', rules, tomorrow)).status).toBe(200);
+      const row = await db.prepare("SELECT settings_json FROM game_settings WHERE game_id = 'luck'").first<string>('settings_json');
+      expect(JSON.parse(row!).scoreTable).toHaveLength(10);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM admin_changes').first('n')).toBe(2);
+    });
+
+    it('rejects dates other than today and tomorrow and rolls back settings when audit insertion fails', async () => {
+      const { cookie } = await login('admin'); const rules = customRules('offwork');
+      for (const date of ['2026-10-29', '2026-11-01', '2026-02-30', 'tomorrow', '', null, 20261031]) {
+        const response = await save(cookie, 'offwork', rules, date);
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ error: { code: 'INVALID_EFFECTIVE_DATE' } });
+      }
+      await seedRound({ game: 'offwork' });
+      await db.prepare('UPDATE game_rounds SET settings_json = ?').bind(JSON.stringify(rules)).run();
+      await db.prepare("CREATE TRIGGER reject_admin_audit BEFORE INSERT ON admin_changes BEGIN SELECT RAISE(ABORT, 'test audit failure'); END;").run();
+      expect((await save(cookie, 'offwork', customRules('offwork', { participationGold: 88 }))).status).toBe(500);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM game_settings').first('n')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM admin_changes').first('n')).toBe(0);
+      expect(JSON.parse((await db.prepare('SELECT settings_json FROM game_rounds').first<string>('settings_json'))!)).toEqual(rules);
+    });
+
+    it('rejects today when the SQL clock crosses KST midnight after the request begins', async () => {
+      const instance = runtime(await workerAt('2026-10-30T14:59:59Z', '2026-10-30T15:00:00Z'));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const { cookie } = await login('admin', instance);
+        expect((await save(cookie, 'offwork', customRules('offwork'), TODAY, instance)).status).toBe(409);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM game_settings').first('n')).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM admin_changes').first('n')).toBe(0);
+      } finally { await instance.dispose(); }
+    });
+
+    it.each([false, true])('returns the newest twenty audits in append order with identical timestamps=%s', async sameTime => {
+      const { cookie } = await login('admin');
+      await db.prepare("UPDATE users SET display_name = '운영민' WHERE id = 'admin'").run();
+      await db.batch(Array.from({ length: 25 }, (_, index) => db.prepare(`INSERT INTO admin_changes
+        (id, admin_id, target, before_json, after_json, effective_from, created_at) VALUES (?, 'admin', 'claw', '{}', '{}', ?, ?)`)
+        .bind(`audit-${(24 - index).toString().padStart(2, '0')}`, TODAY, new Date(Date.parse(`${TODAY}T00:00:00Z`) - (sameTime ? 0 : (25 - index) * 1000)).toISOString())));
+      const changes = (await readAdmin(cookie)).changes;
+      expect(changes).toHaveLength(20);
+      expect(changes.map(change => change.id)).toEqual(Array.from({ length: 20 }, (_, index) => `audit-${index.toString().padStart(2, '0')}`));
+      expect(changes.every(change => change.adminName === '운영민')).toBe(true);
+    });
+
+    it('measures authenticated admin API reads and bounds configuration lookup despite old history', async () => {
+      const instance = runtime(workerWithD1Metrics(script));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const { cookie } = await login('admin', instance);
+        const measurements: Record<string, number> = {};
+        const measured = async (name: string, path: string, method = 'GET', body?: unknown) => {
+          const response = await request(path, { method, body, cookie, instance });
+          expect(response.status).toBe(200);
+          const count = response.headers.get('X-Test-D1-Rows-Read'); expect(count).not.toBeNull();
+          measurements[name] = Number(count); return response;
+        };
+        await measured('GET admin empty', '/api/admin');
+        await measured('PUT game today', '/api/admin/games/offwork', 'PUT', { rules: customRules('offwork', { participationGold: 200 }), effectiveFrom: TODAY });
+        await measured('PUT claw', '/api/admin/claw', 'PUT', { payoutEvery: 12, weakPickup: .5, weakCarry: .25 });
+        await measured('GET admin current', '/api/admin');
+        await database.batch(Array.from({ length: 200 }, (_, index) => {
+          const date = new Date(Date.UTC(2020, 0, index + 1)).toISOString().slice(0, 10);
+          return database.prepare(`INSERT INTO game_settings (game_id, effective_from, settings_json, created_at, created_by)
+            VALUES ('offwork', ?, ?, ?, 'admin')`).bind(date, JSON.stringify(customRules('offwork')), `${date}T00:00:00.000Z`);
+        }));
+        await measured('GET admin after 200 old settings', '/api/admin');
+        expect(measurements['GET admin after 200 old settings']).toBe(measurements['GET admin current']);
+        const observed = measuredDatabase(database, Date.parse(`${TODAY}T00:00:00Z`));
+        expect((await readEffectiveRules(observed.binding, 'offwork', TODAY)).participationGold).toBe(200);
+        expect(observed.rowsRead()).toBe(1);
+        for (const [count, prefix, date] of [[18, 'recent', '2026-10-29'], [200, 'old', '2020-01-01']] as const) {
+          await database.batch(Array.from({ length: count }, (_, index) => database.prepare(`INSERT INTO admin_changes
+            (id, admin_id, target, before_json, after_json, effective_from, created_at)
+            VALUES (?, 'admin', 'claw', '{}', '{}', ?, ?)`)
+            .bind(`metrics-${prefix}-${index}`, date, `${date}T00:00:00.000Z`)));
+          await measured(prefix === 'recent' ? 'GET admin with 20 audits' : 'GET admin after 200 old audits', '/api/admin');
+        }
+        expect(measurements['GET admin after 200 old audits']).toBe(measurements['GET admin with 20 audits']);
+        console.log(`Admin effective rules indexed lookup D1 rows_read: ${observed.rowsRead()} with 200 historical settings`);
+        console.log(`Admin full authenticated API D1 rows_read: ${JSON.stringify(measurements)} (empty game/ledger history, audit count noted by operation)`);
+      } finally { await instance.dispose(); }
+    });
+  });
+
+  describe('admin console claw operations', () => {
+    const clawConfig = { payoutEvery: 10, weakPickup: .45, weakCarry: .3 };
+    const configure = (cookie: string, config: unknown = clawConfig) => request('/api/admin/claw', { method: 'PUT', cookie, body: config });
+
+    it('plays more than a player wallet for free while preserving cooldown and leaving no rewards or notices', async () => {
+      const { cookie } = await login('admin');
+      let state = await getClaw(cookie);
+      const beforeBoard = state.board;
+      expect((await getClaw(cookie)).board).toEqual(beforeBoard);
+      for (let index = 0; index < 7; index++) {
+        const previous = state;
+        state = await clawPlay(cookie, state.version);
+        expect(state).toMatchObject({ isAdmin: true, coins: 0, freeCoins: 0, purchasedCoins: 0, version: previous.version + 1 });
+        expect(state.result).toMatchObject({ points: 0, gold: 0, clearBonus: 0, clearGold: 0 });
+        expect((await request('/api/claw/play', { method: 'POST', cookie, body: { requestId: crypto.randomUUID(), version: state.version, x: .05 } })).status).toBe(409);
+        await db.prepare("UPDATE claw_accounts SET next_play_at = 0 WHERE user_id = 'admin'").run();
+      }
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM claw_plays WHERE user_id = 'admin'").first('n')).toBe(7);
+      expect(await db.prepare("SELECT SUM(score + gold + clear_bonus) AS n FROM claw_plays WHERE user_id = 'admin'").first('n')).toBe(0);
+      expect(await ledgerRows()).toEqual([]);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(0);
+      const view = await bootstrap(cookie);
+      expect(view.user).toMatchObject({ gold: 0, weeklyScore: 0 });
+      expect(view.players.some(player => player.id === 'admin')).toBe(false);
+      expect(view.ledger).toEqual([]);
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM claw_coin_purchases WHERE user_id = 'admin'").first('n')).toBe(0);
+    });
+
+    it('clears the admin machine and generates a new board with zero stored or displayed rewards', async () => {
+      const { cookie } = await login('admin'); const state = await getClaw(cookie);
+      await seedClawBoard(db, [{ id: '1-1', type: 1, x: .5, y: .8, radius: 32, angle: 0 }], 0, 'admin');
+      const played = await clawPlay(cookie, state.version, { x: .5, forceStrong: true });
+      expect(played.result).toMatchObject({ caught: true, points: 0, gold: 0, clearBonus: 0, clearGold: 0, grip: { strong: true, pickup: 1, carry: 1 } });
+      expect(played.result!.prizes).toHaveLength(1);
+      expect(played.generation).toBe(2); expect(played.board).toHaveLength(30);
+      expect(played.board.every(doll => doll.id.startsWith('2-'))).toBe(true);
+      expect(await db.prepare("SELECT score, gold, clear_bonus FROM claw_plays WHERE user_id = 'admin'").first()).toEqual({ score: 0, gold: 0, clear_bonus: 0 });
+      expect(await ledgerRows()).toEqual([]);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(0);
+    });
+
+    it('rejects forceStrong from players, validates admin booleans and binds it to the saved receipt', async () => {
+      const min = await login('min'); const admin = await login('admin');
+      const player = await getClaw(min.cookie); const state = await getClaw(admin.cookie);
+      for (const forceStrong of [true, false]) expect((await request('/api/claw/play', { method: 'POST', cookie: min.cookie,
+        body: { requestId: crypto.randomUUID(), version: player.version, x: .05, forceStrong } })).status).toBe(403);
+      expect((await getClaw(min.cookie)).freeCoins).toBe(5);
+      for (const forceStrong of ['true', 1, null]) expect((await request('/api/claw/play', { method: 'POST', cookie: admin.cookie,
+        body: { requestId: crypto.randomUUID(), version: state.version, x: .05, forceStrong } })).status).toBe(400);
+      const input = { requestId: crypto.randomUUID(), version: state.version, x: .05, forceStrong: true };
+      const responses = await Promise.all([request('/api/claw/play', { method: 'POST', cookie: admin.cookie, body: input }), request('/api/claw/play', { method: 'POST', cookie: admin.cookie, body: input })]);
+      expect(responses.map(response => response.status)).toEqual([200, 200]);
+      const results = await Promise.all(responses.map(response => response.json() as Promise<ClawResponse>));
+      expect(results[0]!.result).toEqual(results[1]!.result);
+      expect((await request('/api/claw/play', { method: 'POST', cookie: admin.cookie, body: { ...input, forceStrong: false } })).status).toBe(409);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM claw_plays').first('n')).toBe(1);
+      expect(await ledgerRows()).toEqual([]);
+    });
+
+    it('validates claw setting boundaries and audits each accepted configuration', async () => {
+      const { cookie } = await login('admin');
+      for (const invalid of [null, {}, ...[0, 51, 1.5, '10'].map(payoutEvery => ({ ...clawConfig, payoutEvery })),
+        ...[.049, 1.01, '0.5', null].map(weakPickup => ({ ...clawConfig, weakPickup })),
+        ...[.049, 1.01, '0.5', null].map(weakCarry => ({ ...clawConfig, weakCarry }))]) {
+        expect((await configure(cookie, invalid)).status).toBe(400);
+      }
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM admin_changes').first('n')).toBe(0);
+      for (const config of [{ payoutEvery: 1, weakPickup: .05, weakCarry: 1 }, { payoutEvery: 50, weakPickup: 1, weakCarry: .05 }]) {
+        const response = await configure(cookie, config); expect(response.status).toBe(200);
+        expect((await response.json() as AdminState).claw).toEqual(config);
+      }
+      const audits = (await db.prepare("SELECT before_json, after_json FROM admin_changes WHERE target = 'claw' ORDER BY created_at, id").all<{ before_json: string; after_json: string }>()).results;
+      expect(audits).toHaveLength(2);
+      expect(audits.some(audit => JSON.parse(audit.before_json).payoutEvery === 10)).toBe(true);
+      expect(audits.some(audit => JSON.parse(audit.after_json).payoutEvery === 50)).toBe(true);
+    });
+
+    it('rolls back a claw config update if its audit write fails', async () => {
+      const { cookie } = await login('admin');
+      const before = await db.prepare('SELECT * FROM claw_config').first();
+      await db.prepare("CREATE TRIGGER reject_claw_config_audit BEFORE INSERT ON admin_changes BEGIN SELECT RAISE(ABORT, 'test claw audit failure'); END;").run();
+      expect((await configure(cookie, { payoutEvery: 1, weakPickup: .9, weakCarry: .8 })).status).toBe(500);
+      expect(await db.prepare('SELECT * FROM claw_config').first()).toEqual(before);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM admin_changes').first('n')).toBe(0);
+    });
+
+    it('uses config changes for the next play, preserves a saved result and never exposes private config to players', async () => {
+      const admin = await login('admin'); const min = await login('min');
+      const state = await getClaw(min.cookie);
+      const input = { requestId: crypto.randomUUID(), version: state.version, x: .05, stop: null };
+      const first = await clawPlay(min.cookie, state.version, input);
+      expect(first.result!.grip.strong).toBe(false);
+      expect((await configure(admin.cookie, { payoutEvery: 1, weakPickup: .05, weakCarry: .05 })).status).toBe(200);
+      expect((await clawPlay(min.cookie, state.version, input)).result).toEqual(first.result);
+      await db.prepare("UPDATE claw_accounts SET next_play_at = 0 WHERE user_id = 'min'").run();
+      const next = await clawPlay(min.cookie, first.version);
+      expect(next.result!.grip).toEqual({ strong: true, pickup: 1, carry: 1 });
+      const summary = (await bootstrap(min.cookie)).claw;
+      for (const payload of [next, await getClaw(min.cookie), summary]) expect(JSON.stringify(payload)).not.toMatch(/payout.?every|weak.?pickup|weak.?carry|power.?counter|forceStrong/i);
+    });
+  });
+
   describe('server claw machine', () => {
     it('creates a private 30-doll machine and keeps bootstrap wallet summaries small and config-free', async () => {
       const { cookie } = await login('min');
@@ -1316,7 +1764,7 @@ describe('Worker and D1 integration', () => {
       expect((await getClaw(cookie)).purchasedCoins).toBe(1);
     });
 
-    it('requires login and lets admins inspect a demo while rejecting purchases and plays', async () => {
+    it('requires login and lets admins keep a private machine while rejecting coin purchases', async () => {
       for (const path of ['/api/claw', '/api/claw/coins', '/api/claw/play']) {
         expect((await request(path, path === '/api/claw' ? {} : { method: 'POST', body: {} })).status).toBe(401);
       }
@@ -1326,9 +1774,7 @@ describe('Worker and D1 integration', () => {
       expect(demo.board).toHaveLength(30);
       expect((await getClaw(cookie)).board).toEqual(demo.board);
       expect((await request('/api/claw/coins', { method: 'POST', cookie, body: { requestId: crypto.randomUUID(), quantity: 1 } })).status).toBe(403);
-      expect((await request('/api/claw/play', { method: 'POST', cookie,
-        body: { requestId: crypto.randomUUID(), version: 0, x: .5, stop: null } })).status).toBe(403);
-      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_accounts WHERE user_id = ?').bind('admin').first('count')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_accounts WHERE user_id = ?').bind('admin').first('count')).toBe(1);
       expect(await ledgerRows()).toEqual([]);
       expect(JSON.stringify(demo)).not.toMatch(/payout.?every|weak.?pickup|weak.?carry|power.?counter/i);
     });

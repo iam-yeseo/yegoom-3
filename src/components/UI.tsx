@@ -428,13 +428,20 @@ export const tabs = [
     label: "내 정보",
     d: "M12 4a4 4 0 1 1 0 8a4 4 0 1 1 0-8zM4.5 20c1.4-3.6 4.6-5 7.5-5s6.1 1.4 7.5 5",
   },
+  {
+    path: "/admin",
+    label: "운영",
+    d: "M12 3l8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6zM9 12l2 2 4-4",
+  },
 ] as const;
 export function TabBar({
   active,
   onNavigate,
+  admin = false,
 }: {
   active: string;
   onNavigate: (path: string) => void;
+  admin?: boolean;
 }) {
   const nav = useRef<HTMLElement>(null);
   useOnChange(active, () => {
@@ -451,8 +458,8 @@ export function TabBar({
     );
   });
   return (
-    <nav className="tabbar" aria-label="주요 메뉴" ref={nav}>
-      {tabs.map((tab) => {
+    <nav className={`tabbar${admin ? " tabbar-admin" : ""}`} aria-label="주요 메뉴" ref={nav}>
+      {tabs.filter(tab => tab.path !== "/admin" || admin).map((tab) => {
         const on = tab.path === active;
         return (
           <button

@@ -14,6 +14,7 @@ import type {
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput,
 } from "../shared/types";
 import type { ArtKey } from "../shared/characters";
+import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/admin";
 
 export class ApiFailure extends Error {
   constructor(
@@ -53,6 +54,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 export const api = {
+  admin: () => request<AdminState>("/admin"),
+  saveGameSettings: (id: GameId, rules: PredictionRules, effectiveFrom: string, expectedUserId: string) => request<AdminState>(`/admin/games/${id}`, {
+    method: "PUT", body: JSON.stringify({ rules, effectiveFrom, expectedUserId }),
+  }),
+  saveClawSettings: (config: AdminClawConfig, expectedUserId: string) => request<AdminState>("/admin/claw", {
+    method: "PUT", body: JSON.stringify({ ...config, expectedUserId }),
+  }),
   updateProfile: (displayName: string, expectedUserId: string) => request<AuthResponse>("/me/profile", { method: "PUT", body: JSON.stringify({ displayName, expectedUserId }) }),
   uploadProfilePhoto: (photo: string, expectedUserId: string) => request<AuthResponse>("/me/photo", { method: "PUT", body: JSON.stringify({ photo, expectedUserId }) }),
   deleteProfilePhoto: (expectedUserId: string) => request<AuthResponse>("/me/photo", { method: "DELETE", body: JSON.stringify({ expectedUserId }) }),

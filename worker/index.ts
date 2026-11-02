@@ -1,12 +1,15 @@
 import type { AttendanceState, BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, Player, LedgerEntry } from '../shared/types';
-import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, attendanceTickets, CATCHMIND_RULES, PREDICTION_REWARDS, predictionPoints } from '../shared/balance';
+import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, attendanceTickets, CATCHMIND_RULES } from '../shared/balance';
+import { predictionPointsForRules } from '../shared/game-settings';
+import type { AdminState, PredictionRules } from '../shared/admin';
+import { AdminSettingsError, readAdminGames, readAdminChanges, saveGameSettings, readGameRules, rulesForRound, roundSnapshotWrites } from './game-settings';
 import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
 import { DUMMY_HASH, hashPassword, hashToken, randomToken, verifyPassword } from './crypto';
 import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readInventory, readKujiSummary, settleDueLotto, ShopError, shopRoute } from './shop';
 import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary } from './catchmind';
-import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw } from './claw';
+import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
 import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
 import { PhotoError } from './photos';
@@ -16,7 +19,7 @@ import { readAnnouncements } from './announcements';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
-interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null }
+interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null; settings_json: string | null }
 interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null; photo_version: number | null }
 interface UnsettledRound extends RoundRow { game_id: GameId; round_date: string }
 class HttpError extends Error {
@@ -165,7 +168,7 @@ async function changePassword(request: Request, env: Env, user: UserRow): Promis
   return json({ ok: true }, 200, { 'Set-Cookie': cookie(request, token, SESSION_AGE_SECONDS) });
 }
 
-async function roundResults(db: D1Database, id: GameId, date: string, answer: string): Promise<GameResult[]> {
+async function roundResults(db: D1Database, id: GameId, date: string, answer: string, rules: PredictionRules): Promise<GameResult[]> {
   const rows = (await db.prepare(`SELECT p.player_id, u.username, u.display_name, p.value, u.character,
     CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photo_version
     FROM predictions p JOIN users u ON u.id = p.player_id
@@ -176,10 +179,10 @@ async function roundResults(db: D1Database, id: GameId, date: string, answer: st
   return rows.map((row, index) => {
     const difference = differences[index]!;
     const isFirst = difference === closest;
-    const participationGold = PREDICTION_REWARDS.participationGold;
-    const firstGold = isFirst ? PREDICTION_REWARDS.firstGold : 0;
+    const participationGold = rules.participationGold;
+    const firstGold = isFirst ? rules.firstGold : 0;
     return { playerId: row.player_id, username: row.username, displayName: row.display_name, character: row.character ?? defaultCharacter(row.username), photoVersion: row.photo_version,
-      value: row.value, difference, score: predictionPoints(id, difference), isFirst,
+      value: row.value, difference, score: predictionPointsForRules(rules, difference), isFirst,
       participationGold, firstGold, gold: participationGold + firstGold };
   }).sort((left, right) => left.difference - right.difference);
 }
@@ -188,12 +191,13 @@ async function roundResults(db: D1Database, id: GameId, date: string, answer: st
  * completion marker commit together; references also make concurrent calls safe.
  * Scan past rounds too, since the first visit after a reveal may be on a new day. */
 async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
-  const rounds = (await db.prepare(`SELECT game_id, round_date, answer, hint, reveal_at, revealed_at
+  const rounds = (await db.prepare(`SELECT game_id, round_date, answer, hint, reveal_at, revealed_at, settings_json
     FROM game_rounds WHERE settled_at IS NULL AND answer IS NOT NULL
     AND (revealed_at IS NOT NULL OR reveal_at <= ?) ORDER BY round_date, game_id`)
     .bind(now.getTime()).all<UnsettledRound>()).results;
   for (const round of rounds) {
-    const results = await roundResults(db, round.game_id, round.round_date, round.answer!);
+    const rules = await readGameRules(db, round.game_id, round.round_date, round.settings_json);
+    const results = await roundResults(db, round.game_id, round.round_date, round.answer!, rules);
     const writes: D1PreparedStatement[] = [];
     const gameWeek = weekStart(new Date(kstTimestamp(round.round_date, '00:00:00')));
     for (const result of results) {
@@ -216,37 +220,43 @@ async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
 }
 
 async function readHistory(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameHistoryRound[]> {
-  const rounds = (await db.prepare(`SELECT round_date, answer FROM game_rounds
+  const rounds = (await db.prepare(`SELECT round_date, answer, settings_json FROM game_rounds
     WHERE game_id = ? AND round_date < ? AND answer IS NOT NULL
     AND (revealed_at IS NOT NULL OR reveal_at <= ?) ORDER BY round_date DESC LIMIT 3`)
-    .bind(id, kstDate(now), now.getTime()).all<{ round_date: string; answer: string }>()).results;
-  return Promise.all(rounds.map(async round => ({ roundDate: round.round_date, answer: round.answer,
-    results: await roundResults(db, id, round.round_date, round.answer),
-    photo: id === 'luck' ? await getLuckPhotoMetadata(db, user, round.round_date, true) : null })));
+    .bind(id, kstDate(now), now.getTime()).all<{ round_date: string; answer: string; settings_json: string | null }>()).results;
+  return Promise.all(rounds.map(async round => {
+    const rules = await readGameRules(db, id, round.round_date, round.settings_json);
+    return { roundDate: round.round_date, answer: round.answer,
+      results: await roundResults(db, id, round.round_date, round.answer, rules),
+      photo: id === 'luck' ? await getLuckPhotoMetadata(db, user, round.round_date, true) : null };
+  }));
 }
 
 async function readGame(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameState> {
   const date = kstDate(now);
-  const rules = GAME_RULES[id];
-  const round = await db.prepare('SELECT answer, hint, reveal_at, revealed_at FROM game_rounds WHERE game_id = ? AND round_date = ?').bind(id, date).first<RoundRow>();
+  const identity = GAME_RULES[id];
+  const round = await db.prepare('SELECT answer, hint, reveal_at, revealed_at, settings_json FROM game_rounds WHERE game_id = ? AND round_date = ?').bind(id, date).first<RoundRow>();
+  const rules = await readGameRules(db, id, date, round?.settings_json);
   const revealed = round?.answer != null && (round.revealed_at != null || (round.reveal_at != null && round.reveal_at <= now.getTime()));
-  const closed = revealed || now.getTime() >= kstTimestamp(date, rules.deadline);
-  const author = user.role === 'player' && user.username === rules.author;
+  const closed = !rules.enabled || revealed || now.getTime() >= kstTimestamp(date, rules.deadline);
+  const author = user.role === 'player' && user.username === identity.author;
   const prediction = await db.prepare('SELECT value FROM predictions WHERE game_id = ? AND round_date = ? AND player_id = ?').bind(id, date, user.id).first<{ value: string }>();
-  const results = revealed ? await roundResults(db, id, date, round!.answer!) : [];
+  const results = revealed ? await roundResults(db, id, date, round!.answer!, rules) : [];
   const participants = (await db.prepare(`SELECT u.id AS playerId, u.username, u.display_name AS displayName, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photoVersion, p.player_id IS NOT NULL AS submitted
     FROM users u LEFT JOIN predictions p ON p.player_id = u.id AND p.game_id = ? AND p.round_date = ?
-    WHERE u.active = 1 AND u.role = 'player' AND u.username != ? ORDER BY u.username`).bind(id, date, rules.author).all<{ playerId: string; username: string; displayName: string; photoVersion: number | null; submitted: number }>()).results;
-  const authorName = await db.prepare('SELECT display_name FROM users WHERE username = ?').bind(rules.author).first<string>('display_name');
+    WHERE u.active = 1 AND u.role = 'player' AND u.username != ? ORDER BY u.username`).bind(id, date, identity.author).all<{ playerId: string; username: string; displayName: string; photoVersion: number | null; submitted: number }>()).results;
+  const authorName = await db.prepare('SELECT display_name FROM users WHERE username = ?').bind(identity.author).first<string>('display_name');
   const photo = id === 'luck' ? await getLuckPhotoMetadata(db, user, date, Boolean(revealed)) : null;
   return {
     participants: participants.map(player => ({ ...player, submitted: Boolean(player.submitted) })),
-    id, title: rules.title, authorUsername: rules.author, authorDisplayName: authorName ?? rules.author, photo, deadline: rules.deadline, roundDate: date,
+    id, title: identity.title, authorUsername: identity.author, authorDisplayName: authorName ?? identity.author,
+    rules, photo, deadline: rules.deadline, roundDate: date,
     phase: revealed ? 'revealed' : closed ? 'closed' : 'open', hint: round?.hint ?? '',
     prediction: prediction?.value ?? null, answer: revealed || author ? round?.answer ?? null : null,
-    answerEntered: round?.answer != null,
-    results,
-    canPredict: !closed && !author && user.role === 'player', canEditAnswer: author && !revealed, canReveal: id !== 'wake' && author && !revealed && round?.answer != null,
+    answerEntered: round?.answer != null, results,
+    canPredict: !closed && !author && user.role === 'player',
+    canEditAnswer: rules.enabled && author && !revealed,
+    canReveal: rules.enabled && id !== 'wake' && author && !revealed && round?.answer != null,
   };
 }
 async function weeklyDailyScores(db: D1Database, userId: string, now: Date): Promise<number[]> {
@@ -369,33 +379,46 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   return { user: viewer, players: players.results.map(player => ({ ...player, character: player.character ?? defaultCharacter(player.username) })),
     games, ledger: ledger.results, dailyScores, attendance, inventory, kuji, catchmind, claw, launchGift, announcements, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
+async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {
+  if (kstDate(new Date()) !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
+  if (!(await rulesForRound(db, id, date)).enabled) throw new HttpError(409, 'GAME_OFF', '오늘은 이 게임을 쉬어요.');
+  throw new HttpError(409, code, message);
+}
 async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId, action: string, now: Date): Promise<Response> {
   const input = await body(request);
   now = new Date();
   const date = kstDate(now);
-  // Reject stale browser tabs explicitly instead of silently carrying yesterday's input into today.
   if (input.roundDate !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
-  const rules = GAME_RULES[id];
-  const author = user.role === 'player' && user.username === rules.author;
+  const identity = GAME_RULES[id];
+  const author = user.role === 'player' && user.username === identity.author;
+  const rules = await rulesForRound(env.DB, id, date);
+  if (!rules.enabled) throw new HttpError(409, 'GAME_OFF', '오늘은 이 게임을 쉬어요.');
+  const start = kstTimestamp(date, '00:00:00');
   if (action === 'prediction') {
     if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (user.role !== 'player' || author) throw new HttpError(403, 'CANNOT_PREDICT', '이 게임의 예측에 참여할 수 없어요.');
     if (!validValue(id, input.value)) throw new HttpError(400, 'INVALID_VALUE', id === 'luck' ? '0부터 100 사이의 정수를 입력해 주세요.' : '시간을 00:00:00부터 23:59:59 사이로 입력해 주세요.');
     if (now.getTime() >= kstTimestamp(date, rules.deadline)) throw new HttpError(409, 'PREDICTION_CLOSED', '오늘의 예측이 마감됐어요.');
+    // ADMIN_RULES_WRITE_BOUNDARY: snapshots and their first activity commit together.
     const writes = await env.DB.batch([
-      env.DB.prepare('INSERT OR IGNORE INTO game_rounds (game_id, round_date, updated_at) VALUES (?, ?, ?)').bind(id, date, now.getTime()),
+      ...roundSnapshotWrites(env.DB, id, date, now, true),
       env.DB.prepare(`INSERT INTO predictions (game_id, round_date, player_id, value, updated_at)
-        SELECT ?, ?, ?, ?, ? FROM game_rounds WHERE game_id = ? AND round_date = ? AND revealed_at IS NULL AND (reveal_at IS NULL OR reveal_at > unixepoch('now') * 1000) AND unixepoch('now') * 1000 < ?
-        ON CONFLICT(game_id, round_date, player_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).bind(id, date, user.id, input.value, now.getTime(), id, date, kstTimestamp(date, rules.deadline)),
-      // changes() belongs to the preceding conditional prediction write in this
-      // transaction. A rejected write cannot pay; edits share the same reference.
-      env.DB.prepare(`INSERT OR IGNORE INTO ledger
-        (id, user_id, currency, amount, reason, reference, created_at)
-        SELECT ?, ?, 'gold', ?, ?, ?, ? WHERE changes() = 1`)
-        .bind(crypto.randomUUID(), user.id, PREDICTION_REWARDS.participationGold,
-          `${rules.title} 참여`, `predict:${id}:${date}:${user.id}`, now.toISOString()),
+        SELECT ?, ?, ?, ?, ? FROM game_rounds WHERE game_id = ? AND round_date = ?
+          AND json_extract(settings_json, '$.enabled') = 1 AND revealed_at IS NULL
+          AND (reveal_at IS NULL OR reveal_at > unixepoch('now') * 1000)
+          AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
+          AND unixepoch('now') * 1000 < unixepoch(? || 'T' || json_extract(settings_json, '$.deadline') || '+09:00') * 1000
+        ON CONFLICT(game_id, round_date, player_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+        .bind(id, date, user.id, input.value, now.getTime(), id, date, start, start + 86_400_000, date),
+      // Read the amount from that same stored snapshot. Zero rewards create no
+      // forbidden zero ledger entry; reference UNIQUE still deduplicates edits.
+      env.DB.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+        SELECT ?, ?, 'gold', json_extract(settings_json, '$.participationGold'), ?, ?, ?
+        FROM game_rounds WHERE game_id = ? AND round_date = ? AND changes() = 1
+          AND json_extract(settings_json, '$.participationGold') > 0`)
+        .bind(crypto.randomUUID(), user.id, `${identity.title} 참여`, `predict:${id}:${date}:${user.id}`, now.toISOString(), id, date),
     ]);
-    if (writes[1]!.meta.changes === 0) throw new HttpError(409, 'PREDICTION_CLOSED', '정답이 공개되어 예측이 마감됐어요.');
+    if (writes[2]!.meta.changes === 0) await rejectGameWrite(env.DB, id, date, 'PREDICTION_CLOSED', '정답이 공개되었거나 예측이 마감됐어요.');
   } else if (action === 'answer') {
     if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (!author) throw new HttpError(403, 'NOT_AUTHOR', '출제자만 정답을 입력할 수 있어요.');
@@ -405,36 +428,58 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
     if (id === 'luck' && !await env.DB.prepare('SELECT 1 FROM luck_photos WHERE round_date = ?').bind(date).first()) {
       throw new HttpError(400, 'PHOTO_REQUIRED', '증거 사진을 먼저 올려 주세요.');
     }
-    const revealAt = kstTimestamp(date, id === 'luck' ? GAME_RULES.luck.revealTime : input.value);
-    const result = await env.DB.prepare(`INSERT INTO game_rounds (game_id, round_date, answer, hint, reveal_at, updated_at)
-      SELECT ?, ?, ?, ?, ?, ? WHERE (? != 'luck' OR EXISTS (SELECT 1 FROM luck_photos WHERE round_date = ?))
-        AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
-      ON CONFLICT(game_id, round_date) DO UPDATE SET answer = excluded.answer, hint = excluded.hint, reveal_at = excluded.reveal_at, updated_at = excluded.updated_at
-      WHERE game_rounds.revealed_at IS NULL AND (game_rounds.reveal_at IS NULL OR game_rounds.reveal_at > unixepoch('now') * 1000)`)
-      .bind(id, date, input.value, id === 'luck' ? (input.hint ?? '') : '', revealAt, now.getTime(), id, date,
-        kstTimestamp(date, '00:00:00'), kstTimestamp(date, '00:00:00') + 86_400_000).run();
-    if (result.meta.changes === 0) throw new HttpError(409, 'ALREADY_REVEALED', '공개된 정답은 수정할 수 없어요.');
+    // ADMIN_RULES_WRITE_BOUNDARY: answer time and rules are resolved inside SQL.
+    const writes = await env.DB.batch([
+      ...roundSnapshotWrites(env.DB, id, date, now),
+      env.DB.prepare(`UPDATE game_rounds SET answer = ?, hint = ?,
+          reveal_at = unixepoch(? || 'T' || CASE WHEN game_id = 'luck' THEN json_extract(settings_json, '$.revealTime') ELSE ? END || '+09:00') * 1000,
+          updated_at = ?
+        WHERE game_id = ? AND round_date = ? AND json_extract(settings_json, '$.enabled') = 1
+          AND (? != 'luck' OR EXISTS (SELECT 1 FROM luck_photos WHERE round_date = ?))
+          AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
+          AND revealed_at IS NULL AND (reveal_at IS NULL OR reveal_at > unixepoch('now') * 1000)`)
+        .bind(input.value, id === 'luck' ? (input.hint ?? '') : '', date, input.value, now.getTime(), id, date, id, date, start, start + 86_400_000),
+    ]);
+    if (writes[2]!.meta.changes === 0) await rejectGameWrite(env.DB, id, date, 'ALREADY_REVEALED', '공개된 정답은 수정할 수 없어요.');
   } else if (action === 'reveal') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (!author) throw new HttpError(403, 'NOT_AUTHOR', '출제자만 정답을 공개할 수 있어요.');
     if (id === 'wake') throw new HttpError(400, 'WAKE_ACTION_REQUIRED', '기상했어요 버튼으로 정답을 공개해 주세요.');
-    const result = await env.DB.prepare(`UPDATE game_rounds SET revealed_at = ?, updated_at = ? WHERE game_id = ? AND round_date = ? AND answer IS NOT NULL AND revealed_at IS NULL AND (reveal_at IS NULL OR reveal_at > unixepoch('now') * 1000)`)
-      .bind(now.getTime(), now.getTime(), id, date).run();
-    if (result.meta.changes === 0) throw new HttpError(409, 'CANNOT_REVEAL', '정답을 먼저 입력하거나 공개 상태를 확인해 주세요.');
+    // ADMIN_RULES_WRITE_BOUNDARY: reveal cannot create a missing round.
+    const writes = await env.DB.batch([
+      roundSnapshotWrites(env.DB, id, date, now)[1]!,
+      env.DB.prepare(`UPDATE game_rounds SET revealed_at = ?, updated_at = ?
+        WHERE game_id = ? AND round_date = ? AND answer IS NOT NULL AND revealed_at IS NULL
+          AND json_extract(settings_json, '$.enabled') = 1
+          AND (reveal_at IS NULL OR reveal_at > unixepoch('now') * 1000)
+          AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?`)
+        .bind(now.getTime(), now.getTime(), id, date, start, start + 86_400_000),
+    ]);
+    if (writes[1]!.meta.changes === 0) await rejectGameWrite(env.DB, id, date, 'CANNOT_REVEAL', '정답을 먼저 입력하거나 공개 상태를 확인해 주세요.');
   } else if (action === 'wake' && id === 'wake') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
-    if (!author) throw new HttpError(403, 'NOT_AUTHOR', '출제자만 기상 시각을 공개할 수 있어요.');
-    await env.DB.batch([
-      env.DB.prepare('INSERT OR IGNORE INTO game_rounds (game_id, round_date, updated_at) VALUES (?, ?, ?)').bind(id, date, now.getTime()),
-      // The first server timestamp wins, including concurrent presses/retries.
+    if (!author) throw new HttpError(403, 'NOT_AUTHOR', '출제자만 기상 시각을 입력할 수 있어요.');
+    // ADMIN_RULES_WRITE_BOUNDARY: the first server time and its rules win together.
+    const writes = await env.DB.batch([
+      ...roundSnapshotWrites(env.DB, id, date, now),
       env.DB.prepare(`UPDATE game_rounds SET answer = ?, revealed_at = ?, updated_at = ?
-        WHERE game_id = ? AND round_date = ? AND answer IS NULL AND revealed_at IS NULL`)
-        .bind(kstTime(now), now.getTime(), now.getTime(), id, date),
+        WHERE game_id = ? AND round_date = ? AND answer IS NULL AND revealed_at IS NULL
+          AND json_extract(settings_json, '$.enabled') = 1
+          AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?`)
+        .bind(kstTime(now), now.getTime(), now.getTime(), id, date, start, start + 86_400_000),
     ]);
+    if (!writes[2]!.meta.changes) {
+      const answered = await env.DB.prepare('SELECT answer FROM game_rounds WHERE game_id = ? AND round_date = ?').bind(id, date).first<string>('answer');
+      if (answered === null) await rejectGameWrite(env.DB, id, date, 'CANNOT_WAKE', '기상 시각을 저장하지 못했어요. 다시 시도해 주세요.');
+    }
   } else throw new HttpError(404, 'NOT_FOUND', '요청한 게임 기능이 없어요.');
   const refreshedAt = new Date();
   await settlePublishedRounds(env.DB, refreshedAt);
   return json({ game: await readGame(env.DB, user, id, refreshedAt) });
+}
+async function adminState(db: D1Database, now: Date): Promise<AdminState> {
+  const [games, claw, changes] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db)]);
+  return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, serverTime: now.toISOString() };
 }
 async function api(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -448,6 +493,26 @@ async function api(request: Request, env: Env): Promise<Response> {
     return json({ ok: true }, 200, { 'Set-Cookie': cookie(request, '', 0) });
   }
   const user = await requireUser(request, env, now.getTime());
+  if (url.pathname === '/api/admin' || url.pathname.startsWith('/api/admin/')) {
+    if (user.role !== 'admin') throw new HttpError(403, 'ADMIN_ONLY', '운영자만 사용할 수 있어요.');
+    if (url.pathname === '/api/admin' && request.method === 'GET') return json(await adminState(env.DB, now));
+    const gameSettings = /^\/api\/admin\/games\/([^/]+)$/.exec(url.pathname);
+    if (gameSettings && isGameId(gameSettings[1]!)) {
+      if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+      const input = await body(request);
+      if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) throw new HttpError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
+      await saveGameSettings(env.DB, user, gameSettings[1], input, new Date());
+      return json(await adminState(env.DB, new Date()));
+    }
+    if (url.pathname === '/api/admin/claw') {
+      if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+      const input = await body(request);
+      if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) throw new HttpError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
+      await saveAdminClawConfig(env.DB, user, input, new Date());
+      return json(await adminState(env.DB, new Date()));
+    }
+    throw new HttpError(404, 'NOT_FOUND', '요청한 운영 기능이 없어요.');
+  }
   if (url.pathname === '/api/me/password') {
     if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     return changePassword(request, env, user);
@@ -496,7 +561,7 @@ async function api(request: Request, env: Env): Promise<Response> {
   }
   if (url.pathname === '/api/claw/coins' || url.pathname === '/api/claw/play') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
-    if (user.role !== 'player') throw new HttpError(403, 'CANNOT_PLAY', '플레이어만 캐릭터 뽑기에 참여할 수 있어요.');
+    if (url.pathname.endsWith('/coins') && user.role !== 'player') throw new HttpError(403, 'CANNOT_PLAY', '플레이어만 코인을 구매할 수 있어요.');
     const input = await body(request);
     return json(await (url.pathname.endsWith('/coins')
       ? purchaseClawCoins(env.DB, user, input, Date.now())
@@ -559,7 +624,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

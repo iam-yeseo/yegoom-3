@@ -7,6 +7,7 @@ import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ATTENDANCE_RULES, CLAW_RULES, KUJI_RULES } from '../shared/balance';
+import { defaultPredictionRules } from '../shared/game-settings';
 import type { AttendanceClaimResponse, BootstrapResponse, ClawResponse, KujiResponse } from '../shared/types';
 import { hashToken } from '../worker/crypto';
 
@@ -15,7 +16,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventory_ledger', 'shop_purchases',
   'kuji_claims', 'kuji_boards', 'lotto_tickets', 'lotto_draws', 'catchmind_guesses', 'catchmind_requests',
   'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts', 'announcements', 'luck_photos'];
-const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos'];
+const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -69,6 +70,8 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)').bind(await hashToken(token), 'min', now + 86400000, now - 86400000),
       db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES ('admin-session', 'admin', ?, ?)").bind(now + 86400000, now - 86400000),
       db.prepare("UPDATE claw_config SET payout_every = 17, weak_pickup = 39, weak_carry = 21, updated_at = '2026-10-31T07:00:00Z'"),
+      db.prepare("INSERT INTO game_settings (game_id, effective_from, settings_json, created_at, created_by) VALUES ('luck', '2026-11-03', ?, '2026-11-02T00:00:00Z', 'admin')").bind(JSON.stringify({ ...defaultPredictionRules('luck'), participationGold: 125 })),
+      db.prepare("INSERT INTO admin_changes (id, admin_id, target, before_json, after_json, effective_from, created_at) VALUES ('retained-change', 'admin', 'game:luck', ?, ?, '2026-11-03', '2026-11-02T00:00:00Z')").bind(JSON.stringify(defaultPredictionRules('luck')), JSON.stringify({ ...defaultPredictionRules('luck'), participationGold: 125 })),
       db.prepare("UPDATE users SET photo_version = 7 WHERE id = 'min'"),
       db.prepare("INSERT INTO user_photos (user_id, mime, data, updated_at) VALUES ('min', 'image/webp', ?, '2026-11-01T00:00:00Z')").bind(profileBytes),
       db.prepare("INSERT INTO luck_photos (round_date, mime, data, version, updated_at) VALUES ('2026-11-01', 'image/webp', ?, 2, '2026-11-01T00:00:00Z')").bind(profileBytes),

@@ -3,6 +3,7 @@ import { LUCK_PHOTO } from '../shared/profile';
 import type { LuckPhotoResponse, PhotoMetadata } from '../shared/types';
 import { photoResponse, photoVersion, validatePhoto, type PhotoMime } from './photos';
 import { kstDate, kstTimestamp } from './rules';
+import { effectiveRulesSql, rulesBindings, rulesForRound } from './game-settings';
 
 interface Actor { id: string; username: string; role: 'player' | 'admin' }
 interface PhotoRow { mime: PhotoMime; data: ArrayBuffer | Uint8Array | number[]; version: number }
@@ -25,6 +26,7 @@ export async function uploadLuckPhoto(db: D1Database, user: Actor, input: Record
   if (!isAuthor(user)) throw new LuckPhotoError(403, 'NOT_AUTHOR', '출제자만 증거 사진을 올릴 수 있어요.');
   if (!validDate(input.roundDate)) throw new LuckPhotoError(400, 'INVALID_DATE', '사진을 올릴 날짜를 확인해 주세요.');
   if (input.roundDate !== kstDate(now)) throw new LuckPhotoError(409, 'STALE_ROUND', '오늘의 행운 점수 화면에서 다시 올려 주세요.');
+  if (!(await rulesForRound(db, 'luck', input.roundDate)).enabled) throw new LuckPhotoError(409, 'GAME_OFF', '오늘은 이 게임을 쉬어요.');
   const image = validatePhoto(input.image, LUCK_PHOTO);
   const start = kstTimestamp(input.roundDate, '00:00:00');
   // The publication and date checks belong to the same write as the replacement.
@@ -33,17 +35,19 @@ export async function uploadLuckPhoto(db: D1Database, user: Actor, input: Record
     SELECT ?, ?, ?, 1, ? FROM users u
     WHERE u.id = ? AND u.username = ? AND u.role = 'player' AND u.active = 1
       AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
+      AND json_extract(COALESCE((SELECT settings_json FROM game_rounds WHERE game_id = 'luck' AND round_date = ?), ${effectiveRulesSql}), '$.enabled') = 1
       AND NOT EXISTS (SELECT 1 FROM game_rounds r WHERE r.game_id = 'luck' AND r.round_date = ?
         AND (r.revealed_at IS NOT NULL OR (r.answer IS NOT NULL AND r.reveal_at IS NOT NULL AND r.reveal_at <= unixepoch('now') * 1000)))
     ON CONFLICT(round_date) DO UPDATE SET mime = excluded.mime, data = excluded.data,
       version = luck_photos.version + 1, updated_at = excluded.updated_at
     RETURNING version`)
     .bind(input.roundDate, image.mime, image.data, now.toISOString(), user.id, GAME_RULES.luck.author,
-      start, start + 86_400_000, input.roundDate).first<{ version: number }>();
+      start, start + 86_400_000, input.roundDate, ...rulesBindings('luck', input.roundDate), input.roundDate).first<{ version: number }>();
   if (!row) {
     const active = await db.prepare("SELECT 1 FROM users WHERE id = ? AND username = ? AND role = 'player' AND active = 1")
       .bind(user.id, GAME_RULES.luck.author).first();
     if (!active) throw new LuckPhotoError(403, 'NOT_AUTHOR', '활성 출제자만 증거 사진을 올릴 수 있어요.');
+    if (!(await rulesForRound(db, 'luck', input.roundDate)).enabled) throw new LuckPhotoError(409, 'GAME_OFF', '오늘은 이 게임을 쉬어요.');
     throw new LuckPhotoError(409, 'PHOTO_LOCKED', '날짜가 바뀌었거나 정답이 공개되어 사진을 바꿀 수 없어요.');
   }
   return { photo: { url: luckPhotoUrl(input.roundDate, row.version), version: row.version }, serverTime: now.toISOString() };

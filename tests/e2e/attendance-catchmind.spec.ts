@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, type WriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
-import type { BootstrapResponse } from '../../shared/types';
+import type { BootstrapResponse, CatchmindGalleryResponse, CatchmindResponse } from '../../shared/types';
 
 const NOW = '2026-11-02T15:00:00Z'; // First instant of November 3 KST.
 const ORIGIN = 'http://localhost:8791';
@@ -65,6 +65,46 @@ async function capture(page: Page, mode: string, state: string, width: number, i
   await info.attach(`${mode}-${state}-${width}`, { path, contentType: 'image/png' });
 }
 
+
+interface ExpectedRound { number: number; solved: boolean }
+async function expectedGallery(page: Page): Promise<ExpectedRound[]> {
+  const rounds: ExpectedRound[] = [];
+  let before: number | null = null;
+  do {
+    const response = await page.request.get(`${ORIGIN}/api/catchmind/gallery?limit=9${before === null ? '' : `&before=${before}`}`);
+    expect(response.status()).toBe(200);
+    const payload = await response.json() as CatchmindGalleryResponse;
+    expect(payload.rounds.length).toBeLessThanOrEqual(9);
+    rounds.push(...payload.rounds.map(round => ({ number: round.number, solved: round.winner !== null })));
+    if (payload.nextBefore !== null && before !== null) expect(payload.nextBefore).toBeLessThan(before);
+    before = payload.nextBefore;
+  } while (before !== null);
+  expect(rounds.map(round => round.number)).toEqual([...rounds.map(round => round.number)].sort((a, b) => b - a));
+  return rounds;
+}
+
+// Deliberately finish/start a real round before the screenshot cases. A focused
+// run without this test sees round12; the whole suite sees round13 instead.
+test('seventh-day attendance shows 500G with coupons; gallery loads more and survives an ended round', async ({ page }) => {
+  await login(page, 'min');
+  await expect(page.locator('.attendance-card')).toContainText('500G + 로또 1 + 스피또 1');
+  await navigate(page, '/attendance');
+  await expect(page.locator('.attendance-reward')).toContainText('500G + 로또 1 + 스피또 1');
+  await page.getByRole('button', { name: '받기 +500G', exact: true }).click();
+  await expect(page.locator('.fx-toast')).toContainText('500G + 로또 1 + 스피또 1 받았어요');
+  await navigate(page, '/play/catchmind/gallery');
+  await expect(page.locator('.cm-gallery-tile')).toHaveCount(9);
+  await page.getByRole('button', { name: '더 보기', exact: true }).click();
+  await expect(page.locator('.cm-gallery-tile')).toHaveCount(12);
+  const response = await page.request.post(`${ORIGIN}/api/catchmind/end`, { headers: { Origin: ORIGIN }, data: { requestId: crypto.randomUUID(), roundId: 'fixture-gallery-13' } });
+  expect(response.status()).toBe(200);
+  await navigate(page, '/play/catchmind');
+  await expect(page.locator('.pg-result-picture')).toContainText('비공개제시어');
+  await expect(page.getByRole('region', { name: '지난 판' })).toContainText('제 12판');
+  await page.getByRole('button', { name: '다음 그림 그리기', exact: true }).click();
+  await expect(page.getByRole('region', { name: '지난 판' })).toContainText('제 13판');
+});
+
 for (const mode of ['authenticated', 'preview'] as const) for (const width of [390, 560]) {
   test(`${mode} attendance, previous round and gallery at ${width}px`, async ({ page }, info) => {
     test.setTimeout(90000);
@@ -87,74 +127,73 @@ for (const mode of ['authenticated', 'preview'] as const) for (const width of [3
       const view = await (await page.request.get(`${ORIGIN}/api/bootstrap`)).json() as BootstrapResponse;
       expect(view.inventory).toEqual({ lottoTickets: 3, speettoTickets: 3 });
     }
+    // Finished rounds may have been added by earlier real-game tests. Compare
+    // the UI with this authenticated user's current state and gallery sequence,
+    // rather than treating fixture round12 as the permanent latest round.
+    const current = preview ? null : await (await page.request.get(`${ORIGIN}/api/catchmind`)).json() as CatchmindResponse;
+    const rounds = preview ? Array.from({ length: 12 }, (_, index) => ({ number: 12 - index, solved: (12 - index) % 3 === 0 })) : await expectedGallery(page);
+    const previousRound = current?.catchmind.previousRound;
+    if (!preview) expect(previousRound).toBeTruthy();
+    const previousNumber = previousRound?.number ?? 12;
+    const older = rounds[rounds.findIndex(round => round.number === previousNumber) + 1];
+    expect(older).toBeDefined();
     await navigate(page, `${prefix}/play/catchmind`);
     const previous = page.getByRole('region', { name: '지난 판', exact: true });
-    await expect(previous).toContainText('제 12판');
-    if (!preview) {
-      await expect(previous).toContainText('그리는 민');
-      await expect(previous.locator('img[src*="/api/users/e2e-min/photo"]')).toBeVisible();
-      await expect(page.locator('.pg-catchmind')).not.toContainText('비공개제시어');
+    await expect(previous).toContainText(`제 ${previousNumber}판`);
+    if (previousRound) {
+      await expect(previous).toContainText(previousRound.drawer.displayName);
+      if (previousRound.drawer.photoVersion !== null) {
+        await expect(previous.locator(`img[src="/api/users/${previousRound.drawer.id}/photo?v=${previousRound.drawer.photoVersion}"]`)).toBeVisible();
+      }
+      const active = current!.catchmind.round;
+      // These viewers do not own the current draft: its answer remains private,
+      // even when the previous public answer happens to use the same text.
+      if (active && active.status !== 'ended') expect(active.word).toBeNull();
     }
     await capture(page, mode, 'previous-round', width, info);
-    await previous.getByRole('button', { name: '지난 판 제 12판 크게 보기' }).click();
-    await expect(page.getByRole('dialog', { name: '제 12판', exact: true })).toBeVisible();
+    const previousButton = previous.getByRole('button', { name: `지난 판 제 ${previousNumber}판 크게 보기` });
+    await previousButton.click();
+    await expect(page.getByRole('dialog', { name: `제 ${previousNumber}판`, exact: true })).toBeVisible();
+    // Opening the picture and loading its gallery neighbours are separate reads.
+    await expect(page.getByRole('button', { name: '이전 판', exact: true })).toBeEnabled();
     await page.keyboard.press('ArrowLeft');
-    await expect(page.getByRole('dialog')).toHaveAccessibleName('제 11판');
-    await expect(page.getByRole('dialog')).toContainText('아무도 못 맞혔어요');
+    await expect(page.getByRole('dialog')).toHaveAccessibleName(`제 ${older.number}판`);
+    if (!older.solved) await expect(page.getByRole('dialog')).toContainText('아무도 못 맞혔어요');
+    else await expect(page.getByRole('dialog')).not.toContainText('아무도 못 맞혔어요');
     await page.keyboard.press('ArrowRight');
-    await expect(page.getByRole('dialog')).toHaveAccessibleName('제 12판');
+    await expect(page.getByRole('dialog')).toHaveAccessibleName(`제 ${previousNumber}판`);
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await expect(previous.getByRole('button', { name: '지난 판 제 12판 크게 보기' })).toBeFocused();
+    await expect(previousButton).toBeFocused();
     await previous.getByRole('link', { name: '갤러리 보기' }).click();
     await expect(page).toHaveURL(new RegExp(`${prefix}/play/catchmind/gallery$`));
     await expect(page.locator('.cm-gallery-tile')).toHaveCount(9);
     expect(await page.locator('.cm-gallery-tile').evaluateAll(tiles => tiles.slice(0, 3).every(tile => tile.getBoundingClientRect().top === tiles[0].getBoundingClientRect().top) && tiles[3].getBoundingClientRect().top > tiles[0].getBoundingClientRect().top)).toBe(true);
-    await expect(page.locator('.cm-gallery-tile').first()).toHaveAccessibleName('12판 · 맞힌 판 크게 보기');
+    await expect(page.locator('.cm-gallery-tile').first()).toHaveAccessibleName(`${rounds[0].number}판 · ${rounds[0].solved ? '맞힌 판' : '못 맞힌 판'} 크게 보기`);
     await expect(page.locator('.cm-gallery-tile img').first()).toHaveAttribute('loading', 'lazy');
     await capture(page, mode, 'gallery', width, info);
     await page.locator('.cm-gallery-tile').first().click();
     await capture(page, mode, 'gallery-modal', width, info);
     await page.getByRole('button', { name: '닫기', exact: true }).click();
     await page.locator('.cm-gallery-tile').last().click();
-    await expect(page.getByRole('dialog')).toHaveAccessibleName('제 4판');
+    await expect(page.getByRole('dialog')).toHaveAccessibleName(`제 ${rounds[8].number}판`);
     await page.getByRole('button', { name: '이전 판', exact: true }).click();
-    await expect(page.getByRole('dialog')).toHaveAccessibleName('제 3판');
+    await expect(page.getByRole('dialog')).toHaveAccessibleName(`제 ${rounds[9].number}판`);
     await expect(page.getByRole('button', { name: '이전 판', exact: true })).toBeFocused();
-    await page.keyboard.press('ArrowLeft');
-    await expect(page.getByRole('dialog')).toHaveAccessibleName('제 2판');
-    await page.keyboard.press('ArrowLeft');
-    await expect(page.getByRole('dialog')).toHaveAccessibleName('제 1판');
+    for (const round of rounds.slice(10)) {
+      await page.keyboard.press('ArrowLeft');
+      await expect(page.getByRole('dialog')).toHaveAccessibleName(`제 ${round.number}판`);
+    }
     await expect(page.getByRole('button', { name: '이전 판', exact: true })).toBeDisabled();
     await page.keyboard.press('ArrowRight');
-    await expect(page.getByRole('dialog')).toHaveAccessibleName('제 2판');
+    await expect(page.getByRole('dialog')).toHaveAccessibleName(`제 ${rounds[rounds.length - 2].number}판`);
     await page.mouse.click(2, 2);
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await expect(page.locator('.cm-gallery-tile')).toHaveCount(12);
+    await expect(page.locator('.cm-gallery-tile')).toHaveCount(rounds.length);
     await expect(page.getByRole('button', { name: '더 보기', exact: true })).toHaveCount(0);
     if (preview) expect(apiRequests).toEqual([]);
   });
 }
-
-test('seventh-day attendance shows 500G with coupons; gallery loads more and survives an ended round', async ({ page }) => {
-  await login(page, 'min');
-  await expect(page.locator('.attendance-card')).toContainText('500G + 로또 1 + 스피또 1');
-  await navigate(page, '/attendance');
-  await expect(page.locator('.attendance-reward')).toContainText('500G + 로또 1 + 스피또 1');
-  await page.getByRole('button', { name: '받기 +500G', exact: true }).click();
-  await expect(page.locator('.fx-toast')).toContainText('500G + 로또 1 + 스피또 1 받았어요');
-  await navigate(page, '/play/catchmind/gallery');
-  await expect(page.locator('.cm-gallery-tile')).toHaveCount(9);
-  await page.getByRole('button', { name: '더 보기', exact: true }).click();
-  await expect(page.locator('.cm-gallery-tile')).toHaveCount(12);
-  const response = await page.request.post(`${ORIGIN}/api/catchmind/end`, { headers: { Origin: ORIGIN }, data: { requestId: crypto.randomUUID(), roundId: 'fixture-gallery-13' } });
-  expect(response.status()).toBe(200);
-  await navigate(page, '/play/catchmind');
-  await expect(page.locator('.pg-result-picture')).toContainText('비공개제시어');
-  await expect(page.getByRole('region', { name: '지난 판' })).toContainText('제 12판');
-  await page.getByRole('button', { name: '다음 그림 그리기', exact: true }).click();
-  await expect(page.getByRole('region', { name: '지난 판' })).toContainText('제 13판');
-});
 
 test('gallery empty, request failure and retry states remain usable', async ({ page }) => {
   await login(page, 'admin');

@@ -37,6 +37,7 @@ export class ClawController {
   private frameId = 0;
   private alive = true;
   private insertion = 0;
+  private forceStrong = false;
   private result: ClawResult | null = null;
   private replayMessage = "";
   private descent: { board: Board; x: number; bottom: number; stop: boolean; version: number } | null = null;
@@ -69,8 +70,8 @@ export class ClawController {
   private notify() {
     if (!this.alive) return;
     const client = this.client();
-    const status = this.mode === "idle" ? this.state?.isAdmin ? "운영자는 기계를 구경할 수 있어요. 코인 구매와 플레이는 할 수 없어요."
-      : client.pendingPlay ? "같은 시도의 결과를 다시 확인해 주세요. 코인은 중복 사용되지 않아요."
+    const status = this.mode === "idle" ? client.pendingPlay ? "같은 시도의 결과를 다시 확인해 주세요. 코인은 중복 사용되지 않아요."
+      : this.state?.isAdmin ? "운영자 테스트는 코인 없이 이용해요. 점수와 골드 보상은 없어요."
       : this.state && this.state.coins < 1 ? "코인이 모두 떨어졌어요. 다음 충전을 기다리거나 코인을 살 수 있어요." : this.status : this.status;
     this.update({ mode: this.mode, status, timer: this.mode === "ready" ? Math.max(0, Math.ceil((this.deadline - performance.now()) / 1000)) : CLAW_RULES.controlDurationMs / 1000,
       x: this.scene.claw.x, dolls: this.scene.view.dolls.length + Number(Boolean(this.scene.view.held)), muted: this.sound.muted,
@@ -96,12 +97,13 @@ export class ClawController {
   }
   primary() {
     const client = this.client();
-    if (client.busy || client.pendingPurchase || this.state?.isAdmin) return;
+    if (client.busy || client.pendingPurchase) return;
     if (this.mode === "descending" && this.descent) { this.descent.stop = true; this.sound.clack(); return; }
     if (this.mode === "ready") { this.startDescent(); return; }
     if (this.mode !== "idle") return;
     if (client.pendingPlay) { this.sound.activate(); void this.submit(null, client.pendingPlay.board); return; }
-    if (!this.state || this.state.coins < 1 || this.state.nextPlayAt > this.now() || client.loading) return;
+    if (!this.state || (!this.state.isAdmin && this.state.coins < 1) || this.state.nextPlayAt > this.now() || client.loading) return;
+    this.forceStrong = Boolean(this.state.isAdmin && client.forceStrong);
     this.deadline = performance.now() + CLAW_RULES.controlDurationMs;
     this.lastTick = CLAW_RULES.controlDurationMs / 1000;
     this.replayMessage = "";
@@ -135,7 +137,7 @@ export class ClawController {
       try {
         const sim = simulateAttempt(board, { x: result.x, stop: result.stop, pickup: result.grip.pickup, carry: result.grip.carry }, { record: true });
         const consistent = result.engine === CLAW_RULES.engine && sim.reason === result.reason && sameIds(sim.prizes, result.prizes)
-          && (Boolean(result.clearBonus) || JSON.stringify(sim.board) === JSON.stringify(response.board));
+          && ((result.cleared ?? Boolean(result.clearBonus)) || JSON.stringify(sim.board) === JSON.stringify(response.board));
         if (!consistent || !sim.frames) throw new Error("뽑기 재생이 서버 결과와 달라 결과만 보여 줘요.");
         const index = Math.max(0, sim.frames.findIndex(frame => frame.phase !== "descend"));
         this.replay = { frames: sim.frames, index, playhead: index, previous: null, last: performance.now(), result };
@@ -214,7 +216,7 @@ export class ClawController {
         const stop = claw.y < descent.bottom ? Number(claw.y.toFixed(2)) : null;
         if (stop !== null) claw.y = stop;
         this.sound.motor(null); this.descent = null;
-        void this.submit({ requestId: crypto.randomUUID(), version: descent.version, x: descent.x, stop }, descent.board);
+        void this.submit({ requestId: crypto.randomUUID(), version: descent.version, x: descent.x, stop, ...(this.state?.isAdmin ? { forceStrong: this.forceStrong } : {}) }, descent.board);
       }
     }
     if (this.mode === "playing" && this.replay) {

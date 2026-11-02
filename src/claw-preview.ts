@@ -1,4 +1,5 @@
 import { CLAW_RULES } from '../shared/balance';
+import type { AdminClawConfig } from '../shared/admin';
 import { CLAW, MACHINE, createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
 import type { ClawCoinInput, ClawPlayInput, ClawResponse, ClawResult, ClawSummary, LedgerEntry } from '../shared/types';
 
@@ -16,10 +17,12 @@ export function previewClawSummary(now = Date.now()): ClawSummary {
 }
 
 /** One offline visit owns its machine, wallet and receipts. Nothing is persisted
- * or uploaded. Preview grip is sampled locally for demonstration; it has no
- * payout counter and does not import or reproduce the private server settings. */
-export function createClawPreview() {
-  let freeCoins: number = CLAW_RULES.freeCoins;
+ * or uploaded. Player preview grip is sampled independently of server settings;
+ * an explicitly selected admin preview uses only that visit's editable config. */
+export function createClawPreview(options: { admin?: boolean; getConfig?: () => AdminClawConfig | undefined } = {}) {
+  const admin = Boolean(options.admin);
+  let powerCounter = 0;
+  let freeCoins: number = admin ? 0 : CLAW_RULES.freeCoins;
   let purchasedCoins = 0;
   let lastGrantSlot = coinSlot(Date.now());
   let generation = 1;
@@ -34,12 +37,12 @@ export function createClawPreview() {
 
   function grant(now: number) {
     const slot = coinSlot(now);
-    if (slot > lastGrantSlot) { freeCoins = CLAW_RULES.freeCoins; lastGrantSlot = slot; }
+    if (!admin && slot > lastGrantSlot) { freeCoins = CLAW_RULES.freeCoins; lastGrantSlot = slot; }
   }
   function summary(now = Date.now()): ClawSummary {
     grant(now);
     return { coins: freeCoins + purchasedCoins, freeCoins, purchasedCoins,
-      nextGrantAt: nextGrantAt(now), serverNow: now, isAdmin: false };
+      nextGrantAt: nextGrantAt(now), serverNow: now, isAdmin: admin };
   }
   function state(now: number): ClawResponse {
     const wallet = summary(now);
@@ -55,6 +58,7 @@ export function createClawPreview() {
   function read(): ClawResponse { return state(Date.now()); }
 
   function buy(input: ClawCoinInput, availableGold: number): ClawResponse {
+    if (admin) throw new Error('운영자 테스트는 코인을 구매하지 않아요.');
     if (!validRequest(input.requestId)) throw new Error('구매 요청 번호를 확인해 주세요.');
     if (!CLAW_RULES.purchaseQuantities.includes(input.quantity)) throw new Error('코인은 1개 또는 5개씩 살 수 있어요.');
     const now = Date.now();
@@ -74,6 +78,7 @@ export function createClawPreview() {
   }
 
   function play(input: ClawPlayInput): ClawResponse {
+    if (!admin && input.forceStrong !== undefined) throw new Error('운영자만 강집게 테스트를 할 수 있어요.');
     if (!validRequest(input.requestId)) throw new Error('플레이 요청 번호를 확인해 주세요.');
     if (!Number.isSafeInteger(input.version) || input.version < 0) throw new Error('기계 상태를 다시 확인해 주세요.');
     if (!Number.isFinite(input.x) || input.x < MACHINE.clawMin || input.x > MACHINE.clawMax) throw new Error('집게 위치가 올바르지 않아요.');
@@ -81,41 +86,48 @@ export function createClawPreview() {
     const now = Date.now();
     grant(now);
     const stop = input.stop == null ? null : Number(input.stop.toFixed(2));
-    const payload = JSON.stringify({ version: input.version, x: input.x, stop });
+    const payload = JSON.stringify({ version: input.version, x: input.x, stop, forceStrong: input.forceStrong === true });
     const old = plays.get(input.requestId);
     if (old) {
       if (old.payload !== payload) throw new Error('다른 플레이에 사용한 요청 번호예요.');
       return { ...state(now), result: structuredClone(old.result), replayed: true };
     }
     if (input.version !== version) throw new Error('기계 상태가 바뀌었어요. 다시 확인해 주세요.');
-    if (freeCoins + purchasedCoins < 1) throw new Error('코인이 부족해요. 다음 충전을 기다려 주세요.');
+    if (!admin && freeCoins + purchasedCoins < 1) throw new Error('코인이 부족해요. 다음 충전을 기다려 주세요.');
     if (nextPlayAt > now) throw new Error('집게가 아직 움직이고 있어요. 잠시 기다려 주세요.');
     board ??= createBoard(generation, randomSeed());
-    // Independent demo draws, without a server payout cadence or hidden config.
-    const strong = randomUnit() < .5;
-    const grip = strong ? { pickup: 1, carry: 1, strong } : { pickup: randomUnit(), carry: randomUnit(), strong };
+    // Player demos never read the private server payout cadence or config.
+    const config = admin ? options.getConfig?.() : undefined;
+    const strong = admin && input.forceStrong === true || (config ? powerCounter + 1 >= config.payoutEvery : randomUnit() < .5);
+    const jitter = (power: number) => Number((power * (.9 + randomUnit() * .2)).toFixed(3));
+    const grip = strong ? { pickup: 1, carry: 1, strong } : config
+      ? { pickup: jitter(config.weakPickup), carry: jitter(config.weakCarry), strong }
+      : { pickup: randomUnit(), carry: randomUnit(), strong };
     const simulation = simulateAttempt(board, { x: input.x, stop, pickup: grip.pickup, carry: grip.carry });
     const count = simulation.prizes.length;
     const cleared = count > 0 && simulation.board.length === 0;
-    const clearBonus = cleared ? CLAW_RULES.clearScore : 0;
-    const clearGold = cleared ? CLAW_RULES.clearGold : 0;
+    const clearBonus = !admin && cleared ? CLAW_RULES.clearScore : 0;
+    const clearGold = !admin && cleared ? CLAW_RULES.clearGold : 0;
     const nextGeneration = generation + (cleared ? 1 : 0);
     const nextBoard = cleared ? createBoard(nextGeneration, randomSeed()) : simulation.board;
     const playId = `preview-${input.requestId}`;
     const result: ClawResult = {
       requestId: input.requestId, playId, engine: CLAW_RULES.engine, x: input.x, stop, grip,
       caught: count > 0, prizes: simulation.prizes, doll: simulation.prizes[0] ?? null, target: simulation.target,
-      points: count * CLAW_RULES.dollScore + clearBonus, gold: count * CLAW_RULES.dollGold + clearGold,
-      clearBonus, clearGold, released: simulation.released, reason: simulation.reason,
+      points: admin ? 0 : count * CLAW_RULES.dollScore + clearBonus, gold: admin ? 0 : count * CLAW_RULES.dollGold + clearGold,
+      clearBonus, clearGold, cleared, released: simulation.released, reason: simulation.reason,
     };
-    if (freeCoins > 0) freeCoins -= 1;
-    else purchasedCoins -= 1;
+    if (!admin) {
+      if (freeCoins > 0) freeCoins -= 1;
+      else purchasedCoins -= 1;
+    }
+    powerCounter = strong || count > 0 ? 0 : powerCounter + 1;
     board = nextBoard;
     generation = nextGeneration;
     version += 1;
     nextPlayAt = now + CLAW_RULES.playDurationMs;
-    record('score', count * CLAW_RULES.dollScore, '캐릭터 뽑기 인형 보상', `claw:doll:${playId}`, now);
-    record('gold', count * CLAW_RULES.dollGold, '캐릭터 뽑기 인형 보상', `claw:doll:${playId}`, now);
+    if (!admin) record('score', count * CLAW_RULES.dollScore, '캐릭터 뽑기 인형 보상', `claw:doll:${playId}`, now);
+    if (!admin) record('gold', count * CLAW_RULES.dollGold, '캐릭터 뽑기 인형 보상', `claw:doll:${playId}`, now);
     record('score', clearBonus, '캐릭터 뽑기 클리어 보너스', `claw:clear:${playId}`, now);
     record('gold', clearGold, '캐릭터 뽑기 클리어 보너스', `claw:clear:${playId}`, now);
     plays.set(input.requestId, { payload, result });
