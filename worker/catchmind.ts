@@ -1,7 +1,7 @@
 import { CATCHMIND_RULES } from '../shared/balance';
 import { CATCHMIND_WORDS } from '../shared/catchmind-words';
 import { defaultCharacter, type ArtKey } from '../shared/characters';
-import type { CatchmindAction, CatchmindPlayer, CatchmindResponse, CatchmindState, CatchmindSummary } from '../shared/types';
+import type { CatchmindAction, CatchmindGalleryResponse, CatchmindPlayer, CatchmindResponse, CatchmindState, CatchmindSummary } from '../shared/types';
 import { hashToken } from './crypto';
 import { kstDate, kstTimestamp, weekStart } from './rules';
 import { randomInt } from './shop';
@@ -114,6 +114,22 @@ async function board(db: D1Database): Promise<{ turn: TurnRow; round: RoundRow |
     .first<RoundRow & { next_drawer_id: string | null; current_round_id: string | null }>();
   return { turn: { drawer_id: row?.next_drawer_id ?? null, round_id: row?.current_round_id ?? null }, round: row?.id ? row : null };
 }
+export async function readCatchmindGallery(db: D1Database, before = Number.MAX_SAFE_INTEGER, limit: number = CATCHMIND_RULES.galleryPageSize): Promise<CatchmindGalleryResponse> {
+  // Seek pagination uses (status, number). Never select image or private prompt
+  // history: thumbnails and the modal use the existing immutable image route.
+  const { results } = await db.prepare(`SELECT id, number, drawer_id, word, winner_id, end_reason, ended_at
+    FROM catchmind_rounds WHERE status = 'ended' AND number < ? ORDER BY number DESC LIMIT ?`)
+    .bind(before, limit + 1).all<Pick<RoundRow, 'id' | 'number' | 'drawer_id' | 'word' | 'winner_id' | 'end_reason' | 'ended_at'>>();
+  const page = results.slice(0, limit);
+  const people = new Map(await Promise.all([...new Set(page.flatMap(row => [row.drawer_id, row.winner_id]).filter((id): id is string => Boolean(id)))]
+    .map(async id => [id, (await player(db, id))!] as const)));
+  return {
+    rounds: page.map(row => ({ id: row.id, number: row.number, drawer: people.get(row.drawer_id)!, answer: row.word,
+      winner: row.winner_id ? people.get(row.winner_id)! : null, endReason: row.end_reason!, endedAt: row.ended_at!,
+      image: `/api/catchmind/rounds/${encodeURIComponent(row.id)}/image` })),
+    nextBefore: results.length > limit ? page[page.length - 1]!.number : null,
+  };
+}
 export async function readCatchmindImage(db: D1Database, user: Actor, roundId: string): Promise<Response> {
   const round = await db.prepare('SELECT status, drawer_id, image IS NOT NULL AS has_image FROM catchmind_rounds WHERE id = ?')
     .bind(roundId).first<Pick<RoundRow, 'status' | 'drawer_id' | 'has_image'>>();
@@ -154,6 +170,7 @@ async function readState(db: D1Database, user: Actor): Promise<CatchmindState> {
   const letters = round ? Array.from(round.normalized_word) : [];
   return {
     turn: next,
+    previousRound: (await readCatchmindGallery(db, round?.number, 1)).rounds[0] ?? null,
     round: round ? { id: round.id, number: round.number, status: round.status, drawer: drawer!, word: author || round.status === 'ended' ? round.word : null,
       wordVersion: round.rerolls, rerollsLeft: CATCHMIND_RULES.rerolls - round.rerolls,
       image: round.has_image && (round.status !== 'draft' || author) ? `/api/catchmind/rounds/${encodeURIComponent(round.id)}/image` : null,

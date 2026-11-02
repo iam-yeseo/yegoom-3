@@ -569,7 +569,7 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await page.goto('/#/preview');
   await expect(page.locator('.room-top .gold')).toContainText((beforeGold - 500).toLocaleString('ko-KR'));
   const attendance = page.locator('.attendance-card');
-  const reward = Number((await attendance.locator('.attendance-title small').innerText()).match(/\+(\d+)G/)![1]);
+  const reward = Number((await attendance.locator('.attendance-title small').innerText()).match(/(\d+)G/)![1]);
   await attendance.getByRole('button', { name: '받기', exact: true }).click();
   await expect(attendance.locator('.attendance-summary')).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('.room-top .gold')).toContainText((beforeGold - 500 + reward).toLocaleString('ko-KR'));

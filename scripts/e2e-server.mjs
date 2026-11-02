@@ -132,6 +132,26 @@ if (process.env.E2E_PROFILE === 'launch-b') {
     statements.push(`INSERT INTO luck_photos (round_date, mime, data, version, updated_at) VALUES ('${date}', 'image/webp', X'${historicalPhoto}', 1, '${date}T00:00:00.000Z');`);
   }
 }
+if (process.env.E2E_PROFILE === 'attendance-catchmind') {
+  // November 3 gallery/attendance fixtures are isolated from baseline and launch tests.
+  for (const [username, name] of [['min', '그리는 민'], ['siwon', '시원'], ['yeseo', '예서']]) {
+    statements.push(`UPDATE users SET display_name = '${name}' WHERE username = '${username}';`);
+  }
+  const photo = readFileSync('public/claw/dolls/doll-1.webp').toString('hex');
+  statements.push(`UPDATE users SET photo_version = 1 WHERE id = 'e2e-min';`);
+  statements.push(`INSERT INTO user_photos (user_id, mime, data, updated_at) VALUES ('e2e-min', 'image/webp', X'${photo}', '2026-11-02T00:00:00Z');`);
+  statements.push(`INSERT INTO attendance (user_id, date, streak, created_at) VALUES ('e2e-min', '2026-11-02', 6, '2026-11-02T00:00:00Z');`);
+  for (let number = 1; number <= 13; number++) {
+    const image = `data:image/webp;base64,${readFileSync(`public/claw/dolls/doll-${number % 11 + 1}.webp`).toString('base64')}`;
+    const ended = number < 13;
+    const solved = number % 3 === 0;
+    const time = new Date(timestamp - (14 - number) * 3600000).toISOString();
+    statements.push(`INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, image, winner_id, end_reason, published_at, ended_at, created_at)
+      VALUES ('fixture-gallery-${number}', ${number}, 'e2e-min', '${ended ? '인형' : '비공개제시어'}', '${ended ? '인형' : '비공개제시어'}', '[]', '${ended ? 'ended' : 'open'}', '${image}',
+      ${ended && solved ? "'e2e-siwon'" : 'NULL'}, ${ended ? solved ? "'correct'" : "'misses'" : 'NULL'}, '${time}', ${ended ? `'${time}'` : 'NULL'}, '${time}');`);
+  }
+  statements.push(`UPDATE catchmind_turn SET drawer_id = 'e2e-min', round_id = 'fixture-gallery-13' WHERE id = 1;`);
+}
 const seedPath = `${state}/users.sql`;
 writeFileSync(seedPath, statements.join('\n'), { mode: 0o600 });
 try { run(['d1', 'execute', 'DB', '--local', '--persist-to', state, '--file', seedPath, '--yes']); }

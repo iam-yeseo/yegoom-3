@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ATTENDANCE_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, attendanceRewardLabel } from "../../shared/balance";
 import { useAttendance } from "../attendance";
 import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import { Chevron, Coin, Gold, Toolbar } from "../components/UI";
@@ -58,7 +58,7 @@ export function Attendance({ attendanceKey, gold, onBack }: {
       if (result.awarded) {
         await new Promise<void>(resolve => coinFly(button, root.current?.querySelector(".game-toolbar .gold"), resolve));
         if (!mounted.current) return;
-        toast(`+${result.attendance.reward}G 받았어요`);
+        toast(`+${attendanceRewardLabel(result.attendance.reward, result.attendance.today)} 받았어요`);
         await waitForAttendanceEffects(root.current);
       } else toast("오늘 출석은 이미 완료했어요");
     } catch (e) {
@@ -102,6 +102,7 @@ export function Attendance({ attendanceKey, gold, onBack }: {
       {gift.available && !busy && <button className="attendance-gift-button" type="button" onClick={gift.openGift}>선물 받기</button>}
       <section className="card streak-card">
         <div className="card-head"><h2>{cycleDay}일째</h2><span>{ATTENDANCE_RULES.cycleLength}일째 +{ATTENDANCE_RULES.cycleGold}G</span></div>
+        <p className="attendance-reward">오늘의 보상 · {attendanceRewardLabel(reward, today)}{claimed ? " 받음" : ""}</p>
         <div className="streak-path" aria-label={`${ATTENDANCE_RULES.cycleLength}일 출석 진행`}>
           <svg viewBox="0 0 322 214" aria-hidden="true">
             <path d="M30 52H262A52 52 0 0 1 262 156H30" fill="none" stroke="#F1ECE6" strokeWidth="10" strokeLinecap="round" />

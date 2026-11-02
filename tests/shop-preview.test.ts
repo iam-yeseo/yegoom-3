@@ -5,6 +5,22 @@ import { createShopPreview } from '../src/shop-preview';
 afterEach(() => vi.useRealTimers());
 
 describe('combined attendance and shop preview cash', () => {
+  it('adds attendance coupons from November 3 once without replacing purchases or launch gifts', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-02T00:00:00Z'));
+    const engine = createShopPreview(0, 100, '2026-11-02');
+    expect(engine.read().inventory).toEqual({ lottoTickets: 2, speettoTickets: 2 });
+    engine.claimLaunchGift();
+    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 7 });
+    vi.setSystemTime(new Date('2026-11-02T15:00:00Z'));
+    engine.setAttendanceBonus(0, '2026-11-03');
+    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 7 });
+    engine.setAttendanceBonus(500, '2026-11-03');
+    engine.buyLotto({ requestId: 'use-attendance-ticket', numbers: [1, 2, 3, 4, 5], payment: 'ticket' });
+    engine.setAttendanceBonus(500, '2026-11-03');
+    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 8 });
+    expect(createShopPreview(0, 100, '2026-11-03').read().inventory).toEqual({ lottoTickets: 3, speettoTickets: 3 });
+  });
   it('makes a Catchmind award spendable without replaying it or undoing prior purchases', () => {
     const engine = createShopPreview(LOTTO_RULES.price * 2 - CATCHMIND_RULES.gold);
     const buy = (requestId: string) => engine.buyLotto({ requestId, numbers: [1, 2, 3, 4, 5], payment: 'gold' });
