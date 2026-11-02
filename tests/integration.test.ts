@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { hashPassword, hashToken } from '../worker/crypto';
+import { hashPassword, hashToken, verifyPassword } from '../worker/crypto';
+import { PASSWORD_RULES } from '../shared/password';
 import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
 import { getClawState, getClawSummary, playClaw } from '../worker/claw';
 import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
@@ -109,6 +110,22 @@ export default {
     return new Response(response.body, { status: response.status, headers });
   }
 };`;
+}
+
+/** Count actual KDF calls in the isolated test artifact; no production diagnostics. */
+function workerWithPasswordMetrics(script: string): string {
+  const signature = /async function hashPassword\([^\n]+\) \{/;
+  const exported = /export\s*\{\s*(\w+)\s+as\s+default\s*\};?\s*$/;
+  const match = script.match(exported);
+  if (!match || !signature.test(script)) throw new Error('Password instrumentation target was not found');
+  return `let testKdfCalls = 0;\n${script.replace(signature, value => `${value} testKdfCalls++;`).replace(exported, '')}
+    export default { async fetch(request, env, context) {
+      testKdfCalls = 0;
+      const response = await ${match[1]}.fetch(request, env, context);
+      const headers = new Headers(response.headers);
+      headers.set('X-Test-Kdf-Calls', String(testKdfCalls));
+      return new Response(response.body, { status: response.status, headers });
+    } };`;
 }
 
 function runtime(script: string, persistence?: string) {
@@ -281,6 +298,185 @@ describe('Worker and D1 integration', () => {
   });
 
   afterAll(async () => { await worker?.dispose(); });
+
+  describe('self-service password changes', () => {
+    const nextPassword = 'new-test-password-2026!';
+    const bucketFor = (userId = 'min') => hashToken(`password:${userId}`);
+    const change = (cookie: string, newPassword: unknown = nextPassword, currentPassword: unknown = PASSWORD, instance?: Miniflare) =>
+      request('/api/me/password', { method: 'PUT', cookie, body: { currentPassword, newPassword }, instance });
+    const signIn = (password: string, username = 'min', instance?: Miniflare) =>
+      request('/api/auth/login', { method: 'POST', body: { username, password }, instance });
+
+    it('records a wrong current password without logging out or disclosing either password', async () => {
+      const { cookie } = await login('min');
+      const wrong = 'incorrect-password-2026';
+      const response = await change(cookie, nextPassword, wrong);
+      expect(response.status).toBe(400);
+      const body = await response.text();
+      expect(body).toContain('CURRENT_PASSWORD_INCORRECT');
+      for (const secret of [wrong, nextPassword, passwordHash]) expect(body).not.toContain(secret);
+      expect(await db.prepare('SELECT attempts FROM login_attempts WHERE bucket = ?').bind(await bucketFor()).first('attempts')).toBe(1);
+      expect((await request('/api/auth/me', { cookie })).status).toBe(200);
+      expect(response.headers.get('set-cookie')).toBeNull();
+    });
+
+    it('blocks the eleventh attempt for 15 minutes without extending the window or locking another user', async () => {
+      const { cookie } = await login('min');
+      for (let i = 0; i < PASSWORD_RULES.attempts; i++) expect((await change(cookie, nextPassword, 'incorrect-password')).status).toBe(400);
+      const blocked = await change(cookie);
+      expect(blocked.status).toBe(429);
+      expect(blocked.headers.get('retry-after')).toBe('900');
+      const bucket = await bucketFor();
+      const expiry = Date.parse(`${TODAY}T00:00:00Z`) + PASSWORD_RULES.windowMs;
+      expect(await db.prepare('SELECT attempts, expires_at FROM login_attempts WHERE bucket = ?').bind(bucket).first()).toEqual({ attempts: 11, expires_at: expiry });
+      expect((await change((await login('siwon')).cookie)).status).toBe(200);
+      // The exact expiry boundary permits a fresh window; one ms before does not.
+      await db.prepare('UPDATE login_attempts SET expires_at = ? WHERE bucket = ?').bind(expiry - PASSWORD_RULES.windowMs + 1, bucket).run();
+      expect((await change(cookie)).status).toBe(429);
+      await db.prepare('UPDATE login_attempts SET expires_at = ? WHERE bucket = ?').bind(expiry - PASSWORD_RULES.windowMs, bucket).run();
+      expect((await change(cookie)).status).toBe(200);
+      expect(await db.prepare('SELECT attempts FROM login_attempts WHERE bucket = ?').bind(bucket).first()).toBeNull();
+    });
+
+    it.each(['', 'a'.repeat(11), 'a'.repeat(129), null, 42])('rejects invalid new password case %# without changing sessions', async newPassword => {
+      const { cookie } = await login('min');
+      expect((await change(cookie, newPassword)).status).toBe(400);
+      expect((await request('/api/auth/me', { cookie })).status).toBe(200);
+      expect(await db.prepare('SELECT attempts FROM login_attempts WHERE bucket = ?').bind(await bucketFor()).first()).toBeNull();
+    });
+
+    it.each(['a'.repeat(12), '한'.repeat(128), '  exact-password  '])('accepts password length boundaries and preserves whitespace case %#', async newPassword => {
+      const { cookie } = await login('min');
+      expect((await change(cookie, newPassword)).status).toBe(200);
+      expect((await signIn(newPassword)).status).toBe(200);
+    });
+
+    it('rejects unchanged passwords and oversized bodies before consuming a verification slot', async () => {
+      const { cookie } = await login('min');
+      const unchanged = await change(cookie, PASSWORD);
+      expect(unchanged.status).toBe(400);
+      expect((await unchanged.json() as { error: { code: string } }).error.code).toBe('PASSWORD_UNCHANGED');
+      expect((await change(cookie, nextPassword, 'x'.repeat(129))).status).toBe(400);
+      expect((await request('/api/me/password', { method: 'PUT', cookie,
+        body: { currentPassword: PASSWORD, newPassword: nextPassword, padding: '한'.repeat(PASSWORD_RULES.bodyMaxBytes) } })).status).toBe(413);
+      expect(await db.prepare('SELECT attempts FROM login_attempts WHERE bucket = ?').bind(await bucketFor()).first()).toBeNull();
+    });
+
+    it.each(['min', 'admin'] as const)('rotates only %s sessions atomically and permits only the new password afterward', async username => {
+      const first = await login(username);
+      const other = await login(username);
+      const peer = await login('siwon');
+      expect((await change(first.cookie, nextPassword, 'incorrect-password')).status).toBe(400);
+      const response = await change(first.cookie);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      const setCookie = response.headers.get('set-cookie')!;
+      expect(setCookie).toContain('HttpOnly');
+      expect(setCookie).toContain('SameSite=Strict');
+      expect(setCookie).toContain('Max-Age=604800');
+      const current = setCookie.split(';')[0]!;
+      expect(current).not.toBe(first.cookie);
+      for (const cookie of [first.cookie, other.cookie]) expect((await request('/api/auth/me', { cookie })).status).toBe(401);
+      for (const cookie of [current, peer.cookie]) expect((await request('/api/auth/me', { cookie })).status).toBe(200);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?').bind(username).first('count')).toBe(1);
+      expect(await db.prepare('SELECT attempts FROM login_attempts WHERE bucket = ?').bind(await bucketFor(username)).first()).toBeNull();
+      expect((await signIn(nextPassword, username)).status).toBe(200);
+      expect((await signIn(PASSWORD, username)).status).toBe(401);
+    });
+
+    it('allows only one change from two verified copies of the same credential snapshot', async () => {
+      const marker = 'const passwordHash = await hashPassword(input.newPassword);';
+      expect(script).toContain(marker);
+      const instance = runtime(`let passwordWaiters = [];\n${script.replace(marker, `${marker}
+        await new Promise(resolve => { passwordWaiters.push(resolve); if (passwordWaiters.length === 2) passwordWaiters.splice(0).forEach(done => done()); });`)}`);
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        const passwords = [nextPassword, 'other-test-password-2026!'];
+        const results = await Promise.all(passwords.map(value => change(cookie, value, PASSWORD, instance)));
+        expect(results.map(result => result.status).sort()).toEqual([200, 409]);
+        const winner = results.findIndex(result => result.status === 200);
+        expect(results[1 - winner]!.headers.get('set-cookie')).toBeNull();
+        const current = results[winner]!.headers.get('set-cookie')!.split(';')[0]!;
+        expect((await request('/api/auth/me', { cookie: current, instance })).status).toBe(200);
+        expect((await request('/api/auth/me', { cookie, instance })).status).toBe(401);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM sessions').first('count')).toBe(1);
+        const stored = await database.prepare('SELECT password_hash FROM users WHERE id = ?').bind('min').first<string>('password_hash');
+        expect(await verifyPassword(passwords[winner]!, stored!)).toBe(true);
+        expect(await verifyPassword(passwords[1 - winner]!, stored!)).toBe(false);
+      } finally { await instance.dispose(); }
+    });
+
+    it('rejects inactive users, missing Origin, and a changed account', async () => {
+      const { cookie } = await login('min');
+      expect((await request('/api/me/password', { method: 'PUT', cookie, origin: null,
+        body: { currentPassword: PASSWORD, newPassword: nextPassword } })).status).toBe(403);
+      expect((await request('/api/me/password', { method: 'PUT', cookie,
+        body: { currentPassword: PASSWORD, newPassword: nextPassword, expectedUserId: 'siwon' } })).status).toBe(409);
+      await db.prepare("UPDATE users SET active = 0 WHERE id = 'min'").run();
+      expect((await change(cookie)).status).toBe(401);
+      expect(await db.prepare("SELECT password_hash FROM users WHERE id = 'min'").first('password_hash')).toBe(passwordHash);
+      expect(await db.prepare('SELECT attempts FROM login_attempts WHERE bucket = ?').bind(await bucketFor()).first()).toBeNull();
+    });
+
+    it.each(['deactivate', 'logout'] as const)('rejects a %s during hashing instead of minting a session', async action => {
+      const marker = 'const passwordHash = await hashPassword(input.newPassword);';
+      expect(script).toContain(marker);
+      const sql = action === 'deactivate' ? "UPDATE users SET active = 0 WHERE id = 'min'" : "DELETE FROM sessions WHERE user_id = 'min'";
+      const instance = runtime(script.replace(marker, `${marker}\n await env.DB.prepare(${JSON.stringify(sql)}).run();`));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        const response = await change(cookie, nextPassword, PASSWORD, instance);
+        expect(response.status).toBe(409);
+        expect(response.headers.get('set-cookie')).toBeNull();
+        expect(await database.prepare("SELECT password_hash FROM users WHERE id = 'min'").first('password_hash')).toBe(passwordHash);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM sessions').first('count')).toBe(0);
+      } finally { await instance.dispose(); }
+    });
+
+    it('rolls back the hash and session revocation if inserting the replacement session fails', async () => {
+      const first = await login('min');
+      const other = await login('min');
+      await db.prepare("CREATE TRIGGER fail_password_session BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'test session insert'); END").run();
+      const response = await change(first.cookie);
+      expect(response.status).toBe(500);
+      expect(response.headers.get('set-cookie')).toBeNull();
+      expect(await db.prepare("SELECT password_hash FROM users WHERE id = 'min'").first('password_hash')).toBe(passwordHash);
+      for (const cookie of [first.cookie, other.cookie]) expect((await request('/api/auth/me', { cookie })).status).toBe(200);
+      expect(await db.prepare('SELECT attempts FROM login_attempts WHERE bucket = ?').bind(await bucketFor()).first('attempts')).toBe(1);
+    });
+
+    it('runs exactly one verify plus one new hash, and no KDF for blocked or invalid requests', async () => {
+      const instance = runtime(workerWithPasswordMetrics(script));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const signedIn = await signIn(PASSWORD, 'min', instance);
+        expect(signedIn.headers.get('x-test-kdf-calls')).toBe('1');
+        const cookie = signedIn.headers.get('set-cookie')!.split(';')[0]!;
+        for (const newPassword of ['short', PASSWORD]) {
+          const response = await change(cookie, newPassword, PASSWORD, instance);
+          expect(response.status).toBe(400);
+          expect(response.headers.get('x-test-kdf-calls')).toBe('0');
+        }
+        const wrong = await change(cookie, nextPassword, 'incorrect-password', instance);
+        expect(wrong.headers.get('x-test-kdf-calls')).toBe('1');
+        const bucket = await bucketFor();
+        await database.prepare('UPDATE login_attempts SET attempts = 10 WHERE bucket = ?').bind(bucket).run();
+        const blocked = await change(cookie, nextPassword, PASSWORD, instance);
+        expect(blocked.status).toBe(429);
+        expect(blocked.headers.get('x-test-kdf-calls')).toBe('0');
+        await database.prepare('UPDATE login_attempts SET expires_at = 0 WHERE bucket = ?').bind(bucket).run();
+        const changed = await change(cookie, nextPassword, PASSWORD, instance);
+        expect(changed.status).toBe(200);
+        expect(changed.headers.get('x-test-kdf-calls')).toBe('2');
+        console.log('Password KDF calls (real Worker artifact): login=1, wrong current=1, change=2 (verify 1 + generate 1), blocked/invalid=0');
+      } finally { await instance.dispose(); }
+    });
+  });
 
   async function seedRound(options: {
     game: GameId;
@@ -3232,7 +3428,7 @@ describe('Worker and D1 integration', () => {
 
   it('does not mint a session when the password is reset during an in-flight login', async () => {
     const script = await workerAt(`${TODAY}T00:00:00Z`);
-    const marker = 'const token = randomToken();';
+    const marker = 'const previousToken = sessionToken(request);';
     expect(script.split(marker)).toHaveLength(2);
     const replacementHash = await hashPassword('a-new-password-after-reset');
     // Reproduce a second administrator connection resetting credentials exactly
