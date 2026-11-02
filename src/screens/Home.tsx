@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ATTENDANCE_RULES, CATCHMIND_RULES, FEATURES, GAME_RULES, LOTTO_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, CATCHMIND_RULES, FEATURES, GAME_RULES, KUJI_RULES, LOTTO_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
-import type { CatchmindSummary, ClawSummary, GameState } from "../../shared/types";
+import type { CatchmindSummary, ClawSummary, GameState, KujiSummary } from "../../shared/types";
 import { useAttendance } from "../attendance";
 import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import {
@@ -45,6 +45,8 @@ export interface HomeData {
   gold: number;
   players: HomePlayer[];
   games: GameState[];
+  /** Only the serverless preview uses the original example card. */
+  kuji: KujiSummary | null;
   catchmind: CatchmindSummary;
   claw: ClawSummary;
 }
@@ -57,6 +59,7 @@ const chips = {
   try: ["도전 가능", "#E3F6EE", "#2E8C6E"],
   open: ["진행 중", "#E3F1FC", "#3B7FB3"],
   host: ["출제", "#EEE8FC", "#7556C4"],
+  waiting: ["새 판 대기", "#F3EEE8", "#8A8190"],
 } as const;
 type ChipKind = keyof typeof chips;
 interface GameRow {
@@ -158,8 +161,7 @@ function catchmindRow(game: CatchmindSummary, me: string, displayNameOf: Display
     right: game.winner?.username === me ? `+${CATCHMIND_RULES.score}점` : "",
   };
 }
-export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username): GameRow[] {
-  const evening = isEvening();
+export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, kuji: KujiSummary | null, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username): GameRow[] {
   return [
     ...games.map((game) => predictionRow(game, me)),
     catchmindRow(catchmind, me, displayNameOf),
@@ -167,8 +169,8 @@ export function gameRows(games: GameState[], me: string, catchmind: CatchmindSum
       path: "/play/kuji",
       name: "예굼쿠지",
       icon: "drop",
-      chip: "open",
-      sub: evening ? "41 / 100칸 남음" : "63 / 100칸 남음",
+      chip: kuji?.remaining === 0 ? "waiting" : "open",
+      sub: kuji !== null ? `남은 쿠지 ${kuji.remaining} / ${KUJI_RULES.size}` : isEvening() ? "41 / 100칸 남음" : "63 / 100칸 남음",
       right: "",
     },
   ];
@@ -176,7 +178,7 @@ export function gameRows(games: GameState[], me: string, catchmind: CatchmindSum
 
 export function TodayGames({ data, go }: { data: HomeData; go: Go }) {
   const displayNameOf = useDisplayNameLookup();
-  const rows = gameRows(data.games, data.username, data.catchmind, displayNameOf);
+  const rows = gameRows(data.games, data.username, data.catchmind, data.kuji, displayNameOf);
   // Catchmind rounds can span several days; their result is not today's total.
   const earned = data.games.reduce(
     (sum, game) => sum + (game.phase === "revealed" ? game.results.find(result => result.username === data.username)?.score ?? 0 : 0),

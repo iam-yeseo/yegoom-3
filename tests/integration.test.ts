@@ -12,6 +12,7 @@ import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics
 import { getClawState, getClawSummary, playClaw } from '../worker/claw';
 import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
 import { readAnnouncements } from '../worker/announcements';
+import { readKujiSummary } from '../worker/shop';
 import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
 // Tiny, real encoded fixtures: solid coral images generated with Pillow, quality 80.
@@ -2220,6 +2221,86 @@ describe('Worker and D1 integration', () => {
     expect(response.status).toBe(200);
     return response.json() as Promise<ShopState>;
   }
+
+  describe('bootstrap kuji summary', () => {
+    it('returns 100 remaining without creating a board, including concurrent first reads', async () => {
+      const min = await login('min');
+      const admin = await login('admin');
+      const views = await Promise.all([bootstrap(min.cookie), bootstrap(admin.cookie), bootstrap(min.cookie)]);
+      for (const view of views) expect(view.kuji).toEqual({ boardId: null, remaining: 100 });
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_boards').first('count')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_claims').first('count')).toBe(0);
+    });
+
+    it('reports the shared current board after purchases by different players without exposing cells', async () => {
+      const min = await login('min');
+      const siwon = await login('siwon');
+      await fund(5000);
+      await fund(5000, 'siwon');
+      const { kuji } = await getKuji(min.cookie);
+      expect((await bootstrap(min.cookie)).kuji).toEqual({ boardId: kuji.boardId, remaining: 100 });
+      await buyKuji(min.cookie, kuji.boardId, [0, 1]);
+      await buyKuji(siwon.cookie, kuji.boardId, [2]);
+      for (const cookie of [min.cookie, siwon.cookie]) {
+        expect((await bootstrap(cookie)).kuji).toEqual({ boardId: kuji.boardId, remaining: 97 });
+      }
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_boards').first('count')).toBe(1);
+    });
+
+    it('keeps a sold-out board at zero until a kuji visit creates the next board', async () => {
+      const { cookie } = await login('min');
+      await fund(50000);
+      const { kuji } = await getKuji(cookie);
+      await buyKuji(cookie, kuji.boardId, Array.from({ length: 99 }, (_, index) => index));
+      expect((await bootstrap(cookie)).kuji).toEqual({ boardId: kuji.boardId, remaining: 1 });
+      const last = await buyKuji(cookie, kuji.boardId, [99]);
+      expect(last.kuji.remaining).toBe(0);
+      for (const view of await Promise.all([bootstrap(cookie), bootstrap(cookie)])) {
+        expect(view.kuji).toEqual({ boardId: kuji.boardId, remaining: 0 });
+      }
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_boards').first('count')).toBe(1);
+      const next = await getKuji(cookie);
+      expect(next.kuji.boardId).toBe(kuji.boardId + 1);
+      expect((await bootstrap(cookie)).kuji).toEqual({ boardId: next.kuji.boardId, remaining: 100 });
+      await buyKuji(cookie, next.kuji.boardId, [0]);
+      expect((await bootstrap(cookie)).kuji).toEqual({ boardId: next.kuji.boardId, remaining: 99 });
+    });
+
+    it('reports D1 rows_read and reads only current claims even with 5000 historical claims', async () => {
+      const { cookie } = await login('min');
+      await fund(50000);
+      const observed = measuredDatabase(db, Date.parse(`${TODAY}T00:00:00Z`));
+      const measurements: Record<string, number> = {};
+      const measure = async (label: string, boardId: number | null, remaining: number) => {
+        observed.reset();
+        expect(await readKujiSummary(observed.binding)).toEqual({ boardId, remaining });
+        expect(observed.queries).toHaveLength(1);
+        expect(observed.queries[0]!.rowsWritten).toBe(0);
+        expect(observed.rowsRead()).toBeLessThanOrEqual(102);
+        measurements[label] = observed.rowsRead();
+      };
+      await measure('noBoard', null, 100);
+      await getKuji(cookie);
+      // Leave positive IDs available for historical fixtures below the current board.
+      await db.prepare('UPDATE kuji_boards SET id = 1000 WHERE id = 1').run();
+      await measure('emptyBoard', 1000, 100);
+      await buyKuji(cookie, 1000, Array.from({ length: 37 }, (_, index) => index));
+      await measure('sold37', 1000, 63);
+      await db.prepare(`WITH RECURSIVE ids(id) AS (VALUES(1) UNION ALL SELECT id + 1 FROM ids WHERE id < 50)
+        INSERT INTO kuji_boards (id, grades, created_at)
+        SELECT ids.id, b.grades, b.created_at FROM ids CROSS JOIN kuji_boards b WHERE b.id = 1000`).run();
+      await db.prepare(`WITH RECURSIVE positions(position) AS (VALUES(0) UNION ALL SELECT position + 1 FROM positions WHERE position < 99)
+        INSERT INTO kuji_claims (board_id, position, purchase_id)
+        SELECT b.id, positions.position, c.purchase_id FROM kuji_boards b CROSS JOIN positions
+        JOIN kuji_claims c ON c.board_id = 1000 AND c.position = 0 WHERE b.id < 1000`).run();
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM kuji_claims WHERE board_id < 1000').first('count')).toBe(5000);
+      await measure('sold37With5000HistoricalClaims', 1000, 63);
+      expect(measurements.sold37With5000HistoricalClaims).toBe(measurements.sold37);
+      await buyKuji(cookie, 1000, Array.from({ length: 63 }, (_, index) => index + 37));
+      await measure('soldOut', 1000, 0);
+      console.log(`Kuji bootstrap summary D1 meta rows_read: ${JSON.stringify(measurements)}; one read-only statement, auth and unrelated bootstrap queries excluded`);
+    });
+  });
 
   describe('server shop economy', () => {
     it('creates one shared 100-ticket kuji board and reveals only sold grades', async () => {
