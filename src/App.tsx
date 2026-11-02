@@ -12,6 +12,9 @@ import type {
   LaunchGiftResponse, AuthResponse, LuckPhotoResponse,
 } from "../shared/types";
 import { normalizeNickname } from "../shared/profile";
+import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/admin";
+import { Admin } from "./screens/Admin";
+import { createAdminPreview, savePreviewGame, savePreviewClaw } from "./admin-preview";
 import { AnnouncementBanner } from "./AnnouncementBanner";
 import { FEATURES } from "../shared/balance";
 import { ApiFailure, api } from "./api";
@@ -295,15 +298,31 @@ export default function App() {
   const [bootError, setBootError] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
   const [stockNoticeOpen, setStockNoticeOpen] = useState(false);
+  const [previewAdmin, setPreviewAdmin] = useState(() => route.startsWith("/preview/admin"));
+  const [previewAdminState, setPreviewAdminState] = useState(createAdminPreview);
+  const previewAdminStateRef = useRef(previewAdminState);
+  previewAdminStateRef.current = previewAdminState;
+  const [adminData, setAdminData] = useState<{ owner: string; state: AdminState } | null>(null);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
+  const adminGeneration = useRef(0);
   const [previewProfile, setPreviewProfile] = useState<{ displayName: string; photoVersion: number | null; photoUrl: string | null }>({ displayName: previewUser.displayName, photoVersion: null, photoUrl: null });
   const previewPhotoCounter = useRef(0);
   const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[] }>({ gold: previewGold, score: 0, ledger: [] });
   const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[] }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [] });
   const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
   const demo = route.startsWith("/preview");
+  const adminDemo = demo && (previewAdmin || route.startsWith("/preview/admin"));
+  const adminAllowed = adminDemo || !demo && data?.user.role === "admin";
+  const adminOwner = !demo && data?.user.role === "admin" ? data.user.id : null;
+  useEffect(() => {
+    if (!demo) setPreviewAdmin(false);
+    else if (route.startsWith("/preview/admin")) setPreviewAdmin(true);
+  }, [demo, route]);
   const previewAttendance = usePreviewAttendance(demo);
   useEffect(() => {
     if (demo) {
+      setPreviewAdminState(createAdminPreview());
       setPreviewShop({ gold: previewGold, score: 0, ledger: [] });
       setPreviewClaw({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] });
     }
@@ -382,7 +401,32 @@ export default function App() {
   }, [data?.user.id, refresh, demo, route]);
   const requestedPath = demo ? route.replace("/preview", "") || "/" : route;
   const stockBlocked = !FEATURES.stock && /^\/stock(?:\/|$)/.test(requestedPath);
-  const path = stockBlocked ? "/" : requestedPath;
+  const adminBlocked = /^\/admin(?:\/|$)/.test(requestedPath) && !adminAllowed && !loading && !!data;
+  const path = stockBlocked || adminBlocked ? "/" : requestedPath;
+  useEffect(() => {
+    if (adminBlocked) window.location.replace("#/");
+  }, [adminBlocked]);
+  const reloadAdmin = useCallback(async () => {
+    if (!adminOwner || demo) return;
+    const generation = ++adminGeneration.current;
+    setAdminLoading(true);
+    setAdminError(null);
+    try {
+      const next = await api.admin();
+      if (generation === adminGeneration.current && activeUserId.current === adminOwner) setAdminData({ owner: adminOwner, state: next });
+    } catch (error) {
+      if (generation === adminGeneration.current) setAdminError(error instanceof Error ? error.message : "운영 설정을 불러오지 못했어요.");
+    } finally {
+      if (generation === adminGeneration.current) setAdminLoading(false);
+    }
+  }, [adminOwner, demo]);
+  useEffect(() => {
+    setAdminData(null);
+    setAdminError(null);
+    setAdminLoading(false);
+    if (path === "/admin" && adminOwner && !demo) void reloadAdmin();
+    return () => { adminGeneration.current++; };
+  }, [path, adminOwner, demo, reloadAdmin]);
   useEffect(() => {
     if (stockBlocked) {
       setStockNoticeOpen(true);
@@ -492,7 +536,7 @@ export default function App() {
   }
   const attendanceContext = !demo && data ? {
     attendance: data.attendance, claim: claimAttendance, loadMonth: loadAttendanceMonth, preview: false,
-  } : previewAttendance;
+  } : adminDemo ? { ...previewAttendance, attendance: { ...previewAttendance.attendance, canClaim: false } } : previewAttendance;
   async function transactShop<T>(action: () => Promise<T>): Promise<T> {
     if (demo) return action();
     let receipt!: T;
@@ -516,12 +560,52 @@ export default function App() {
     await refresh();
     return receipt;
   }
+  async function saveAdmin(action: (owner: string) => Promise<AdminState>) {
+    const owner = adminOwner;
+    if (!owner) throw new ApiFailure(403, "운영자만 설정을 바꿀 수 있어요.");
+    adminGeneration.current++;
+    setAdminLoading(false);
+    await mutate(async () => {
+      if (activeUserId.current !== owner) throw new ApiFailure(409, "로그인한 계정이 바뀌었어요. 다시 열어 주세요.");
+      return action(owner);
+    }, state => {
+      if (activeUserId.current === owner) {
+        // A read started while this write was pending must not replace its receipt.
+        adminGeneration.current++;
+        setAdminLoading(false);
+        setAdminError(null);
+        setAdminData({ owner, state });
+      }
+    }).catch(async error => {
+      if (activeUserId.current === owner) await reloadAdmin();
+      throw error;
+    });
+    await refresh();
+  }
+  async function saveAdminGame(id: GameId, rules: PredictionRules, effectiveFrom: string) {
+    if (adminDemo) {
+      const next = savePreviewGame(previewAdminStateRef.current, id, rules, effectiveFrom);
+      previewAdminStateRef.current = next;
+      setPreviewAdminState(next);
+    } else await saveAdmin(owner => api.saveGameSettings(id, rules, effectiveFrom, owner));
+  }
+  async function saveAdminClaw(config: AdminClawConfig) {
+    if (adminDemo) {
+      const next = savePreviewClaw(previewAdminStateRef.current, config);
+      previewAdminStateRef.current = next;
+      setPreviewAdminState(next);
+    } else await saveAdmin(owner => api.saveClawSettings(config, owner));
+  }
   const catchmindReadKey = useRef("");
   const signedIn = !demo && !loading && data !== null;
   const view = demo ? { ...previewHome(), displayName: previewProfile.displayName, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold,
     catchmind: previewCatchmind.summary, claw: previewClaw.summary,
+    ...(adminDemo ? { username: "preview-admin", displayName: "운영 미리보기",
+      games: previewAdminState.games.map(game => previewGame(game.id, game.rules)),
+      claw: { ...previewClaw.summary, coins: 0, freeCoins: 0, purchasedCoins: 0, isAdmin: true } } : {}),
     players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, displayName: previewProfile.displayName, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : player) } : data ? homeData(data) : null;
-  const me = demo ? { ...previewUser, displayName: previewProfile.displayName, photoVersion: previewProfile.photoVersion, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : data?.user;
+  const me = demo ? { ...previewUser, displayName: previewProfile.displayName, photoVersion: previewProfile.photoVersion, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score,
+    ...(adminDemo ? { id: "preview-admin", username: "preview-admin", displayName: "운영 미리보기", role: "admin" as const, photoVersion: null, weeklyScore: 0 } : {}) } : data?.user;
   const profileDirectory = demo
     ? Object.keys(previewScores).map(username => ({ id: username === previewUser.username ? previewUser.id : username, username,
       displayName: username === previewUser.username ? previewProfile.displayName : username,
@@ -560,6 +644,10 @@ export default function App() {
       </>
     );
   else if (!view || !me) content = null;
+  else if (path === "/admin" && adminAllowed) content = <Admin key={adminDemo ? "preview-admin" : me.id}
+    state={adminDemo ? previewAdminState : adminData?.owner === me.id ? adminData.state : null}
+    loading={adminLoading} error={adminError} onReload={() => void reloadAdmin()}
+    onSaveGame={saveAdminGame} onSaveClaw={saveAdminClaw} onPlayClaw={() => go("/play/claw")} preview={adminDemo} />;
   else if (play === "kuji") content = <Kuji onBack={home} />;
   else if (path === "/play/catchmind/gallery") content = <CatchmindGallery demo={demo} gold={me.gold} onBack={() => go("/play/catchmind")} />;
   else if (play === "catchmind") content = <Catchmind user={me} demo={demo} onBack={home} />;
@@ -569,7 +657,7 @@ export default function App() {
     content = (
       <PredictionGame
         key={`demo-${gameId}`}
-        game={previewGame(gameId)}
+        game={previewGame(gameId, adminDemo ? previewAdminState.games.find(game => game.id === gameId)!.rules : undefined)}
         user={{ ...me, username: viewer, displayName: viewer === me.username ? me.displayName : viewer }}
         serverTime={new Date(`${previewGame(gameId).roundDate}T09:12:36+09:00`).toISOString()}
         demo
@@ -727,8 +815,9 @@ export default function App() {
     <ProfileDirectoryProvider profiles={profileDirectory} preview={demo}>
     <CharacterProvider characters={characterMap} preview={demo}>
       <AttendanceProvider value={attendanceContext}>
-    <ClawProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
-      preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
+    <ClawProvider key={demo ? adminDemo ? "preview-admin" : "preview-player" : data?.user.id ?? "anonymous"}
+      preview={demo} adminPreview={adminDemo} previewConfig={adminDemo ? previewAdminState.claw : undefined}
+      accountKey={demo ? adminDemo ? "preview-admin" : "preview-player" : data?.user.id ?? "anonymous"}
       gold={me?.gold ?? 0} transact={transactCatchmind}
       onServerRead={claw => {
         setData(current => current ? { ...current, claw } : current);
@@ -794,7 +883,7 @@ export default function App() {
         <div className="screen" ref={screenRef}>
           {content}
         </div>
-        {showTabs && <TabBar active={tab ?? "/"} onNavigate={go} />}
+        {showTabs && <TabBar active={tab ?? "/"} onNavigate={go} admin={me?.role === "admin"} />}
         {stockNoticeOpen && <StockNotice onClose={() => setStockNoticeOpen(false)} />}
       </main>
     </LaunchGiftProvider>

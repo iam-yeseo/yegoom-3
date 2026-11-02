@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLAW_RULES } from '../shared/balance';
+import type { AdminClawConfig } from '../shared/admin';
 import * as physics from '../shared/claw-physics';
 import { createClawPreview, previewClawSummary } from '../src/claw-preview';
 
@@ -8,6 +9,46 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-11-02T08:59:59+09:00'));
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+describe('offline admin claw preview', () => {
+  it('clears and regenerates without rewards or coins while preserving cooldown and receipt identity', () => {
+    vi.spyOn(physics, 'createBoard').mockReturnValueOnce([{ id: '1-1', type: 1, x: .5, y: .8, radius: 32, angle: 0 }]);
+    const preview = createClawPreview({ admin: true });
+    const state = preview.read();
+    expect(state).toMatchObject({ isAdmin: true, coins: 0, freeCoins: 0, purchasedCoins: 0 });
+    const input = { requestId: 'admin-preview-clear-play', version: state.version, x: .5, forceStrong: true };
+    const played = preview.play(input);
+    expect(played.result).toMatchObject({ caught: true, cleared: true, points: 0, gold: 0, clearBonus: 0, clearGold: 0 });
+    expect(played.generation).toBe(2); expect(played.board).toHaveLength(30);
+    expect(preview.play(input)).toMatchObject({ replayed: true, result: played.result });
+    expect(() => preview.play({ ...input, forceStrong: false })).toThrow('다른 플레이');
+    expect(() => preview.play({ requestId: 'admin-preview-too-soon', version: played.version, x: .05 })).toThrow('아직 움직이고');
+    expect(() => preview.buy({ requestId: 'admin-preview-no-purchase', quantity: 1 }, 1000)).toThrow('운영자');
+    let version = played.version;
+    for (let index = 0; index < 7; index++) {
+      vi.advanceTimersByTime(CLAW_RULES.playDurationMs);
+      version = preview.play({ requestId: `admin-preview-free-${index}`, version, x: .05 }).version;
+    }
+    expect(preview.read().coins).toBe(0);
+    expect(preview.gold).toBe(0); expect(preview.score).toBe(0); expect(preview.ledger).toEqual([]);
+  });
+
+  it('uses the current local config for the next play while retaining already computed results', () => {
+    let config: AdminClawConfig = { payoutEvery: 50, weakPickup: .05, weakCarry: .05 };
+    const preview = createClawPreview({ admin: true, getConfig: () => config });
+    const input = { requestId: 'admin-preview-config-first', version: preview.read().version, x: .05 };
+    const first = preview.play(input);
+    expect(first.result!.grip.strong).toBe(false);
+    config = { payoutEvery: 1, weakPickup: 1, weakCarry: 1 };
+    expect(preview.play(input).result).toEqual(first.result);
+    vi.advanceTimersByTime(CLAW_RULES.playDurationMs);
+    const next = preview.play({ ...input, requestId: 'admin-preview-config-next', version: first.version });
+    expect(next.result!.grip).toEqual({ strong: true, pickup: 1, carry: 1 });
+    expect(preview.ledger).toEqual([]);
+    const player = createClawPreview();
+    expect(() => player.play({ requestId: 'player-preview-forged-force', version: 0, x: .05, forceStrong: true })).toThrow('운영자');
+  });
+});
 
 describe('offline claw preview', () => {
   it('reads the home wallet without creating a physical board', () => {

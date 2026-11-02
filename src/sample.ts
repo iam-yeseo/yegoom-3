@@ -1,4 +1,6 @@
 import { ATTENDANCE_RULES, CATCHMIND_RULES, GAME_RULES, PREDICTION_REWARDS, KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank, predictionPoints } from "../shared/balance";
+import { defaultPredictionRules, predictionPointsForRules } from "../shared/game-settings";
+import type { PredictionRules } from "../shared/admin";
 import { defaultCharacter } from "../shared/characters";
 import type { AttendanceState, GameHistoryRound, GameId, GameResult, GameState, LedgerEntry, PhotoMetadata } from "../shared/types";
 import type { ArtKey } from "./components/UI";
@@ -103,8 +105,8 @@ function previewLuckPhoto(answer: string): PhotoMetadata {
  * Prediction rounds shown to the logged-out preview, fixed to the design's
  * frames: 기상시간 and 행운 점수 open (2a, 2b), 퇴근시간 revealed (2c).
  */
-export function previewGame(id: GameId): GameState {
-  const { title, author: authorUsername, deadline } = GAME_RULES[id];
+export function previewGame(id: GameId, rules: PredictionRules = defaultPredictionRules(id)): GameState {
+  const { title, author: authorUsername } = GAME_RULES[id];
   const viewer = previewViewer(id);
   const others = ["min", "siwon", "yeseo"].filter((name) => name !== authorUsername);
   const participants = viewer === authorUsername ? others : [...others.filter(name => name !== viewer), viewer];
@@ -114,7 +116,8 @@ export function previewGame(id: GameId): GameState {
     authorUsername,
     authorDisplayName: authorUsername,
     photo: null,
-    deadline,
+    rules,
+    deadline: rules.deadline,
     roundDate: new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10),
     phase: "open",
     hint: "비 와도 기분 좋음. 점심이 맛있었다",
@@ -134,6 +137,11 @@ export function previewGame(id: GameId): GameState {
     canEditAnswer: viewer === authorUsername,
     canReveal: false,
   };
+  if (!rules.enabled) return {
+    ...base, phase: "closed", answerEntered: false,
+    canPredict: false, canEditAnswer: false, canReveal: false,
+    participants: base.participants.map(player => ({ ...player, submitted: false })),
+  };
   if (id !== "offwork") return base;
   return {
     ...base,
@@ -141,20 +149,20 @@ export function previewGame(id: GameId): GameState {
     answer: "18:12:30",
     prediction: "18:12:45",
     canPredict: false,
-    results: previewResults(id, "18:12:30", ["18:12:45", "18:13:31"]),
+    results: previewResults(id, "18:12:30", ["18:12:45", "18:13:31"], rules),
   };
 }
 
-function previewResults(id: GameId, answer: string, values: string[]): GameResult[] {
+function previewResults(id: GameId, answer: string, values: string[], rules: PredictionRules = defaultPredictionRules(id)): GameResult[] {
   const players = ["yeseo", "min", "siwon"].filter(name => name !== GAME_RULES[id].author);
   const numeric = (value: string) => id === "luck" ? Number(value) : value.split(":").reduce((total, part) => total * 60 + Number(part), 0);
   const differences = values.map(value => Math.abs(numeric(value) - numeric(answer)));
   const minimum = Math.min(...differences);
   return values.map((value, i) => {
-    const firstGold = differences[i] === minimum ? PREDICTION_REWARDS.firstGold : 0;
+    const firstGold = differences[i] === minimum ? rules.firstGold : 0;
     return { playerId: players[i], username: players[i], displayName: players[i], photoVersion: null, character: defaultCharacter(players[i]), value, difference: differences[i],
-      score: predictionPoints(id, differences[i]), isFirst: differences[i] === minimum,
-      participationGold: PREDICTION_REWARDS.participationGold, firstGold, gold: PREDICTION_REWARDS.participationGold + firstGold };
+      score: predictionPointsForRules(rules, differences[i]), isFirst: differences[i] === minimum,
+      participationGold: rules.participationGold, firstGold, gold: rules.participationGold + firstGold };
   }).sort((a, b) => a.difference - b.difference);
 }
 /** Three published rounds; the skipped day illustrates that unplayed days do not count. */

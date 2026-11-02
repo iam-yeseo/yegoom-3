@@ -344,7 +344,7 @@ test('claw preview stays serverless, preserves sound preference, and auto-drops 
   } finally { await highDpr.close(); }
 });
 
-test('claw reads on entry and visibility, never polls, and denies administrator participation', async ({ page }) => {
+test('claw reads on entry and visibility, never polls, and gives administrators unrewarded tests only', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('아이디', { exact: true }).fill('admin');
   await page.getByLabel('비밀번호', { exact: true }).fill('e2e-only-password-2026');
@@ -353,15 +353,24 @@ test('claw reads on entry and visibility, never polls, and denies administrator 
   let reads = 0;
   page.on('request', request => { if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/claw') reads++; });
   await page.evaluate(() => { location.hash = '/play/claw'; });
-  await expect(page.getByRole('region', { name: '내 코인' })).toContainText('무료 0개');
-  await expect(button(page, '코인 넣기')).toBeDisabled();
-  await expect(button(page, '코인 1개 사기 · 100G')).toBeDisabled();
+  await expect(page.getByRole('region', { name: '운영자 테스트' })).toContainText('무제한');
+  await expect(button(page, '테스트 시작')).toBeEnabled();
+  await expect(page.getByRole('checkbox', { name: '이번 판 강집게로' })).toBeVisible();
+  await expect(button(page, '코인 1개 사기 · 100G')).toHaveCount(0);
   expect(reads).toBe(1);
   await page.clock.runFor(16000);
   expect(reads).toBe(1);
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   await expect.poll(() => reads).toBe(2);
   const requestId = 'browser-claw-admin-request';
-  expect((await page.request.post('/api/claw/coins', { data: { requestId, quantity: 1 } })).status()).toBe(403);
-  expect((await page.request.post('/api/claw/play', { data: { requestId, version: 0, x: .5, stop: null } })).status()).toBe(403);
+  const headers = { Origin: new URL(page.url()).origin };
+  expect((await page.request.post('/api/claw/coins', { headers, data: { requestId, quantity: 1 } })).status()).toBe(403);
+  const before = await bootstrap(page);
+  const state = await readClaw(page);
+  const played = await page.request.post('/api/claw/play', { headers, data: { requestId, version: state.version, x: .5, stop: null, forceStrong: true } });
+  expect(played.status()).toBe(200);
+  expect(await played.json()).toMatchObject({ coins: 0, result: { points: 0, gold: 0, clearBonus: 0, clearGold: 0, grip: { strong: true } } });
+  const after = await bootstrap(page);
+  expect(after.user.gold).toBe(before.user.gold); expect(after.user.weeklyScore).toBe(before.user.weeklyScore);
+  expect(after.ledger).toEqual(before.ledger);
 });

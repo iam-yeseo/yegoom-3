@@ -97,3 +97,10 @@
   .claw-page .claw-slot i, .claw-result-confetti { display: none; }
   .claw-arrow:active, .claw-arrow.is-held, .claw-drop:active { transform: none; }
 }
+.claw-admin-wallet { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.claw-admin-wallet small { display: block; color: var(--muted); font-size: 12px; }
+.claw-admin-wallet strong { display: block; margin-top: 4px; font-size: 25px; }
+.claw-admin-wallet p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; word-break: keep-all; }
+.claw-admin-force { display: flex; align-items: center; gap: 10px; min-height: 44px; margin-top: 10px; font-size: 14px; font-weight: 800; }
+.claw-admin-force input { width: 19px; height: 19px; accent-color: var(--coral); }
+.claw-admin-no-reward { padding: 12px; border-radius: 16px; background: #eee8fc; color: #7556c4; font-weight: 800; }

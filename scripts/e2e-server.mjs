@@ -67,11 +67,13 @@ const physicsArtifact = await build({
   entryPoints: ['shared/claw-physics.ts'], bundle: true, format: 'esm', platform: 'node', write: false,
 });
 const { createBoard } = await import(`data:text/javascript;base64,${Buffer.from(physicsArtifact.outputFiles[0].text).toString('base64')}`);
-for (const [username, generation, seed] of [
+const clawFixtureAccounts = [
   ['min', 1, 1792405194], ['siwon', 7, 681247775], ['yeseo', 1, 1792405194],
-]) {
+];
+if (process.env.E2E_PROFILE === 'admin-console') clawFixtureAccounts.push(['admin', 1, 1792405194]);
+for (const [username, generation, seed] of clawFixtureAccounts) {
   const board = JSON.stringify(createBoard(generation, seed));
-  statements.push(`INSERT INTO claw_accounts (user_id, free_coins, purchased_coins, last_grant_slot, board_json, generation, version, next_play_at, power_counter) VALUES ('e2e-${username}', 5, 0, ${Math.floor(timestamp / 10800000)}, '${board}', ${generation}, 0, 0, 9);`);
+  statements.push(`INSERT INTO claw_accounts (user_id, free_coins, purchased_coins, last_grant_slot, board_json, generation, version, next_play_at, power_counter) VALUES ('e2e-${username}', ${username === 'admin' ? 0 : 5}, 0, ${Math.floor(timestamp / 10800000)}, '${board}', ${generation}, 0, 0, 9);`);
 }
 // A complete, valid board makes browser reward assertions and screenshots
 // deterministic. Production board creation still uses crypto randomness.

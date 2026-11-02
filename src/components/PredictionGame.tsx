@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameHistoryRound, GameId, GameResult, GameState, PhotoMetadata, User } from "../../shared/types";
-import { GAME_RULES, PREDICTION_REWARDS, SCORE_TABLES, predictionPoints } from "../../shared/balance";
+import type { PredictionRules } from "../../shared/admin";
+import { predictionPointsForRules, scoreThresholdLabel } from "../../shared/game-settings";
 import { api } from "../api";
 import { previewHistory, rankOf } from "../sample";
 import { LuckPhotoCard, LuckPhotoPicker } from "./LuckEvidence";
@@ -293,31 +294,32 @@ function GameHistory({ game, username, demo }: { game: GameState; username: stri
       </section>) : <p className="card empty-state">아직 공개된 지난 기록이 없어요.</p>}
   </section>;
 }
-function thresholdLabel(id: GameId, difference: number): string {
-  if (difference === 0) return "정확히 일치";
-  if (id === "luck") return `${difference}점 차이 이내`;
-  const hours = Math.floor(difference / 3600);
-  const minutes = Math.floor((difference % 3600) / 60);
-  const seconds = difference % 60;
-  return [hours ? `${hours}시간` : "", minutes ? `${minutes}분` : "", seconds ? `${seconds}초` : ""].filter(Boolean).join(" ") + " 이내";
-}
-function GameHelp({ id, authorName }: { id: GameId; authorName: string }) {
-  const rules = GAME_RULES[id];
+function GameHelp({ id, authorName, rules }: { id: GameId; authorName: string; rules: PredictionRules }) {
   return <div className="screen-body prediction-help"><details className="card">
     <summary>게임 방법</summary>
     <div className="help-content">
       <p>매일 {rules.deadline} (KST)까지 예측할 수 있어요. 정답이 먼저 공개되면 예측도 바로 마감돼요.</p>
-      <p>{id === "wake" ? `${authorName}님이 “기상했어요”를 누른 서버 시각이 정답이 되어 바로 공개돼요.` : id === "offwork" ? `${authorName}님이 정한 퇴근 시각에 자동 공개돼요. 미리 공개할 수도 있어요.` : `${authorName}님의 점수와 힌트를 보고 예측해요. ${GAME_RULES.luck.revealTime}에 자동 공개되며 미리 공개할 수도 있어요.`}</p>
-      <p>첫 예측 저장 즉시 참여 보상 {PREDICTION_REWARDS.participationGold}G를 받아요. 수정해도 다시 지급되지 않아요. 정답과 가장 가까운 1등은 {PREDICTION_REWARDS.firstGold}G를 받고, 동점이면 모두 받아요.</p>
+      <p>{id === "wake" ? `${authorName}님이 “기상했어요”를 누른 서버 시각이 정답이 되어 바로 공개돼요.` : id === "offwork" ? `${authorName}님이 정한 퇴근 시각에 자동 공개돼요. 미리 공개할 수도 있어요.` : `${authorName}님의 점수와 힌트를 보고 예측해요. ${rules.revealTime}에 자동 공개되며 미리 공개할 수도 있어요.`}</p>
+      <p>{rules.participationGold > 0 ? `첫 예측 저장 즉시 참여 보상 ${rules.participationGold}G를 받아요. 수정해도 다시 지급되지 않아요.` : "이번 판은 참여 골드 보상이 없어요."} {rules.firstGold > 0 ? `정답과 가장 가까운 1등은 ${rules.firstGold}G를 받고, 동점이면 모두 받아요.` : "이번 판은 1등 골드 보상이 없어요."}</p>
       <table><caption>정답과의 차이에 따른 점수</caption><thead><tr><th scope="col">차이</th><th scope="col">점수</th></tr></thead><tbody>
-        {SCORE_TABLES[id].map(tier => <tr key={tier.maxDifference}><th scope="row">{thresholdLabel(id, tier.maxDifference)}</th><td>{tier.points}점</td></tr>)}
-        <tr><th scope="row">그 밖</th><td>{predictionPoints(id, Infinity)}점</td></tr>
+        {rules.scoreTable.map(tier => <tr key={tier.maxDifference}><th scope="row">{scoreThresholdLabel(id, tier.maxDifference)}</th><td>{tier.points}점</td></tr>)}
+        <tr><th scope="row">그 밖</th><td>{predictionPointsForRules(rules, Infinity)}점</td></tr>
       </tbody></table>
       <p>출제자는 자기 게임을 예측할 수 없어요. 정답이 없는 날은 결과 대기 상태로 남고 참여 보상은 유지돼요.</p>
     </div>
   </details></div>;
 }
-export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, onReveal, onWake, onPhotoUpload }: Props) {
+export function PredictionGame(props: Props) {
+  if (!props.game.rules.enabled) return <div className={`prediction-page ${props.game.id}`}>
+    <Toolbar title={props.game.title} onBack={props.onBack} gold={props.user.gold} />
+    <div className="screen-body"><section className="card empty-state prediction-off" aria-label="오늘은 쉬어요">
+      <h2>오늘은 이 게임을 쉬어요</h2>
+    </section></div>
+  </div>;
+  return <ActivePredictionGame {...props} />;
+}
+function ActivePredictionGame({ game, user, serverTime, demo, onBack, onSave, onReveal, onWake, onPhotoUpload }: Props) {
+  const rules = game.rules;
   const author = user.role === "player" && user.username === game.authorUsername;
   const displayName = useDisplayNameLookup();
   const authorName = displayName(game.authorUsername, game.authorDisplayName);
@@ -347,7 +349,7 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
   }, [serverTime]);
   useEffect(() => { setValue(initial ?? defaultValue); }, [game.id, initial, defaultValue]);
   useEffect(() => { setHint(game.hint); }, [game.hint]);
-  const deadline = /^\d{2}:\d{2}:\d{2}$/.test(game.deadline) ? `${game.roundDate}T${game.deadline}+09:00` : game.deadline;
+  const deadline = `${game.roundDate}T${rules.deadline}+09:00`;
   const left = Math.max(0, Math.ceil((Date.parse(deadline) - now) / 1000));
   const editable = demo || (author ? game.canEditAnswer : game.canPredict && left > 0);
   const revealed = game.phase === "revealed" || Boolean(demo && author && previewPublished);
@@ -444,14 +446,14 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
         <span className="author-pill" style={{ color: playerColor[game.authorUsername] }}>출제 {authorName}</span>
       </div>
     </div>
-    {author && <p className="author-date">{game.roundDate} · {GAME_RULES[game.id].deadline} 마감 · 내가 출제하는 게임</p>}
+    {author && <p className="author-date">{game.roundDate} · {rules.deadline} 마감 · 내가 출제하는 게임</p>}
     <div className="countdown-row">
       <div className="countdown"><span>{revealed ? "정답" : author ? "예측 마감까지" : "마감까지"}</span>
         <strong ref={revealed ? answerRef : countdownRef} className={revealed ? "answer-number" : urgent ? "urgent" : ""}>{revealed ? `${answer ?? "—"}${game.id === "luck" ? "점" : ""}` : clock(left)}</strong>
       </div>
       <div className="deadline-block">
-        <span className={`pill ${revealed ? "yellow" : "mint"}`}>{revealed ? "결과 공개" : `${GAME_RULES[game.id].deadline} 마감`}</span>
-        {game.id === "luck" && !revealed && <small>{GAME_RULES.luck.revealTime} 공개</small>}
+        <span className={`pill ${revealed ? "yellow" : "mint"}`}>{revealed ? "결과 공개" : `${rules.deadline} 마감`}</span>
+        {game.id === "luck" && !revealed && <small>{rules.revealTime} 공개</small>}
       </div>
     </div>
     {revealed ? <div className="screen-body result-list" ref={results}>
@@ -481,7 +483,7 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
             <textarea value={hint} onChange={e => setHint(e.target.value)} placeholder="오늘의 기분은 어때요?" maxLength={200} disabled={!editable || busy} />
             <span className="subtle-note">{hint.length}/200</span>
           </label>}
-          {author && <p className="subtle-note">{game.id === "luck" ? `${GAME_RULES.luck.revealTime}에 자동 공개` : game.answer ? `${game.answer}에 자동 공개` : "퇴근 시각을 저장하면 그 시각에 자동 공개돼요."}</p>}
+          {author && <p className="subtle-note">{game.id === "luck" ? `${rules.revealTime}에 자동 공개` : game.answer ? `${game.answer}에 자동 공개` : "퇴근 시각을 저장하면 그 시각에 자동 공개돼요."}</p>}
         </section>}
         {game.participants.length > 0 && participants}
         {error && <p className="form-message error" role="alert">{error}</p>}
@@ -496,7 +498,7 @@ export function PredictionGame({ game, user, serverTime, demo, onBack, onSave, o
       </div>}
     </form>}
     <GameHistory game={game} username={user.username} demo={demo} />
-    <GameHelp id={game.id} authorName={authorName} />
+    <GameHelp id={game.id} authorName={authorName} rules={rules} />
     <dialog className="wake-confirmation" ref={confirmation} aria-labelledby="wake-confirm-title" aria-describedby="wake-confirm-description" onClick={e => { if (e.target === e.currentTarget && !busy) e.currentTarget.close(); }} onCancel={e => { if (busy) e.preventDefault(); }}>
       <h2 id="wake-confirm-title">기상 시각을 공개할까요?</h2>
       <p id="wake-confirm-description">확인을 누른 순간의 서버 시각이 정답이 돼요. 공개 후에는 되돌릴 수 없고 예측도 마감돼요.</p>

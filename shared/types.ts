@@ -1,6 +1,7 @@
 import type { ArtKey } from './characters';
 import type { KUJI_RULES, SPEETTO_RULES } from './balance';
 import type { Board, Doll, AttemptResult } from './claw-physics';
+import type { PredictionRules } from './admin';
 
 export type GameId = 'wake' | 'offwork' | 'luck';
 export type Role = 'player' | 'admin';
@@ -48,6 +49,7 @@ export interface GameHistoryRound {
 }
 export interface GameState {
   id: GameId;
+  rules: PredictionRules;
   title: string;
   authorUsername: string;
   authorDisplayName: string;
@@ -204,7 +206,7 @@ export interface ClawSummary {
 export interface ClawState extends ClawSummary {
   board: Board; version: number; generation: number; nextPlayAt: number;
 }
-export interface ClawPlayInput { requestId: string; version: number; x: number; stop?: number | null }
+export interface ClawPlayInput { requestId: string; version: number; x: number; stop?: number | null; forceStrong?: boolean }
 export interface ClawCoinInput { requestId: string; quantity: 1 | 5 }
 export interface ClawResult {
   requestId: string; playId: string; engine: number; x: number; stop: number | null;
@@ -212,6 +214,8 @@ export interface ClawResult {
   caught: boolean; prizes: Doll[]; doll: Doll | null; target: Doll | null;
   /** Total rewards, including the clear bonus. */
   points: number; gold: number; clearBonus: number; clearGold: number;
+  /** Machine progression is independent of rewards during administrator play. */
+  cleared?: boolean;
   released: AttemptResult['released']; reason: AttemptResult['reason'];
 }
 export interface ClawResponse extends ClawState {
