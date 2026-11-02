@@ -174,8 +174,16 @@ export interface CatchmindRound {
 }
 export interface CatchmindState {
   round: CatchmindRound | null; turn: CatchmindPlayer | null;
+  previousRound: CatchmindGalleryRound | null;
   canClaim: boolean; canReroll: boolean; canPublish: boolean; canGuess: boolean; canEnd: boolean; canNext: boolean;
 }
+/** Finished rounds only; images are served separately through immutable URLs. */
+export interface CatchmindGalleryRound {
+  id: string; number: number; drawer: CatchmindPlayer; answer: string;
+  winner: CatchmindPlayer | null; endReason: 'correct' | 'misses' | 'manual';
+  endedAt: string; image: string;
+}
+export interface CatchmindGalleryResponse { rounds: CatchmindGalleryRound[]; nextBefore: number | null }
 export interface CatchmindSummary {
   roundId: string | null; status: 'idle' | 'draft' | 'open' | 'ended';
   drawer: CatchmindPlayer | null; turn: CatchmindPlayer | null; wrongCount: number;

@@ -42,6 +42,7 @@ import { Kuji } from "./screens/Kuji";
 import { ShopProvider } from "./shop";
 import { CatchmindProvider } from "./catchmind";
 import { Catchmind } from "./screens/Catchmind";
+import { CatchmindGallery } from "./screens/CatchmindGallery";
 import { LaunchGiftProvider, StockNotice } from "./launch-gift";
 
 function navigate(path: string) {
@@ -560,6 +561,7 @@ export default function App() {
     );
   else if (!view || !me) content = null;
   else if (play === "kuji") content = <Kuji onBack={home} />;
+  else if (path === "/play/catchmind/gallery") content = <CatchmindGallery demo={demo} gold={me.gold} onBack={() => go("/play/catchmind")} />;
   else if (play === "catchmind") content = <Catchmind user={me} demo={demo} onBack={home} />;
   else if (play === "claw") content = <Claw user={me} demo={demo} onBack={home} />;
   else if (gameId && demo) {

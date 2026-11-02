@@ -14,6 +14,7 @@ import { getClawState, getClawSummary, playClaw } from '../worker/claw';
 import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
 import { readAnnouncements } from '../worker/announcements';
 import { readKujiSummary } from '../worker/shop';
+import type { CatchmindGalleryResponse } from '../shared/types';
 import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
 // Tiny, real encoded fixtures: solid coral images generated with Pillow, quality 80.
@@ -1954,6 +1955,106 @@ describe('Worker and D1 integration', () => {
     });
   });
 
+  async function seedGallery(database: Database, count: number, start = 1) {
+    await database.prepare(`WITH RECURSIVE numbers(n) AS (VALUES(CAST(? AS INTEGER)) UNION ALL SELECT n + 1 FROM numbers WHERE n < ?)
+      INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, image, winner_id, end_reason, ended_at, created_at)
+      SELECT 'gallery-' || n, n, 'min', '그림 ' || n, '그림' || n, '[]', 'ended', ?,
+        CASE WHEN n % 3 = 0 THEN 'siwon' ELSE NULL END,
+        CASE WHEN n % 3 = 0 THEN 'correct' WHEN n % 3 = 1 THEN 'misses' ELSE 'manual' END, ?, ? FROM numbers`)
+      .bind(start, start + count - 1, DRAWING_PNG, `${TODAY}T00:00:00Z`, `${TODAY}T00:00:00Z`).run();
+  }
+
+  describe('catchmind finished-round gallery', () => {
+    it('requires login, rejects invalid pages and returns an empty gallery without creating a round', async () => {
+      expect((await request('/api/catchmind/gallery')).status).toBe(401);
+      const { cookie } = await login('min');
+      expect(await (await request('/api/catchmind/gallery', { cookie })).json()).toEqual({ rounds: [], nextBefore: null });
+      for (const query of ['before=0', 'before=-1', 'before=1.5', 'before=9007199254740992', 'before=no', 'before=', 'limit=0', 'limit=10', 'limit=-1', 'limit=1.5']) {
+        expect((await request(`/api/catchmind/gallery?${query}`, { cookie })).status, query).toBe(400);
+      }
+      expect((await request('/api/catchmind/gallery', { method: 'POST', cookie, body: {} })).status).toBe(405);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM catchmind_rounds').first('count')).toBe(0);
+    });
+
+    it('returns only ended metadata in descending pages of nine, with stable cursors and current profiles', async () => {
+      const { cookie } = await login('min');
+      await seedGallery(db, 21);
+      await db.prepare("UPDATE users SET display_name = '그리는 민', character = 'moon' WHERE id = 'min'").run();
+      await db.prepare("UPDATE users SET display_name = '맞힌 시원' WHERE id = 'siwon'").run();
+      expect((await request('/api/me/photo', { method: 'PUT', cookie, body: { photo: PROFILE_WEBP, expectedUserId: 'min' } })).status).toBe(200);
+      for (const [number, status] of [[22, 'draft'], [23, 'open']] as const) {
+        await db.prepare(`INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, created_at)
+          VALUES (?, ?, 'min', '비공개제시어', '비공개제시어', '["숨긴이력"]', ?, ?)`)
+          .bind(`hidden-${status}`, number, status, `${TODAY}T00:00:00Z`).run();
+      }
+      const first = await request('/api/catchmind/gallery?limit=9', { cookie });
+      const text = await first.text();
+      expect(text).not.toContain('data:image'); expect(text).not.toContain('base64');
+      expect(text).not.toContain('비공개제시어'); expect(text).not.toContain('숨긴이력');
+      const page1 = JSON.parse(text) as CatchmindGalleryResponse;
+      expect(page1.rounds.map(round => round.number)).toEqual([21, 20, 19, 18, 17, 16, 15, 14, 13]);
+      expect(page1.nextBefore).toBe(13);
+      expect(page1.rounds[0]).toEqual({ id: 'gallery-21', number: 21, answer: '그림 21', image: catchmindImagePath('gallery-21'), endReason: 'correct', endedAt: `${TODAY}T00:00:00Z`,
+        drawer: { id: 'min', username: 'min', displayName: '그리는 민', photoVersion: 1, character: 'moon' },
+        winner: { id: 'siwon', username: 'siwon', displayName: '맞힌 시원', photoVersion: null, character: 'cat' } });
+      expect(page1.rounds[1]).toMatchObject({ winner: null, endReason: 'manual' });
+      expect(page1.rounds[2]).toMatchObject({ winner: null, endReason: 'misses' });
+      await seedGallery(db, 1, 24); // A new finish cannot shift an existing cursor.
+      const page2 = await (await request('/api/catchmind/gallery?before=13&limit=9', { cookie })).json() as CatchmindGalleryResponse;
+      expect(page2.rounds.map(round => round.number)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4]);
+      expect(page2.nextBefore).toBe(4);
+      const page3 = await (await request('/api/catchmind/gallery?before=4', { cookie })).json() as CatchmindGalleryResponse;
+      expect(page3.rounds.map(round => round.number)).toEqual([3, 2, 1]); expect(page3.nextBefore).toBeNull();
+      const image = await request(page1.rounds[0]!.image, { cookie });
+      expect(image.headers.get('Cache-Control')).toContain('immutable');
+      expect(Buffer.from(await image.arrayBuffer())).toEqual(Buffer.from(DRAWING_PNG.split(',')[1]!, 'base64'));
+    });
+
+    it('retains the previous result across new drafts and excludes the current ended round', async () => {
+      const { cookie } = await login('min');
+      let round = (await catchmindAction('claim', cookie, null)).catchmind.round!;
+      expect((await getCatchmind(cookie)).catchmind.previousRound).toBeNull();
+      await catchmindAction('publish', cookie, round.id, { wordVersion: round.wordVersion, image: DRAWING_PNG });
+      const first = await catchmindAction('end', cookie, round.id);
+      expect(first.catchmind.previousRound).toBeNull();
+      const firstId = round.id;
+      round = (await catchmindAction('next', cookie, round.id)).catchmind.round!;
+      expect((await getCatchmind(cookie)).catchmind.previousRound).toMatchObject({ id: firstId, number: 1, answer: first.catchmind.round!.word });
+      await catchmindAction('publish', cookie, round.id, { wordVersion: round.wordVersion, image: DRAWING_WEBP });
+      expect((await getCatchmind(cookie)).catchmind.previousRound?.id).toBe(firstId);
+      expect((await catchmindAction('end', cookie, round.id)).catchmind.previousRound?.id).toBe(firstId);
+      expect((await catchmindAction('next', cookie, round.id)).catchmind.previousRound?.id).toBe(round.id);
+    });
+
+    it('reports full authenticated gallery rows_read without growth from 5000 older rounds', async () => {
+      const instance = runtime(workerWithD1Metrics(script));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        const measurements: Record<string, number> = {};
+        const measure = async (label: string, query = '') => {
+          const response = await request(`/api/catchmind/gallery${query}`, { cookie, instance });
+          expect(response.status).toBe(200);
+          const header = response.headers.get('X-Test-D1-Rows-Read'); expect(header).not.toBeNull();
+          measurements[label] = Number(header);
+          expect(measurements[label]).toBeLessThanOrEqual(40);
+          return response.json() as Promise<CatchmindGalleryResponse>;
+        };
+        await measure('empty');
+        await seedGallery(database, 20, 6001);
+        expect((await measure('firstPage')).rounds).toHaveLength(9);
+        await measure('secondPage', '?before=6012&limit=9');
+        await seedGallery(database, 5000);
+        await measure('firstPageWith5000OlderRounds');
+        await measure('secondPageWith5000OlderRounds', '?before=6012&limit=9');
+        expect(measurements.firstPageWith5000OlderRounds).toBe(measurements.firstPage);
+        expect(measurements.secondPageWith5000OlderRounds).toBe(measurements.secondPage);
+        console.log(`Catchmind gallery full authenticated GET D1 rows_read: ${JSON.stringify(measurements)} (local D1, session lookup included)`);
+      } finally { await instance.dispose(); }
+    });
+  });
+
   describe('catchmind image delivery', () => {
     it.each([
       { image: DRAWING_PNG, mime: 'image/png', format: 'PNG' },
@@ -2090,6 +2191,76 @@ describe('Worker and D1 integration', () => {
     await database.prepare('INSERT INTO attendance (user_id, date, streak, created_at) VALUES (?, ?, ?, ?)')
       .bind(username, date, streak, `${date}T00:00:00.000Z`).run();
   }
+
+  describe('attendance coupons from November 3 KST', () => {
+    it.each([
+      { instant: '2026-11-02T14:59:59Z', day: '2026-11-02', prior: 0, gold: 100, coupons: 0 },
+      { instant: '2026-11-02T15:00:00Z', day: '2026-11-03', prior: 0, gold: 100, coupons: 1 },
+      { instant: '2026-11-02T15:00:00Z', day: '2026-11-03', prior: 6, gold: 500, coupons: 1 },
+      { instant: '2026-11-02T15:00:00Z', day: '2026-11-03', prior: 13, gold: 500, coupons: 1 },
+      { instant: '2026-11-03T15:00:00Z', day: '2026-11-04', prior: 0, gold: 100, coupons: 1 },
+    ])('awards $gold G and $coupons of each coupon once on $day after streak $prior', async ({ instant, day, prior, gold, coupons }) => {
+      const instance = runtime(await workerAt(instant));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const previousDay = new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+        if (prior) await seedAttendance(previousDay, prior, 'min', database);
+        const historical = (await database.prepare('SELECT * FROM attendance').all()).results;
+        const sessions = await Promise.all([login('min', instance), login('min', instance)]);
+        const claim = (cookie: string) => request('/api/me/attendance', { method: 'POST', cookie, instance,
+          body: { date: '2026-11-09', lottoTickets: 999, speettoTickets: 999 } });
+        const responses = await Promise.all(sessions.map(session => claim(session.cookie)));
+        expect(responses.map(response => response.status)).toEqual([200, 200]);
+        const receipts = await Promise.all(responses.map(response => response.json() as Promise<AttendanceClaimResponse>));
+        expect(receipts.map(receipt => receipt.awarded).sort()).toEqual([false, true]);
+        expect(receipts[0]!.attendance).toMatchObject({ today: day, streak: prior + 1, reward: gold });
+        expect(await (await claim(sessions[0]!.cookie)).json()).toMatchObject({ awarded: false });
+        expect(await ledgerRows(database)).toEqual([{ user_id: 'min', currency: 'gold', amount: gold, reference: `attendance:${day}:min`, week_start: null }]);
+        expect((await database.prepare('SELECT item, amount, reference FROM inventory_ledger ORDER BY item').all()).results).toEqual(coupons ? [
+          { item: 'lotto_ticket', amount: 1, reference: `attendance:${day}:min:lotto` },
+          { item: 'speetto_ticket', amount: 1, reference: `attendance:${day}:min:speetto` },
+        ] : []);
+        expect((await database.prepare('SELECT * FROM attendance WHERE date < ?').bind(day).all()).results).toEqual(historical);
+        const view = await (await request('/api/bootstrap', { cookie: sessions[0]!.cookie, instance })).json() as BootstrapResponse;
+        expect(view.inventory).toEqual({ lottoTickets: coupons, speettoTickets: coupons });
+        expect(await (await request('/api/shop', { cookie: sessions[0]!.cookie, instance })).json()).toMatchObject({ inventory: view.inventory });
+      } finally { await instance.dispose(); }
+    });
+
+    it('rejects admins and rolls all rewards back if either coupon cannot be written', async () => {
+      const instance = runtime(await workerAt('2026-11-03T00:00:00Z'));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const admin = await login('admin', instance);
+        expect((await request('/api/me/attendance', { method: 'POST', cookie: admin.cookie, instance, body: {} })).status).toBe(403);
+        const { cookie } = await login('min', instance);
+        await database.prepare(`CREATE TRIGGER fail_attendance_coupon BEFORE INSERT ON inventory_ledger
+          WHEN NEW.item = 'speetto_ticket' BEGIN SELECT RAISE(ABORT, 'test coupon failure'); END;`).run();
+        expect((await request('/api/me/attendance', { method: 'POST', cookie, instance, body: {} })).status).toBe(500);
+        for (const table of ['attendance', 'ledger', 'inventory_ledger']) {
+          expect(await database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first('count')).toBe(0);
+        }
+        await database.prepare('DROP TRIGGER fail_attendance_coupon').run();
+        expect((await request('/api/me/attendance', { method: 'POST', cookie, instance, body: {} })).status).toBe(200);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM inventory_ledger').first('count')).toBe(2);
+      } finally { await instance.dispose(); }
+    });
+
+    it.each(['2026-11-02T14:59:59Z', '2026-11-03T14:59:59Z'])('never backfills a claim queued across midnight from %s', async instant => {
+      const instance = runtime(await workerAt(instant, new Date(Date.parse(instant) + 1000).toISOString()));
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        expect((await request('/api/me/attendance', { method: 'POST', cookie, instance, body: {} })).status).toBe(409);
+        for (const table of ['attendance', 'ledger', 'inventory_ledger']) {
+          expect(await database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first('count')).toBe(0);
+        }
+      } finally { await instance.dispose(); }
+    });
+  });
 
   describe('server attendance and saved characters', () => {
     it('claims the first daily 100G once and returns the persisted state on retries', async () => {

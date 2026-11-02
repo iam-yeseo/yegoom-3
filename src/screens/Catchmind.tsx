@@ -3,6 +3,7 @@ import { CATCHMIND_RULES } from "../../shared/balance";
 import type { CatchmindAction, CatchmindInput, CatchmindRound, CatchmindState, User } from "../../shared/types";
 import { useCatchmind } from "../catchmind";
 import { DrawingCanvas } from "../components/DrawingCanvas";
+import { PreviousCatchmindRound } from "./CatchmindGallery";
 import { Avatar, Chevron, Toolbar, useDisplayNameLookup } from "../components/UI";
 import { confetti, flipY, hop, pop, popIn, rise, shake, toast, useMountMotion, useOnChange } from "../motion";
 import "../preview.css";
@@ -138,10 +139,11 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
     toast("그림을 올렸어요");
   }
   const state = game.state;
+  const galleryHref = `#${demo ? "/preview" : ""}/play/catchmind/gallery`;
   return <section className="preview-game pg-catchmind">
     <Toolbar title={round?.status === "draft" && isDrawer ? "그림 그리기" : "캐치마인드"} onBack={onBack} gold={user.gold} />
     <div className="pg-stack">
-      {round && <p className="cm-round-label">제 {round.number}판</p>}
+      <div className="cm-history-head">{round ? <p className="cm-round-label">제 {round.number}판</p> : <span />}<a className="text-button" href={galleryHref}>갤러리 보기</a></div>
       {user.role === "admin" && <p className="subtle-note">운영자 계정은 게임에 참여하지 않아요.</p>}
       {game.error && <div className="cm-error"><p className="form-message error" role="alert">{game.error}</p><button className="text-button" disabled={acting || game.busy} onClick={() => void game.refresh().catch(() => {})}>다시 불러오기</button></div>}
       {game.pending && <div className="pg-card cm-pending" role="status"><p>아직 처리 결과를 확인하지 못했어요. 같은 요청으로 다시 확인해 주세요.</p><button className="secondary-button" disabled={acting || game.busy} onClick={() => { if (game.pending) void run(game.pending.action, game.pending.input); }}>처리 결과 다시 확인</button></div>}
@@ -171,6 +173,7 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
       </>}
       {state && round?.status === "ended" && <Result key={round.id} state={state} user={user} locked={locked} demo={demo} onNext={() => void run("next", mutation())} />}
       {state?.canEnd && <button className="text-button cm-end-button" disabled={locked} onClick={() => confirmation.current?.showModal()}>이번 판 끝내기</button>}
+      <PreviousCatchmindRound round={state?.previousRound ?? null} demo={demo} galleryHref={galleryHref} loading={!state && game.loading} />
     </div>
     <dialog className="cm-confirmation" ref={confirmation} aria-labelledby="cm-end-title" aria-describedby="cm-end-description" onClick={event => { if (event.target === event.currentTarget && !locked) event.currentTarget.close(); }}>
       <h2 id="cm-end-title">이번 판을 끝낼까요?</h2><p id="cm-end-description">정답을 공개하고 보상 없이 판을 끝내요. 다음 그리기 차례는 나에게 남아요.</p>

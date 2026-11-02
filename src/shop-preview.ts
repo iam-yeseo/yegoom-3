@@ -1,4 +1,4 @@
-import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, SPEETTO_RULES, attendanceTickets, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
 import type {
   Inventory, KujiCell, KujiGrade, KujiPurchase, KujiPurchaseInput, KujiResponse,
   LedgerEntry, LottoPurchaseInput, LottoResponse, LottoTicket, ShopKind, ShopPayment,
@@ -29,6 +29,15 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   let gameGoldBonus = 0;
   let score = 0;
   const inventory: Inventory = { lottoTickets: 2, speettoTickets: 2 };
+  const attendanceTicketDays = new Set<string>();
+  function grantAttendanceTickets(amount: number, date: string) {
+    if (amount <= 0 || attendanceTicketDays.has(date)) return;
+    const tickets = attendanceTickets(date);
+    inventory.lottoTickets += tickets.lottoTickets;
+    inventory.speettoTickets += tickets.speettoTickets;
+    attendanceTicketDays.add(date);
+  }
+  grantAttendanceTickets(initialAttendanceBonus, initialAttendanceDate);
   let launchGiftClaimed = false;
   const ledger: LedgerEntry[] = [];
   let boardId = 1;
@@ -223,9 +232,10 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
       gold += next - gameGoldBonus;
       gameGoldBonus = next;
     },
-    // Attendance owns its preview record. Only reconcile its cash here so
+    // Attendance owns its preview record. Reconcile its rewards here so
     // claiming attendance after a purchase never resets or duplicates spending.
     setAttendanceBonus(next: number, date: string) {
+      grantAttendanceTickets(next, date);
       if (date !== attendanceDate) { attendanceDate = date; attendanceBonus = 0; }
       // A new day may earn another reward; it must not revoke money already
       // received (and possibly spent) on the previous day.

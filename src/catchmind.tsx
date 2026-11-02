@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import type { CatchmindAction, CatchmindInput, CatchmindPlayer, CatchmindResponse, CatchmindState, CatchmindSummary, LedgerEntry } from "../shared/types";
+import type { CatchmindAction, CatchmindGalleryResponse, CatchmindInput, CatchmindPlayer, CatchmindResponse, CatchmindState, CatchmindSummary, LedgerEntry } from "../shared/types";
 import { api, ApiFailure } from "./api";
 import { createCatchmindPreview } from "./catchmind-preview";
 
@@ -11,6 +11,7 @@ interface CatchmindContextValue {
   error: string;
   pending: PendingCatchmind | null;
   refresh: () => Promise<void>;
+  gallery: (before?: number) => Promise<CatchmindGalleryResponse>;
   mutate: (action: CatchmindAction, input: CatchmindInput) => Promise<CatchmindResponse>;
 }
 const Context = createContext<CatchmindContextValue | null>(null);
@@ -108,5 +109,6 @@ export function CatchmindProvider({ children, preview, viewer, accountKey, trans
       if (mounted.current && deferredRead.current) { deferredRead.current = false; void refresh(); }
     }
   }, [apply, remember, preview, refresh]);
-  return <Context.Provider value={{ state, loading, busy, error, pending, refresh, mutate }}>{children}</Context.Provider>;
+  const gallery = useCallback(async (before?: number) => previewEngine.current ? previewEngine.current.gallery(before) : api.catchmindGallery(before), []);
+  return <Context.Provider value={{ state, loading, busy, error, pending, refresh, mutate, gallery }}>{children}</Context.Provider>;
 }

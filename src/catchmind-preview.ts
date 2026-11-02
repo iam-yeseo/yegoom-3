@@ -3,7 +3,7 @@ import { CATCHMIND_WORDS } from '../shared/catchmind-words';
 import { defaultCharacter } from '../shared/characters';
 import type {
   CatchmindAction, CatchmindInput, CatchmindPlayer, CatchmindResponse,
-  CatchmindRound, CatchmindSummary, LedgerEntry,
+  CatchmindRound, CatchmindGalleryRound, CatchmindGalleryResponse, CatchmindSummary, LedgerEntry,
 } from '../shared/types';
 
 const EMPTY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6D1AAAAAASUVORK5CYII=';
@@ -83,10 +83,16 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
   const player = structuredClone(viewer);
   const drawer = person('siwon');
   const startedAt = Date.now();
+  const drawing = sampleDrawing();
+  const history: CatchmindGalleryRound[] = Array.from({ length: 12 }, (_, index) => ({
+    id: `preview-catchmind-history-${index + 1}`, number: index + 1, drawer: person(index % 2 ? 'min' : 'siwon'),
+    answer: '선인장', image: drawing, winner: (index + 1) % 3 === 0 ? person('yeseo') : null,
+    endReason: (index + 1) % 3 === 0 ? 'correct' : 'misses', endedAt: new Date(startedAt - (13 - index) * 3_600_000).toISOString(),
+  }));
   let turn: CatchmindPlayer | null = drawer;
   let round: CatchmindRound | null = {
-    id: 'preview-catchmind-1', number: 1, status: 'open', drawer, word: '선인장', wordVersion: 0,
-    rerollsLeft: CATCHMIND_RULES.rerolls, image: sampleDrawing(), wrongCount: 2, hint: null,
+    id: 'preview-catchmind-1', number: 13, status: 'open', drawer, word: '선인장', wordVersion: 0,
+    rerollsLeft: CATCHMIND_RULES.rerolls, image: drawing, wrongCount: 2, hint: null,
     winner: null, endReason: null, publishedAt: new Date(startedAt - 180_000).toISOString(), endedAt: null,
     guesses: ['구름', '만두'].map((answer, index) => ({ id: `preview-guess-${index}`, player: person('min'), answer,
       correct: false, createdAt: new Date(startedAt - (2 - index) * 60_000).toISOString() })),
@@ -98,13 +104,19 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
   const receipts = new Map<string, string>();
   const isDrawer = () => round?.drawer.id === player.id;
 
+  function gallery(before = Number.MAX_SAFE_INTEGER): CatchmindGalleryResponse {
+    const rows = history.filter(item => item.number < before).sort((a, b) => b.number - a.number);
+    const rounds = rows.slice(0, CATCHMIND_RULES.galleryPageSize);
+    return structuredClone({ rounds, nextBefore: rows.length > rounds.length ? rounds[rounds.length - 1].number : null });
+  }
+
   function read(): CatchmindResponse {
     const draft = round?.status === 'draft';
     const open = round?.status === 'open';
     const holder = turn?.id === player.id;
     const shown = round && { ...round, word: isDrawer() || round.status === 'ended' ? round.word : null };
     return structuredClone({ catchmind: {
-      round: shown, turn, canClaim: !turn && !draft && !open,
+      round: shown, turn, previousRound: gallery(round?.number).rounds[0] ?? null, canClaim: !turn && !draft && !open,
       canReroll: Boolean(draft && holder && (round?.rerollsLeft ?? 0) > 0), canPublish: Boolean(draft && holder),
       canGuess: Boolean(open && !isDrawer()), canEnd: Boolean(open && isDrawer()),
       canNext: Boolean(round?.status === 'ended' && holder),
@@ -130,6 +142,8 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     if (!round) return;
     round.status = 'ended'; round.endReason = reason; round.endedAt = now;
     round.winner = won ? player : null;
+    history.push({ id: round.id, number: round.number, drawer: round.drawer, answer: round.word!, image: round.image!,
+      winner: round.winner, endReason: reason!, endedAt: now });
     turn = won ? player : round.drawer;
     if (!won) return;
     gold += CATCHMIND_RULES.gold; score += CATCHMIND_RULES.score;
@@ -192,5 +206,5 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     receipts.set(input.requestId, payload);
     return read();
   }
-  return { read, mutate, summary, get gold() { return gold; }, get score() { return score; }, get ledger() { return structuredClone(ledger); } };
+  return { read, mutate, summary, gallery, get gold() { return gold; }, get score() { return score; }, get ledger() { return structuredClone(ledger); } };
 }

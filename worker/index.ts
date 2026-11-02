@@ -1,11 +1,11 @@
 import type { AttendanceState, BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, Player, LedgerEntry } from '../shared/types';
-import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, CATCHMIND_RULES, PREDICTION_REWARDS, predictionPoints } from '../shared/balance';
+import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, attendanceTickets, CATCHMIND_RULES, PREDICTION_REWARDS, predictionPoints } from '../shared/balance';
 import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
 import { DUMMY_HASH, hashPassword, hashToken, randomToken, verifyPassword } from './crypto';
 import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readInventory, readKujiSummary, settleDueLotto, ShopError, shopRoute } from './shop';
-import { CatchmindError, catchmindRoute, readCatchmindImage, readCatchmindSummary } from './catchmind';
+import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary } from './catchmind';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
 import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
@@ -292,6 +292,8 @@ async function claimAttendance(request: Request, env: Env, user: UserRow, now: D
   const yesterday = kstDate(new Date(now.getTime() - 86_400_000));
   const dayStart = kstTimestamp(today, '00:00:00');
   const dayEnd = dayStart + 86_400_000;
+  const awardId = crypto.randomUUID();
+  const tickets = attendanceTickets(today);
   const writes = await env.DB.batch([
     // Read yesterday's streak inside the write, so concurrent claims cannot
     // overwrite a stored streak or create a second attendance for this day.
@@ -304,14 +306,23 @@ async function claimAttendance(request: Request, env: Env, user: UserRow, now: D
       (id, user_id, currency, amount, reason, reference, created_at)
       SELECT ?, user_id, 'gold', CASE WHEN streak % ? = 0 THEN ? ELSE ? END, '출석 체크', ?, ?
       FROM attendance WHERE user_id = ? AND date = ? AND changes() = 1`)
-      .bind(crypto.randomUUID(), ATTENDANCE_RULES.cycleLength, ATTENDANCE_RULES.cycleGold, ATTENDANCE_RULES.dailyGold,
+      .bind(awardId, ATTENDANCE_RULES.cycleLength, ATTENDANCE_RULES.cycleGold, ATTENDANCE_RULES.dailyGold,
         `attendance:${today}:${user.id}`, now.toISOString(), user.id, today),
+    // Both coupons depend on this attempt's new gold award, not changes() from
+    // the preceding coupon. A saved/queued retry cannot backfill or pay twice.
+    ...([
+      ['lotto_ticket', 'lotto', tickets.lottoTickets],
+      ['speetto_ticket', 'speetto', tickets.speettoTickets],
+    ] as const).filter(([, , amount]) => amount > 0).map(([item, suffix, amount]) => env.DB.prepare(`
+      INSERT OR IGNORE INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at)
+      SELECT ?, user_id, ?, ?, '출석 체크', ?, created_at FROM ledger WHERE id = ?`)
+      .bind(crypto.randomUUID(), item, amount, `attendance:${today}:${user.id}:${suffix}`, awardId)),
     env.DB.prepare("SELECT unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ? AS dayOpen")
       .bind(dayStart, dayEnd),
   ]);
   // A claim queued across midnight must not backfill yesterday after a newer
   // day's streak was computed. Retrying uses the new server day instead.
-  if (writes[0]!.meta.changes === 0 && !(writes[2]!.results[0] as { dayOpen: number }).dayOpen) {
+  if (writes[0]!.meta.changes === 0 && !(writes[writes.length - 1]!.results[0] as { dayOpen: number }).dayOpen) {
     throw new HttpError(409, 'DAY_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침하고 출석해 주세요.');
   }
   const attendance = await readAttendance(env.DB, user, now);
@@ -499,6 +510,20 @@ async function api(request: Request, env: Env): Promise<Response> {
   if (url.pathname === '/api/me/character') {
     if (request.method === 'PUT') return updateCharacter(request, env, user, now);
     throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+  }
+  if (url.pathname === '/api/catchmind/gallery') {
+    if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    const positiveInteger = (value: string | null, fallback: number) => {
+      if (value === null) return fallback;
+      if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        throw new HttpError(400, 'INVALID_PAGE', '갤러리 페이지를 확인해 주세요.');
+      }
+      return Number(value);
+    };
+    const before = positiveInteger(url.searchParams.get('before'), Number.MAX_SAFE_INTEGER);
+    const limit = positiveInteger(url.searchParams.get('limit'), CATCHMIND_RULES.galleryPageSize);
+    if (limit > CATCHMIND_RULES.galleryPageSize) throw new HttpError(400, 'INVALID_PAGE', '한 번에 불러올 그림 수를 확인해 주세요.');
+    return json(await readCatchmindGallery(env.DB, before, limit));
   }
   const catchmindImageMatch = /^\/api\/catchmind\/rounds\/([^/]+)\/image$/.exec(url.pathname);
   if (catchmindImageMatch) {

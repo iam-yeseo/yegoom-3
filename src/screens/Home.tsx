@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ATTENDANCE_RULES, CATCHMIND_RULES, FEATURES, GAME_RULES, KUJI_RULES, LOTTO_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, GAME_RULES, KUJI_RULES, LOTTO_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
 import type { CatchmindSummary, ClawSummary, GameState, KujiSummary } from "../../shared/types";
 import { useAttendance } from "../attendance";
@@ -350,7 +350,7 @@ function AttendanceCard({ data, go, onClaimed }: {
       if (result.awarded) {
         await new Promise<void>(resolve => coinFly(button, document.querySelector(".room-top .gold"), resolve));
         if (!mounted.current) return;
-        toast(`+${result.attendance.reward}G 받았어요`);
+        toast(`+${attendanceRewardLabel(result.attendance.reward, result.attendance.today)} 받았어요`);
         await onClaimed();
         await waitForAttendanceEffects(card.current?.closest(".home") ?? null);
       } else toast("오늘 출석은 이미 완료했어요");
@@ -379,7 +379,7 @@ function AttendanceCard({ data, go, onClaimed }: {
       <div className="attendance-head">
         <button className="attendance-title" onClick={() => go("/attendance")}>
           <strong>출석체크</strong>
-          <small>{cycleDay}일째 · +{reward}G{claimed ? " 받음" : ""}</small>
+          <small>{cycleDay}일째 · {attendanceRewardLabel(reward, today)}{claimed ? " 받음" : ""}</small>
         </button>
         {claimed && !busy ? <span className="claim-button done">받음</span> : canClaim || busy ?
           <button className="claim-button" disabled={busy} onClick={e => void receive(e.currentTarget)}>

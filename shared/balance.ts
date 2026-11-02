@@ -1,4 +1,4 @@
-import type { GameId } from './types';
+import type { GameId, Inventory } from './types';
 
 export const ANNOUNCEMENT_RULES = { recentMs: 10 * 60_000, limit: 5, displayMs: 4000, lottoRanks: [1, 2, 3] as const } as const;
 
@@ -13,7 +13,19 @@ export const GAME_RULES = {
 } as const satisfies Record<GameId, { title: string; author: string; deadline: string; revealTime?: string }>;
 
 export const PREDICTION_REWARDS = { participationGold: 100, firstGold: 100 } as const;
-export const ATTENDANCE_RULES = { cycleLength: 7, dailyGold: 100, cycleGold: 500 } as const;
+export const ATTENDANCE_RULES = {
+  cycleLength: 7, dailyGold: 100, cycleGold: 500,
+  ticketsFrom: '2026-11-03', lottoTickets: 1, speettoTickets: 1,
+} as const;
+/** date is the server's KST attendance day (the local KST day in previews). */
+export function attendanceTickets(date: string): Inventory {
+  const active = date >= ATTENDANCE_RULES.ticketsFrom;
+  return { lottoTickets: active ? ATTENDANCE_RULES.lottoTickets : 0, speettoTickets: active ? ATTENDANCE_RULES.speettoTickets : 0 };
+}
+export function attendanceRewardLabel(gold: number, date: string): string {
+  const tickets = attendanceTickets(date);
+  return `${gold}G${tickets.lottoTickets ? ` + 로또 ${tickets.lottoTickets}` : ''}${tickets.speettoTickets ? ` + 스피또 ${tickets.speettoTickets}` : ''}`;
+}
 export function attendanceCycleDay(streak: number): number {
   return ((streak - 1) % ATTENDANCE_RULES.cycleLength) + 1;
 }
@@ -22,7 +34,7 @@ export function attendanceReward(streak: number): number {
 }
 export const CATCHMIND_RULES = {
   rerolls: 3, hintAfter: 3, endAfter: 6, score: 3, gold: 5,
-  pollIntervalMs: 5000, maxImageBytes: 300 * 1024, maxAnswerLength: 80,
+  pollIntervalMs: 5000, maxImageBytes: 300 * 1024, maxAnswerLength: 80, galleryPageSize: 9,
 } as const;
 /** Public claw economy only; grip settings and counters stay in the server DB. */
 export const CLAW_RULES = {
