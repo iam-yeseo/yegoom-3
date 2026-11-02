@@ -1,7 +1,8 @@
 import type { AttendanceState, BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, Player, LedgerEntry } from '../shared/types';
 import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, CATCHMIND_RULES, PREDICTION_REWARDS, predictionPoints } from '../shared/balance';
 import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
-import { DUMMY_HASH, hashToken, randomToken, verifyPassword } from './crypto';
+import { DUMMY_HASH, hashPassword, hashToken, randomToken, verifyPassword } from './crypto';
+import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readInventory, readKujiSummary, settleDueLotto, ShopError, shopRoute } from './shop';
 import { CatchmindError, catchmindRoute, readCatchmindImage, readCatchmindSummary } from './catchmind';
@@ -110,6 +111,60 @@ async function login(request: Request, env: Env, now: Date): Promise<Response> {
   if (sessionWrites[2]!.meta.changes !== 1) throw new HttpError(401, 'INVALID_CREDENTIALS', '아이디와 비밀번호를 확인해 주세요.');
   return json({ user: await publicUser(env.DB, user, now) }, 200, { 'Set-Cookie': cookie(request, token, SESSION_AGE_SECONDS) });
 }
+async function changePassword(request: Request, env: Env, user: UserRow): Promise<Response> {
+  const input = await body(request, PASSWORD_RULES.bodyMaxBytes);
+  if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) {
+    throw new HttpError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
+  }
+  if (typeof input.currentPassword !== 'string' || input.currentPassword.length < 1
+    || input.currentPassword.length > PASSWORD_RULES.maxLength
+    || new TextEncoder().encode(input.currentPassword).byteLength > PASSWORD_RULES.maxBytes) {
+    throw new HttpError(400, 'INVALID_CURRENT_PASSWORD', '현재 비밀번호를 확인해 주세요.');
+  }
+  if (!validNewPassword(input.newPassword)) {
+    throw new HttpError(400, 'INVALID_NEW_PASSWORD', `새 비밀번호는 ${PASSWORD_RULES.minLength}~${PASSWORD_RULES.maxLength}자로 입력해 주세요.`);
+  }
+  if (input.currentPassword === input.newPassword) {
+    throw new HttpError(400, 'PASSWORD_UNCHANGED', '새 비밀번호는 현재 비밀번호와 다르게 입력해 주세요.');
+  }
+  const bucket = await hashToken(`password:${user.id}`);
+  const attemptedAt = Date.now();
+  // Reserve a verification slot before the KDF, including concurrent requests.
+  // Failed verification retains it; only a committed change clears the bucket.
+  const attempts = await env.DB.prepare(`INSERT INTO login_attempts (bucket, attempts, expires_at) VALUES (?, 1, ?)
+    ON CONFLICT(bucket) DO UPDATE SET attempts = CASE WHEN expires_at <= ? THEN 1 ELSE attempts + 1 END,
+      expires_at = CASE WHEN expires_at <= ? THEN excluded.expires_at ELSE expires_at END RETURNING attempts`)
+    .bind(bucket, attemptedAt + PASSWORD_RULES.windowMs, attemptedAt, attemptedAt).first<number>('attempts');
+  if ((attempts ?? 0) > PASSWORD_RULES.attempts) {
+    throw new HttpError(429, 'TOO_MANY_PASSWORD_ATTEMPTS', '비밀번호 확인 시도가 많아요. 15분 뒤 다시 시도해 주세요.');
+  }
+  if (!await verifyPassword(input.currentPassword, user.password_hash)) {
+    // This is a failed confirmation, not an expired login session.
+    throw new HttpError(400, 'CURRENT_PASSWORD_INCORRECT', '현재 비밀번호가 맞지 않아요.');
+  }
+  const passwordHash = await hashPassword(input.newPassword);
+  const token = randomToken();
+  const [tokenHash, previousTokenHash] = await Promise.all([hashToken(token), hashToken(sessionToken(request)!)]);
+  const committedAt = Date.now();
+  const writes = await env.DB.batch([
+    env.DB.prepare(`UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ? AND active = 1
+      AND EXISTS (SELECT 1 FROM sessions WHERE token_hash = ? AND user_id = users.id AND expires_at > ?) RETURNING id`)
+      .bind(passwordHash, user.id, user.password_hash, previousTokenHash, committedAt),
+    // users_revoke_sessions runs inside the UPDATE. changes() observes the
+    // outer UPDATE, so a losing compare-and-swap cannot create a new session.
+    env.DB.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at, created_at)
+      SELECT ?, ?, ?, ? WHERE changes() = 1`)
+      .bind(tokenHash, user.id, committedAt + SESSION_AGE_SECONDS * 1000, committedAt),
+    env.DB.prepare('DELETE FROM login_attempts WHERE bucket = ? AND changes() = 1').bind(bucket),
+  ]);
+  // D1 meta.changes also includes the trigger's deletes; RETURNING identifies
+  // the one user actually updated, independently of their old session count.
+  if (writes[0]!.results.length !== 1 || writes[1]!.meta.changes !== 1) {
+    throw new HttpError(409, 'PASSWORD_CHANGE_CONFLICT', '계정 상태가 바뀌었어요. 다시 로그인해 주세요.');
+  }
+  return json({ ok: true }, 200, { 'Set-Cookie': cookie(request, token, SESSION_AGE_SECONDS) });
+}
+
 async function roundResults(db: D1Database, id: GameId, date: string, answer: string): Promise<GameResult[]> {
   const rows = (await db.prepare(`SELECT p.player_id, u.username, u.display_name, p.value, u.character,
     CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photo_version
@@ -382,6 +437,10 @@ async function api(request: Request, env: Env): Promise<Response> {
     return json({ ok: true }, 200, { 'Set-Cookie': cookie(request, '', 0) });
   }
   const user = await requireUser(request, env, now.getTime());
+  if (url.pathname === '/api/me/password') {
+    if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return changePassword(request, env, user);
+  }
   if (url.pathname === '/api/auth/me' && request.method === 'GET') return json({ user: await publicUser(env.DB, user, now) });
   if (url.pathname === '/api/bootstrap' && request.method === 'GET') return json(await bootstrap(env, user, now));
   if (url.pathname === '/api/me/profile' || url.pathname === '/api/me/photo') {

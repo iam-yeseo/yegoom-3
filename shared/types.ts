@@ -104,6 +104,7 @@ export interface AttendanceResponse { attendance: AttendanceState }
 export interface AttendanceClaimResponse extends AttendanceResponse { user: User; awarded: boolean }
 export interface CharacterInput { character: ArtKey; migrate?: boolean; expectedUserId?: string }
 export interface AuthResponse { user: User }
+export interface PasswordChangeInput { currentPassword: string; newPassword: string; expectedUserId?: string }
 export interface GameResponse { game: GameState }
 export interface HistoryResponse { history: GameHistoryRound[] }
 export interface ApiError { error: { code: string; message: string } }

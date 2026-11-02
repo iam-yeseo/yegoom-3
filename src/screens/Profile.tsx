@@ -18,6 +18,7 @@ import {
 import { KST, weekdayNames } from "../sample";
 import { anim, pop, reduced, useOnChange } from "../motion";
 import { PhotoPicker } from "../components/PhotoPicker";
+import { PasswordSheet } from "../components/PasswordSheet";
 
 /** Picks an icon for a ledger reason by the game it mentions. */
 function reasonIcon(reason: string): ArtKey {
@@ -66,6 +67,7 @@ export function Profile({
   onDisplayNameChange,
   onPhotoChange,
   onPhotoDelete,
+  onPasswordChange,
 }: {
   username: string;
   displayName: string;
@@ -82,6 +84,7 @@ export function Profile({
   onDisplayNameChange: (displayName: string) => Promise<void>;
   onPhotoChange: (photo: string) => Promise<void>;
   onPhotoDelete: () => Promise<void>;
+  onPasswordChange?: (currentPassword: string, newPassword: string) => Promise<void>;
 }) {
   const characterOf = useCharacterLookup();
   const displayNameOf = useDisplayNameLookup();
@@ -91,6 +94,7 @@ export function Profile({
   const [profileError, setProfileError] = useState("");
   const [profileMessage, setProfileMessage] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const photoInput = useRef<HTMLInputElement>(null);
   const editing = useRef(false);
   useEffect(() => { setNickname(displayName); }, [displayName]);
@@ -215,6 +219,10 @@ export function Profile({
           {profileError && <p className="form-message error" role="alert">{profileError}</p>}
           {profileMessage && <p className="profile-edit-success" role="status">{profileMessage}</p>}
         </section>
+        <section className="card profile-password">
+          <button type="button" disabled={!onPasswordChange || profileBusy || busy} onClick={() => setPasswordOpen(true)}>비밀번호 변경</button>
+          {!onPasswordChange && <p>미리보기에서는 비밀번호를 바꿀 수 없어요. 로그인 후 이용해 주세요.</p>}
+        </section>
         <section className="card character-picker" aria-busy={characterBusy}>
           <h2>내 캐릭터</h2>
           <div className="character-grid" ref={grid}>
@@ -314,6 +322,7 @@ export function Profile({
         )}
       </div>
       {photoFile && <PhotoPicker file={photoFile} onClose={() => setPhotoFile(null)} onSave={async photo => { await onPhotoChange(photo); setProfileMessage("프로필 사진을 저장했어요."); }} />}
+      {passwordOpen && onPasswordChange && <PasswordSheet username={username} onClose={() => setPasswordOpen(false)} onChange={onPasswordChange} />}
     </div>
   );
 }

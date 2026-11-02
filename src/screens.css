@@ -2233,6 +2233,17 @@ em.delisted {
   white-space: nowrap;
   pointer-events: none;
 }
+.fx-toast-wrap {
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  height: auto;
+  min-height: 48px;
+  padding-block: 10px;
+  white-space: normal;
+  word-break: keep-all;
+  line-height: 1.5;
+}
+.fx-toast-wrap > span { flex-shrink: 0; }
 .fx-toast > span {
   width: 32px;
   height: 32px;
