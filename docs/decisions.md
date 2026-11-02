@@ -106,6 +106,16 @@ React + TypeScript + Vite 클라이언트, 별도 Workers API, D1, PWA로 시작
 - **미리보기:** 프로필·사진은 해당 미리보기 메모리에서만 바꾸며 실제 API를 호출하지 않는다. 행운 미리보기는 실제 사용자 yeseo의 출제 흐름으로 사진 선택·점수 저장·공개까지 체험하고 보상은 만들지 않는다. 과거 예시 사진은 ‘미리보기 증거’라고 표시한 로컬 그림을 사용한다.
 - **초기화:** `announcements`, `luck_photos`를 삭제 대상에 더해 19개 기록 테이블을 비운다. `user_photos`와 사용자 닉네임·사진 버전을 포함한 계정/세션/설정은 보존한다. 사전 검사와 초기화 도구는 별도이며 자동 이름 변경이나 개발 중 운영 초기화는 없다.
 
+## 사용자 비밀번호 변경 (2026-11-02)
+
+- `PUT /api/me/password`는 Origin·로그인·활성 사용자 확인 후 현재 비밀번호를 확인한다. 운영자도 같은 경로로 자신의 비밀번호를 바꾼다. 브라우저는 기존 프로필 수정과 같이 `expectedUserId`를 함께 보내 계정이 바뀐 탭의 저장을 거절한다.
+- `shared/password.ts`에서 새 비밀번호 12~128자(로그인/CLI와 같은 UTF-16 길이), 필드 UTF-8 512바이트, 요청 본문 2,048바이트 상한을 공유한다. 공백 제거·정규화는 하지 않는다. 동일한 비밀번호를 거절하고 비밀번호나 해시를 응답·로그에 넣지 않는다.
+- 사용자별 `hashToken("password:" + userId)` 버킷으로 15분에 10회 확인을 허용한다. 동시 요청도 비싼 확인 전에 SQL upsert로 슬롯을 확보한다. 실패 시 유지하고 성공한 변경 batch에서 버킷을 지운다. 11번째부터 429이며 차단 중에는 KDF를 실행하지 않고 창을 연장하지 않는다.
+- 확인한 해시와 요청 세션을 조건으로 `users UPDATE → 새 sessions INSERT → 시도 버킷 DELETE`를 하나의 D1 batch로 처리한다. 기존 `users_revoke_sessions` 트리거가 다른 세션을 지우며 `changes()` 조건으로 패배한 동시 요청이 세션을 만들지 못하게 한다. 비활성화·로그아웃·중복 변경과 경합하면 409, 새 세션 생성 실패는 해시와 세션 삭제까지 롤백한다. 성공 응답은 새 HttpOnly·SameSite=Strict 쿠키를 설정한다.
+- 내 정보 시트에는 숨은 로그인 아이디, `current-password`/`new-password` 자동완성, 개별 보기/숨기기, 길이·동일값·확인 일치 안내를 둔다. 닫기·바깥 누르기·Esc와 포커스 이동을 지원하며 저장 중 중복 제출/닫기를 막는다. 닫으면 입력 상태를 버리고 미리보기에서는 항목을 비활성화해 API를 호출하지 않는다. 비밀번호 분실은 운영자 CLI 초기화로 안내한다.
+- 성공 경로는 PBKDF2 확인 1회+생성 1회, 로그인은 확인 1회다. 통합 테스트에서 실제 Worker 번들의 호출 수를 측정하며 `node scripts/measure-password-cpu.mjs`로 같은 암호 함수의 로컬 Node WebCrypto CPU를 별도로 측정한다. 30회 CPU 중앙값은 로그인 26.780ms, 변경 54.218ms(약 2.02배)다. 운영 Workers CPU 측정값이 아니며 환경·p95·화면 자료는 [검증 보고](password-change-validation.md)에 기록했다.
+- 마이그레이션 없음. 반영 순서는 리뷰 → 머지 → 배포이며 `npm run db:migrate:remote`는 필요 없다. 이번 작업은 Draft PR에서 멈춘다.
+
 ## 저장과 정산의 경계
 
 `users`, `sessions`, `login_attempts`, `game_rounds`, `predictions`, `attendance`, `ledger`를 분리했다. 세션 토큰은 서버에 SHA-256 해시만 저장하고 비밀번호는 무작위 salt를 사용하는 PBKDF2로 저장한다. API 상태·오류 응답은 `no-store`이며, 캐치마인드 이미지에만 위 private HTTP 캐시 정책을 적용한다. 수정 요청은 Origin 검사와 서버 권한 검사를 통과해야 한다.
