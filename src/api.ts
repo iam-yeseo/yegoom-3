@@ -11,7 +11,7 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput,
   CatchmindAction, CatchmindInput, CatchmindResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput,
-  LaunchGiftResponse, LuckPhotoResponse,
+  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput,
 } from "../shared/types";
 import type { ArtKey } from "../shared/characters";
 
@@ -81,6 +81,9 @@ export const api = {
     body: JSON.stringify({ roundDate }),
   }),
   bootstrap: () => request<BootstrapResponse>("/bootstrap"),
+  changePassword: (input: PasswordChangeInput) => request<{ ok: true }>("/me/password", {
+    method: "PUT", body: JSON.stringify(input),
+  }),
   login: (username: string, password: string) =>
     request<AuthResponse>("/auth/login", {
       method: "POST",

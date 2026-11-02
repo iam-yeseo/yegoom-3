@@ -325,9 +325,10 @@ export function coinFly(from: Element | null | undefined, to: Element | null | u
   }
 }
 /** A short confirmation pill near the bottom of the app column. */
-export function toast(text: string, o: { hold?: number } = {}) {
+export function toast(text: string, o: { hold?: number; wrap?: boolean } = {}) {
   const t = document.createElement("div");
   t.className = "fx-toast";
+  if (o.wrap) t.classList.add("fx-toast-wrap");
   t.setAttribute("role", "status");
   t.innerHTML = `<span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" pathLength="1" stroke-dasharray="1" stroke-dashoffset="${reduced() ? 0 : 1}"></path></svg></span>`;
   t.appendChild(document.createTextNode(text));

@@ -668,6 +668,13 @@ export default function App() {
             setPreviewProfile(current => ({ ...current, displayName: result.value }));
           } else await changeProfile(owner => api.updateProfile(displayName, owner));
         }}
+        onPasswordChange={demo ? undefined : async (currentPassword, newPassword) => {
+          const owner = me.id;
+          await mutate(async () => {
+            if (activeUserId.current !== owner) throw new ApiFailure(409, "로그인한 계정이 바뀌었어요. 다시 시도해 주세요.");
+            return api.changePassword({ currentPassword, newPassword, expectedUserId: owner });
+          }, () => {});
+        }}
         onPhotoChange={async photo => {
           if (demo) setPreviewProfile(current => ({ ...current, photoVersion: ++previewPhotoCounter.current, photoUrl: photo }));
           else await changeProfile(owner => api.uploadProfilePhoto(photo, owner));
