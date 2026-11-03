@@ -44,8 +44,12 @@ export function predictionPointsForRules(rules: PredictionRules, difference: num
 export function scoreThresholdLabel(id: GameId, difference: number): string {
   if (difference === 0) return '정확히 일치';
   if (id === 'luck') return `${difference}점 차이 이내`;
-  const hours = Math.floor(difference / 3600);
-  const minutes = Math.floor(difference % 3600 / 60);
-  const seconds = difference % 60;
-  return `${[hours ? `${hours}시간` : '', minutes ? `${minutes}분` : '', seconds ? `${seconds}초` : ''].filter(Boolean).join(' ')} 이내`;
+  return `${durationLabel(difference)} 이내`;
+}
+/** 4727 -> "1시간 18분 47초" */
+export function durationLabel(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor(totalSeconds % 3600 / 60);
+  const seconds = totalSeconds % 60;
+  return [hours ? `${hours}시간` : '', minutes ? `${minutes}분` : '', seconds ? `${seconds}초` : ''].filter(Boolean).join(' ') || '0초';
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameHistoryRound, GameId, GameResult, GameState, PhotoMetadata, User } from "../../shared/types";
 import type { PredictionRules } from "../../shared/admin";
-import { predictionPointsForRules, scoreThresholdLabel } from "../../shared/game-settings";
+import { predictionPointsForRules, scoreThresholdLabel, durationLabel } from "../../shared/game-settings";
 import { api } from "../api";
 import { previewHistory, rankOf } from "../sample";
 import { LuckPhotoCard, LuckPhotoPicker } from "./LuckEvidence";
@@ -242,7 +242,8 @@ function SubmissionRow({
   );
 }
 function differenceText(id: GameId, difference: number) {
-  return difference === 0 ? "정확히 맞힘" : `${difference}${id === "luck" ? "점" : "초"} 차이`;
+  if (difference === 0) return "정확히 맞힘";
+  return `${id === "luck" ? `${difference}점` : durationLabel(difference)} 차이`;
 }
 function ResultCards({ id, results, username, demo }: { id: GameId; results: GameResult[]; username: string; demo?: boolean }) {
   const displayName = useDisplayNameLookup();
