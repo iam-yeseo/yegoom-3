@@ -1154,7 +1154,26 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
     })).toBe(true);
     expect((await catchmindState(guesser)).round?.word).toBeNull();
     const before = await snapshot(guesser);
-    for (const answer of ['첫 오답', '두 번째 오답', '세 번째 오답']) {
+    // A write that is merely in flight is not a lost response: no retry banner.
+    let releaseSlowGuess!: () => void;
+    const slowGuessHeld = new Promise<void>(resolve => { releaseSlowGuess = resolve; });
+    let slowGuessArrived!: () => void;
+    const slowGuessSeen = new Promise<void>(resolve => { slowGuessArrived = resolve; });
+    await guesser.route('**/api/catchmind/guess', async route => {
+      slowGuessArrived();
+      await slowGuessHeld;
+      await route.continue();
+    }, { times: 1 });
+    const slowGuessed = catchmindResponse(guesser, 'guess');
+    await guessCatchmind(guesser, '진행 중 오답');
+    await slowGuessSeen;
+    await expect(guesser.getByRole('button', { name: '확인 중…', exact: true })).toBeDisabled();
+    await expect(guesser.locator('.cm-pending')).toHaveCount(0);
+    releaseSlowGuess();
+    expect((await slowGuessed).status()).toBe(200);
+    await expect(guesser.getByRole('list', { name: '모두의 답', exact: true })).toContainText('진행 중 오답');
+    await expect(guesser.locator('.cm-pending')).toHaveCount(0);
+    for (const answer of ['첫 오답', '두 번째 오답']) {
       const guessed = catchmindResponse(guesser, 'guess');
       await guessCatchmind(guesser, answer);
       expect((await guessed).status()).toBe(200);

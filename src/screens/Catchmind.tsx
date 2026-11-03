@@ -146,7 +146,10 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
       <div className="cm-history-head">{round ? <p className="cm-round-label">제 {round.number}판</p> : <span />}<a className="text-button" href={galleryHref}>갤러리 보기</a></div>
       {user.role === "admin" && <p className="subtle-note">운영자 계정은 게임에 참여하지 않아요.</p>}
       {game.error && <div className="cm-error"><p className="form-message error" role="alert">{game.error}</p><button className="text-button" disabled={acting || game.busy} onClick={() => void game.refresh().catch(() => {})}>다시 불러오기</button></div>}
-      {game.pending && <div className="pg-card cm-pending" role="status"><p>아직 처리 결과를 확인하지 못했어요. 같은 요청으로 다시 확인해 주세요.</p><button className="secondary-button" disabled={acting || game.busy} onClick={() => { if (game.pending) void run(game.pending.action, game.pending.input); }}>처리 결과 다시 확인</button></div>}
+      {/* `pending` is recorded before every write so a lost response can be
+          retried with the same identity; only surface it once that write is
+          no longer in flight, i.e. its result really went missing. */}
+      {game.pending && !game.busy && <div className="pg-card cm-pending" role="status"><p>아직 처리 결과를 확인하지 못했어요. 같은 요청으로 다시 확인해 주세요.</p><button className="secondary-button" disabled={acting || game.busy} onClick={() => { if (game.pending) void run(game.pending.action, game.pending.input); }}>처리 결과 다시 확인</button></div>}
       {game.loading && !state && <p className="subtle-note" role="status">그림을 불러오는 중…</p>}
       {state && !round && <div className="pg-card cm-waiting">
         <h2>누가 먼저 그려볼까요?</h2><p>그릴 차례를 맡으면 나만 볼 수 있는 제시어가 나와요.</p>
