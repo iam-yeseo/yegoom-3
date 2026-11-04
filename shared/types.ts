@@ -1,5 +1,5 @@
 import type { ArtKey } from './characters';
-import type { KUJI_RULES, SPEETTO_RULES } from './balance';
+import type { KUJI_RULES, SPEETTO_RULES, SLOT_RULES } from './balance';
 import type { Board, Doll, AttemptResult } from './claw-physics';
 import type { PredictionRules } from './admin';
 
@@ -123,7 +123,7 @@ export interface LaunchGiftResponse {
   awarded: boolean;
   serverTime: string;
 }
-export type ShopKind = 'kuji' | 'lotto' | 'speetto';
+export type ShopKind = 'kuji' | 'lotto' | 'speetto' | 'slot';
 export type ShopPayment = 'gold' | 'ticket';
 export interface ShopState { gold: number; inventory: Inventory; canPurchase: boolean; serverTime: string }
 export type KujiGrade = typeof KUJI_RULES.grades[number]['grade'];
@@ -164,6 +164,14 @@ export interface SpeettoTicket {
 }
 export interface SpeettoState { tickets: SpeettoTicket[] }
 export interface SpeettoResponse extends ShopState { speetto: SpeettoState; purchase?: SpeettoTicket }
+
+export type SlotSymbol = typeof SLOT_RULES.symbols[number];
+export interface SlotSpinInput { requestId: string }
+export interface SlotSpin {
+  id: string; requestId: string; reels: SlotSymbol[]; cost: number; prize: number; date: string; createdAt: string;
+}
+export interface SlotState { recent: SlotSpin[] }
+export interface SlotResponse extends ShopState { slot: SlotState; spin?: SlotSpin }
 
 export interface CatchmindPlayer { id: string; username: string; displayName: string; photoVersion: number | null; character: ArtKey }
 export interface CatchmindGuess { id: string; player: CatchmindPlayer; answer: string; correct: boolean; createdAt: string }

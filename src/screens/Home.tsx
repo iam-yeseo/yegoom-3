@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, KUJI_RULES, LOTTO_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, KUJI_RULES, LOTTO_RULES, SLOT_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
 import type { CatchmindSummary, ClawSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
@@ -270,16 +270,18 @@ export function ShopCards({ go }: { go: Go }) {
   const tiles = [
     { path: "/shop/lotto", title: "데일리 로또", schedule: `${formatTime(LOTTO_RULES.drawTime)} 추첨`, tickets: inventory.lottoTickets, icon: "lotto" },
     { path: "/shop/speetto", title: "스피또", schedule: "바로 긁기", tickets: inventory.speettoTickets, icon: "speetto" },
+    { path: "/shop/slot", title: "슬롯머신", schedule: `1회 ${SLOT_RULES.price.toLocaleString("ko-KR")}G`, tickets: null, icon: "slot" },
   ] as const;
   return (
     <div className="tile-grid shop-tile-grid">
       {tiles.map(tile => <button key={tile.path} className="card shop-tile" onClick={() => go(tile.path)}>
         {tile.icon === "lotto" ? <span className="lotto-icon" aria-hidden="true"><i>7</i><i>12</i><i>21</i></span>
-          : <span className="speetto-icon" aria-hidden="true"><i><b /></i></span>}
+          : tile.icon === "speetto" ? <span className="speetto-icon" aria-hidden="true"><i><b /></i></span>
+          : <span className="slot-tile-icon" aria-hidden="true"><img src="/slot/seven.svg" alt="" /><img src="/slot/seven.svg" alt="" /><img src="/slot/seven.svg" alt="" /></span>}
         <span className="solo-text">
           <strong>{tile.title}</strong>
           <small className={tile.icon === "lotto" ? "home-schedule" : undefined}>{tile.schedule}</small>
-          <small>이용권 {tile.tickets}장</small>
+          {tile.tickets !== null && <small>이용권 {tile.tickets}장</small>}
         </span>
       </button>)}
     </div>

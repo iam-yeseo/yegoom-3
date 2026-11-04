@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none">
+  <title>포도</title>
+  <g stroke="#493f46" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M39 26c0-8 2-13 7-18" stroke="#9E8068" stroke-width="4"/>
+    <path d="M43 21C42 11 30 8 22 12c3 9 10 13 21 9Z" fill="#B6D9AA"/>
+    <circle cx="28" cy="32" r="11" fill="#C9B0ED"/>
+    <circle cx="49" cy="32" r="11" fill="#C9B0ED"/>
+    <circle cx="23" cy="48" r="10" fill="#BC9DE5"/>
+    <circle cx="55" cy="48" r="10" fill="#BC9DE5"/>
+    <circle cx="39" cy="47" r="11" fill="#C9B0ED"/>
+    <circle cx="30" cy="62" r="9" fill="#C9B0ED"/>
+    <circle cx="47" cy="62" r="9" fill="#C9B0ED"/>
+    <circle cx="39" cy="70" r="7" fill="#B99CDE"/>
+    <path d="m24 28 3-2m8 18 3-2m-11 17 2-1" stroke="#EBDCFB" stroke-width="3"/>
+  </g>
+</svg>

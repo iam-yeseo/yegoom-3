@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import type { Inventory, KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState } from "../shared/types";
+import type { Inventory, KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState, SlotResponse, SlotSpinInput, SlotState } from "../shared/types";
 import { LOTTO_RULES } from "../shared/balance";
 import { noticeDate } from "./lotto-notice";
 import { api, ApiFailure } from "./api";
@@ -8,12 +8,14 @@ import { createShopPreview } from "./shop-preview";
 export type PendingPurchase =
   | { kind: "kuji"; input: KujiPurchaseInput }
   | { kind: "lotto"; input: LottoPurchaseInput }
-  | { kind: "speetto"; input: SpeettoPurchaseInput };
-type ShopResponse = ShopState | KujiResponse | LottoResponse | SpeettoResponse;
+  | { kind: "speetto"; input: SpeettoPurchaseInput }
+  | { kind: "slot"; input: SlotSpinInput };
+type ShopResponse = ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse;
 interface ShopContextValue extends ShopState {
   kuji: KujiState | null;
   lotto: LottoState | null;
   speetto: SpeettoState | null;
+  slot: SlotState | null;
   loading: boolean;
   error: string;
   pending: PendingPurchase | null;
@@ -21,6 +23,7 @@ interface ShopContextValue extends ShopState {
   buyKuji: (input: KujiPurchaseInput) => Promise<KujiResponse>;
   buyLotto: (input: LottoPurchaseInput) => Promise<LottoResponse>;
   buySpeetto: (input: SpeettoPurchaseInput) => Promise<SpeettoResponse>;
+  spinSlot: (input: SlotSpinInput) => Promise<SlotResponse>;
   claimPreviewLaunchGift: () => { inventory: Inventory; awarded: boolean };
 }
 const ShopContext = createContext<ShopContextValue | null>(null);
@@ -36,6 +39,7 @@ function savedPending(key: string): PendingPurchase | null {
     if (value.kind === "kuji") return Number.isSafeInteger(value.input.boardId) && Array.isArray(value.input.positions) ? value : null;
     if (value.kind === "lotto") return Array.isArray(value.input.numbers) && ["gold", "ticket"].includes(value.input.payment) ? value : null;
     if (value.kind === "speetto") return ["gold", "ticket"].includes(value.input.payment) ? value : null;
+    if (value.kind === "slot") return value;
     return null;
   } catch { return null; }
 }
@@ -67,6 +71,7 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   const [kuji, setKuji] = useState<KujiState | null>(null);
   const [lotto, setLotto] = useState<LottoState | null>(null);
   const [speetto, setSpeetto] = useState<SpeettoState | null>(null);
+  const [slot, setSlot] = useState<SlotState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState<PendingPurchase | null>(() => preview ? null : savedPending(storageKey));
@@ -96,6 +101,7 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     if ("kuji" in next) setKuji(next.kuji);
     if ("lotto" in next) setLotto(next.lotto);
     if ("speetto" in next) setSpeetto(next.speetto);
+    if ("slot" in next) setSlot(next.slot);
     if (previewEngine.current) callbacks.current.onPreviewChange(next, previewEngine.current.ledger, previewEngine.current.score, previewEngine.current.lottoNotice(new Date(next.serverTime)));
   }, []);
   useEffect(() => {
@@ -173,6 +179,10 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     const engine = syncPreview();
     return engine ? engine.buySpeetto(input) : api.buySpeetto(input);
   }), [purchase, syncPreview]);
+  const spinSlot = useCallback((input: SlotSpinInput) => purchase({ kind: "slot", input }, async () => {
+    const engine = syncPreview();
+    return engine ? engine.spinSlot(input) : api.spinSlot(input);
+  }), [purchase, syncPreview]);
   const claimPreviewLaunchGift = useCallback(() => {
     const engine = syncPreview();
     if (!engine) throw new Error("미리보기에서만 사용할 수 있어요.");
@@ -182,5 +192,5 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     apply(result.state);
     return { inventory: result.state.inventory, awarded: result.awarded };
   }, [syncPreview, apply]);
-  return <ShopContext.Provider value={{ ...state, kuji, lotto, speetto, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto, claimPreviewLaunchGift }}>{children}</ShopContext.Provider>;
+  return <ShopContext.Provider value={{ ...state, kuji, lotto, speetto, slot, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto, spinSlot, claimPreviewLaunchGift }}>{children}</ShopContext.Provider>;
 }

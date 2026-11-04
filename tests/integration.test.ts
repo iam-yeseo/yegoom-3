@@ -9,7 +9,7 @@ import { Miniflare } from 'miniflare';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken, verifyPassword } from '../worker/crypto';
 import { PASSWORD_RULES } from '../shared/password';
-import { CATCHMIND_RULES } from '../shared/balance';
+import { CATCHMIND_RULES, SLOT_RULES } from '../shared/balance';
 import { CATCHMIND_WORDS } from '../shared/catchmind-words';
 import { catchmindRoute } from '../worker/catchmind';
 import type { AdminState, PredictionRules } from '../shared/admin';
@@ -22,7 +22,7 @@ import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
 import { maintainDatabase } from '../worker/maintenance';
 import { rankSummary, standings } from '../src/ranking';
-import type { CatchmindGalleryResponse } from '../shared/types';
+import type { CatchmindGalleryResponse, SlotResponse } from '../shared/types';
 import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
 // Tiny, real encoded fixtures: solid coral images generated with Pillow, quality 80.
@@ -4101,6 +4101,351 @@ describe('Worker and D1 integration', () => {
       await measure('soldOut', 1000, 0);
       console.log(`Kuji bootstrap summary D1 meta rows_read: ${JSON.stringify(measurements)}; one read-only statement, auth and unrelated bootstrap queries excluded`);
     });
+  });
+
+  describe('slot machine economy', () => {
+    const instant = `${TODAY}T00:00:00Z`;
+    async function slotInstance(roll: number, gold = 500) {
+      const instance = runtime(await workerAt(instant, instant, roll));
+      const database = await instance.getD1Database('DB');
+      await provision(database, migration, passwordHash);
+      if (gold) await fund(gold, 'min', database);
+      const { cookie } = await login('min', instance);
+      return { instance, database, cookie };
+    }
+    async function spin(cookie: string, instance: Miniflare, requestId = crypto.randomUUID()) {
+      const response = await request('/api/shop/slot', { method: 'POST', cookie, instance, body: { requestId } });
+      expect(response.status).toBe(200);
+      return response.json() as Promise<SlotResponse>;
+    }
+    async function recent(cookie: string, instance: Miniflare) {
+      const response = await request('/api/shop/slot', { cookie, instance });
+      expect(response.status).toBe(200);
+      return response.json() as Promise<SlotResponse>;
+    }
+
+    it.each([6, 7])('persists the roll %i slot outcome and credits the exact prize immediately once', async roll => {
+      const { instance, database, cookie } = await slotInstance(roll);
+      try {
+        const requestId = crypto.randomUUID();
+        const result = await spin(cookie, instance, requestId);
+        expect(result.spin).toMatchObject({ requestId, cost: SLOT_RULES.price, prize: roll === 6 ? 2000 : 0,
+          date: TODAY, createdAt: instant.replace('Z', '.000Z') });
+        expect(result.spin!.reels).toHaveLength(3);
+        if (roll === 6) expect(result.spin!.reels).toEqual(['seven', 'seven', 'seven']);
+        else expect(new Set(result.spin!.reels).size).toBeGreaterThan(1);
+        expect(result.gold).toBe(roll === 6 ? SLOT_RULES.jackpotPrize : 0);
+        expect(result.inventory).toEqual({ lottoTickets: 0, speettoTickets: 0 });
+        expect((await recent(cookie, instance)).slot.recent).toEqual([result.spin]);
+        const before = await ledgerRows(database);
+        expect((await spin(cookie, instance, requestId)).spin).toEqual(result.spin);
+        expect(await ledgerRows(database)).toEqual(before);
+        const ledger = (await database.prepare("SELECT amount, reason, reference FROM ledger WHERE reason LIKE '슬롯머신%' ORDER BY amount").all()).results;
+        expect(ledger).toEqual([
+          { amount: -500, reason: '슬롯머신', reference: `slot:buy:min:${requestId}` },
+          ...(roll === 6 ? [{ amount: 2000, reason: '슬롯머신 당첨', reference: `slot:prize:${result.spin!.id}` }] : []),
+        ]);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(1);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM shop_purchases').first('n')).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(0);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('replays concurrent identical slot requests with one debit even after the wallet reaches zero', async () => {
+      const { instance, database, cookie } = await slotInstance(7);
+      try {
+        const requestId = crypto.randomUUID();
+        const results = await Promise.all(Array.from({ length: 6 }, () => spin(cookie, instance, requestId)));
+        for (const result of results) expect(result.spin).toEqual(results[0]!.spin);
+        expect((await recent(cookie, instance)).gold).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(1);
+        expect((await ledgerRows(database)).filter(row => row.amount < 0).map(row => row.amount)).toEqual([-500]);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('allows only affordable concurrent distinct slot requests without a negative cached wallet', async () => {
+      const { instance, database, cookie } = await slotInstance(7, 1000);
+      try {
+        const responses = await Promise.all(Array.from({ length: 5 }, () => request('/api/shop/slot', {
+          method: 'POST', cookie, instance, body: { requestId: crypto.randomUUID() },
+        })));
+        expect(responses.map(response => response.status).sort()).toEqual([200, 200, 409, 409, 409]);
+        for (const response of responses.filter(value => value.status === 409)) {
+          expect(await response.json()).toMatchObject({ error: { message: '골드가 부족해요' } });
+        }
+        expect((await recent(cookie, instance)).gold).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(2);
+        expect((await ledgerRows(database)).filter(row => row.amount < 0).map(row => row.amount)).toEqual([-500, -500]);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('cannot pay for a winning slot with its prize or inventory coupons when gold is insufficient', async () => {
+      const { instance, database, cookie } = await slotInstance(6, 499);
+      try {
+        await grantTicket('lotto_ticket', 2, database);
+        await grantTicket('speetto_ticket', 3, database);
+        const response = await request('/api/shop/slot', { method: 'POST', cookie, instance,
+          body: { requestId: crypto.randomUUID(), payment: 'ticket' } });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ error: { code: 'INSUFFICIENT_GOLD', message: '골드가 부족해요' } });
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(0);
+        expect((await ledgerRows(database)).map(row => row.amount)).toEqual([499]);
+        expect(await recent(cookie, instance)).toMatchObject({ gold: 499, inventory: { lottoTickets: 2, speettoTickets: 3 } });
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('rolls back the slot receipt, debit and cached wallet if the prize write fails', async () => {
+      const { instance, database, cookie } = await slotInstance(6);
+      try {
+        await database.prepare(`CREATE TRIGGER fail_slot_prize BEFORE INSERT ON ledger
+          WHEN NEW.reason = '슬롯머신 당첨' BEGIN SELECT RAISE(FAIL, 'simulated slot prize failure'); END;`).run();
+        const requestId = crypto.randomUUID();
+        const response = await request('/api/shop/slot', { method: 'POST', cookie, instance, body: { requestId } });
+        expect(response.status).toBe(500);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(0);
+        expect((await ledgerRows(database)).map(row => row.amount)).toEqual([500]);
+        expect((await recent(cookie, instance)).gold).toBe(500);
+        await expectBalanced(database);
+        await database.prepare('DROP TRIGGER fail_slot_prize').run();
+        expect((await spin(cookie, instance, requestId)).gold).toBe(2000);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(1);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('keeps slot history user-scoped, inclusive at seven days, newest first and capped at twenty', async () => {
+      const { instance, database, cookie } = await slotInstance(7, 0);
+      try {
+        for (const [id, date, user] of [
+          ['excluded-old', '2026-10-23', 'min'], ['inclusive-six-days', '2026-10-24', 'min'],
+          ['today', TODAY, 'min'], ['other-player', TODAY, 'siwon'],
+        ]) await database.prepare(`INSERT INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at)
+          VALUES (?, ?, ?, 500, '["seven","seven","apple"]', 0, ?, ?)`)
+          .bind(id, user, id, date, `${date}T00:00:00.000Z`).run();
+        expect((await recent(cookie, instance)).slot.recent.map(value => value.id)).toEqual(['today', 'inclusive-six-days']);
+        await database.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 24)
+          INSERT INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at)
+          SELECT 'recent-' || x, 'min', 'recent-' || x, 500, '["apple","seven","grape"]', 0, ?,
+            ? || printf('%02d', x) || ':00.000Z' FROM n`).bind(TODAY, `${TODAY}T00:`).run();
+        const history = (await recent(cookie, instance)).slot.recent;
+        expect(history).toHaveLength(SLOT_RULES.historyLimit);
+        expect(history.map(value => value.id)).toEqual(Array.from({ length: 20 }, (_, index) => `recent-${24 - index}`));
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(28);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('restores an explicit old slot receipt without another debit or reinserting it in recent history', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-old-slot-receipt-'));
+      const old = '2026-10-20T00:00:00Z';
+      let instance = runtime(await workerAt(old, old, 6), persistence);
+      try {
+        let database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        await fund(500, 'min', database);
+        let { cookie } = await login('min', instance);
+        const requestId = crypto.randomUUID();
+        const original = (await spin(cookie, instance, requestId)).spin;
+        await instance.dispose();
+        instance = runtime(await workerAt(instant, instant, 7), persistence);
+        database = await instance.getD1Database('DB');
+        cookie = (await login('min', instance)).cookie;
+        expect((await recent(cookie, instance)).slot.recent).toEqual([]);
+        const before = await ledgerRows(database);
+        const replay = await spin(cookie, instance, requestId);
+        expect(replay.spin).toEqual(original);
+        expect(replay.slot.recent).toEqual([]);
+        expect(replay.gold).toBe(2000);
+        expect(await ledgerRows(database)).toEqual(before);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it('rejects slot auth, Origin, invalid IDs and administrator writes before recording a spin', async () => {
+      const player = await login('min'); const admin = await login('admin');
+      const input = { requestId: crypto.randomUUID() };
+      expect((await request('/api/shop/slot')).status).toBe(401);
+      expect((await request('/api/shop/slot', { method: 'POST', body: input })).status).toBe(401);
+      expect((await request('/api/shop/slot', { method: 'POST', cookie: player.cookie, origin: 'https://other.invalid', body: input })).status).toBe(403);
+      expect((await request('/api/shop/slot', { method: 'POST', cookie: admin.cookie, body: input })).status).toBe(403);
+      const adminRead = await request('/api/shop/slot', { cookie: admin.cookie });
+      expect(adminRead.status).toBe(200);
+      expect(await adminRead.json()).toMatchObject({ canPurchase: false, slot: { recent: [] } });
+      for (const requestId of ['', 'invalid id', 'a'.repeat(129), 42, undefined]) {
+        expect((await request('/api/shop/slot', { method: 'POST', cookie: player.cookie, body: { requestId } })).status).toBe(400);
+      }
+      expect((await request('/api/shop/slot', { method: 'PUT', cookie: player.cookie, body: input })).status).toBe(405);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(0);
+      expect(await ledgerRows()).toEqual([]);
+    });
+
+    it('scopes slot request IDs to each player', async () => {
+      const { instance, database, cookie } = await slotInstance(7);
+      try {
+        await fund(500, 'siwon', database);
+        const other = await login('siwon', instance);
+        const requestId = crypto.randomUUID();
+        const [first, second] = await Promise.all([spin(cookie, instance, requestId), spin(other.cookie, instance, requestId)]);
+        expect(first.spin!.id).not.toBe(second.spin!.id);
+        expect(first.spin!.requestId).toBe(second.spin!.requestId);
+        expect(first.gold).toBe(0); expect(second.gold).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(2);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('adds only the slot table and indexes while preserving old shop and announcement CHECK contracts', async () => {
+      const instance = runtime(script);
+      try {
+        const database = await instance.getD1Database('DB');
+        const oldMigration = (await Promise.all((await readdir(new URL('../migrations/', import.meta.url)))
+          .filter(name => name.endsWith('.sql') && name < '0013_slot_machine.sql').sort()
+          .map(name => readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8')))).join('\n');
+        await provision(database, oldMigration, passwordHash);
+        const schema = async () => (await database.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").all<{ name: string; sql: string }>()).results;
+        const before = await schema();
+        await applyMigration(database, await readFile(new URL('../migrations/0013_slot_machine.sql', import.meta.url), 'utf8'));
+        const after = await schema();
+        expect(after.filter(table => table.name !== 'slot_spins')).toEqual(before);
+        expect(after.filter(table => !before.some(prior => prior.name === table.name)).map(table => table.name)).toEqual(['slot_spins']);
+        expect(await database.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'slot_spins_user_date_idx'").first('n')).toBe(1);
+        // These existing requests exercise the unchanged old paths after only the additive migration.
+        const { cookie } = await login('min', instance);
+        expect((await request('/api/bootstrap', { cookie, instance })).status).toBe(200);
+        await grantTicket('speetto_ticket', 1, database);
+        expect((await request('/api/shop/speetto', { method: 'POST', cookie, instance,
+          body: { requestId: crypto.randomUUID(), payment: 'ticket' } })).status).toBe(200);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(0);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+  });
+
+  describe('slot machine request budgets', () => {
+    it('records authenticated slot read, spin, retry and bootstrap costs with bounded histories and cached wallets', async () => {
+      type Measurement = {
+        historicalSpins: number; recentSpins: number; historicalGoldLedgerRows: number; outcome: 'win' | 'loss'; route: string;
+        prepares: number; queries: number; bindingCalls: number; rowsRead: number; rowsWritten: number; returnedSpins: number | null;
+      };
+      const measurements: Measurement[] = [];
+      const instant = `${TODAY}T00:00:00Z`;
+      const fixtures = [
+        { historicalSpins: 0, recentSpins: 3, historicalGoldLedgerRows: 0 },
+        { historicalSpins: 5000, recentSpins: 3, historicalGoldLedgerRows: 0 },
+        { historicalSpins: 0, recentSpins: 3, historicalGoldLedgerRows: 10000 },
+        { historicalSpins: 5000, recentSpins: 3, historicalGoldLedgerRows: 10000 },
+        { historicalSpins: 5000, recentSpins: 5000, historicalGoldLedgerRows: 10000 },
+      ];
+      for (const fixture of fixtures) for (const outcome of ['loss', 'win'] as const) {
+        const instance = runtime(workerWithD1Metrics(await workerAt(instant, instant, outcome === 'win' ? 6 : 7)));
+        try {
+          const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+          await fund(10000, 'min', database);
+          if (fixture.historicalGoldLedgerRows) await database.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ?)
+            INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+            SELECT 'slot-budget-gold-' || x, 'min', 'gold', 1, 'old fixture funding', 'slot-budget-gold:' || x,
+              '2026-01-01T00:00:00.000Z' FROM n`).bind(fixture.historicalGoldLedgerRows).run();
+          if (fixture.historicalSpins) await database.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ?)
+            INSERT INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at)
+            SELECT 'old-slot-' || x, 'min', 'old-slot-' || x, 500, '["apple","seven","grape"]', 0,
+              '2026-01-01', '2026-01-01T00:00:00.000Z' FROM n`).bind(fixture.historicalSpins).run();
+          for (const date of fixture.recentSpins > 3 ? [TODAY] : ['2026-10-24', '2026-10-29', TODAY]) await database.prepare(`INSERT INTO slot_spins
+            (id, user_id, request_id, cost, reels, prize, date, created_at)
+            VALUES (?, 'min', ?, 500, '["apple","seven","grape"]', 0, ?, ?)`)
+            .bind(`slot-budget-${date}`, `slot-budget-${date}`, date, `${date}T00:00:00.000Z`).run();
+          if (fixture.recentSpins > 3) await database.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ?)
+            INSERT INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at)
+            SELECT 'dense-slot-' || printf('%05d', x), 'min', 'dense-slot-' || x, 500, '["apple","seven","grape"]', 0,
+              ?, ? FROM n`).bind(fixture.recentSpins - 1, TODAY, `${TODAY}T00:00:00.000Z`).run();
+          const plan = (await database.prepare(`EXPLAIN QUERY PLAN SELECT * FROM slot_spins
+            WHERE user_id = ? AND date >= ? ORDER BY date DESC, created_at DESC, id DESC LIMIT ?`)
+            .bind('min', '2026-10-24', SLOT_RULES.historyLimit).all<{ detail: string }>()).results.map(row => row.detail).join('; ');
+          expect(plan).toContain('slot_spins_user_date_idx');
+          expect(plan).not.toMatch(/TEMP B-TREE/i);
+          const { cookie } = await login('min', instance);
+          const requestId = crypto.randomUUID();
+          let original: SlotResponse['spin'];
+          for (const route of ['bootstrap before', 'GET slot before', 'POST slot new', 'POST slot retry', 'GET slot after', 'bootstrap after']) {
+            const isBootstrap = route.startsWith('bootstrap');
+            const isPost = route.startsWith('POST');
+            const response = await request(isBootstrap ? '/api/bootstrap' : '/api/shop/slot', {
+              cookie, instance, ...(isPost ? { method: 'POST', body: { requestId } } : {}),
+            });
+            expect(response.status, route).toBe(200);
+            const body = await response.json() as SlotResponse & BootstrapResponse;
+            const row: Measurement = { ...fixture, outcome, route,
+              prepares: Number(response.headers.get('X-Test-D1-Prepares')),
+              queries: Number(response.headers.get('X-Test-D1-Queries')),
+              bindingCalls: Number(response.headers.get('X-Test-D1-Binding-Calls')),
+              rowsRead: Number(response.headers.get('X-Test-D1-Rows-Read')),
+              rowsWritten: Number(response.headers.get('X-Test-D1-Rows-Written')),
+              returnedSpins: isBootstrap ? null : body.slot.recent.length,
+            };
+            measurements.push(row);
+            expect(row.bindingCalls).toBeLessThanOrEqual(50);
+            if (route !== 'POST slot new') expect(row.rowsWritten, route).toBe(0);
+            else {
+              expect(row.rowsWritten).toBeGreaterThan(0);
+              original = body.spin;
+              expect(body.gold).toBe(10000 + fixture.historicalGoldLedgerRows - SLOT_RULES.price + (outcome === 'win' ? SLOT_RULES.jackpotPrize : 0));
+            }
+            if (route === 'POST slot retry') expect(body.spin).toEqual(original);
+            if (!isBootstrap) {
+              const added = route === 'GET slot before' ? 0 : 1;
+              expect(row.returnedSpins).toBe(Math.min(SLOT_RULES.historyLimit, fixture.recentSpins + added));
+              // Both the server list limit and cached balance must bound work.
+              expect(row.rowsRead).toBeLessThan(100);
+            }
+          }
+          await expectBalanced(database);
+        } finally { await instance.dispose(); }
+      }
+      for (const row of measurements.filter(value => value.historicalSpins === 5000 && value.recentSpins === 3)) {
+        const empty = measurements.find(value => value.historicalSpins === 0 && value.recentSpins === 3
+          && value.historicalGoldLedgerRows === row.historicalGoldLedgerRows && value.outcome === row.outcome && value.route === row.route)!;
+        for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsWritten'] as const) expect(row[field], `${row.route}: ${field}`).toBe(empty[field]);
+        expect(row.rowsRead, `${row.route}: old spins must not grow reads`).toBeLessThanOrEqual(empty.rowsRead + 2);
+      }
+      for (const row of measurements.filter(value => value.historicalGoldLedgerRows === 10000 && value.recentSpins === 3 && !value.route.startsWith('bootstrap'))) {
+        const empty = measurements.find(value => value.historicalGoldLedgerRows === 0 && value.historicalSpins === row.historicalSpins
+          && value.recentSpins === 3 && value.outcome === row.outcome && value.route === row.route)!;
+        expect(row.queries).toBe(empty.queries);
+        expect(row.rowsRead, `${row.route}: cached wallet must avoid ledger scans`).toBeLessThanOrEqual(empty.rowsRead + 2);
+      }
+      if (process.env.FREE_PLAN_SLOT_MEASUREMENTS) {
+        writeFileSync(process.env.FREE_PLAN_SLOT_MEASUREMENTS, `${JSON.stringify({
+          measuredOn: '2026-11-04', baseMain: '9fc547c',
+          source: 'tests/integration.test.ts: slot machine request budgets',
+          command: 'FREE_PLAN_SLOT_MEASUREMENTS=docs/free-plan-pr7-measurements.json XDG_CONFIG_HOME=/tmp/yegoom-config npm test -- tests/integration.test.ts -t "records authenticated slot read"',
+          environment: { node: process.version, database: 'isolated local D1/workerd, no remote access' },
+          counting: {
+            prepares: 'DB.prepare calls', queries: 'Executed SQL statements; each DB.batch statement counts separately',
+            bindingCalls: 'all/first/run or one DB.batch call', rowsRead: 'Sum of actual D1 meta.rows_read, including authentication',
+            rowsWritten: 'Sum of actual D1 meta.rows_written, including balance-cache triggers and index maintenance',
+          },
+          fixture: {
+            clockKst: '09:00', currentDate: TODAY, recentBoundaryDate: '2026-10-24',
+            initialGold: '10000G funding plus 0/10000 historical one-gold ledger entries; cache kept by real triggers',
+            histories: '3 recent plus 0/5000 older spins, then 5000 recent spins at one timestamp to exercise bounded indexed sorting',
+            receiptFixtures: 'Historical/list-only spins are directly seeded; actual new/retry requests use real conditional batch debit and prize paths',
+            outcomes: 'Compiled-test-only randomInt(100)=7 loss / 6 jackpot; no production randomness controls',
+            bootstrap: 'No slot aggregate added; before/after includes the unchanged PR2 bootstrap paths, with actual spin ledger rows visible afterward',
+          }, measurements,
+        }, null, 2)}\n`);
+      } else {
+        const prior = JSON.parse(readFileSync(new URL('../docs/free-plan-pr7-measurements.json', import.meta.url), 'utf8')) as { measurements: Measurement[] };
+        expect(measurements.map(({ historicalSpins, recentSpins, historicalGoldLedgerRows, outcome, route }) =>
+          [historicalSpins, recentSpins, historicalGoldLedgerRows, outcome, route])).toEqual(prior.measurements.map(row =>
+          [row.historicalSpins, row.recentSpins, row.historicalGoldLedgerRows, row.outcome, row.route]));
+        for (const [index, row] of measurements.entries()) for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsRead', 'rowsWritten'] as const) {
+          expect(row[field], `${row.route}: ${field}`).toBeLessThanOrEqual(prior.measurements[index]![field]);
+        }
+      }
+      console.log(`Slot authenticated request metrics: ${JSON.stringify(measurements)}`);
+    }, 90000);
   });
 
   describe('server shop economy', () => {

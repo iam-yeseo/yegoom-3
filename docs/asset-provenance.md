@@ -28,3 +28,9 @@ python3 scripts/prepare-claw-dolls.py /path/to/yegoom/public/assets
 | 10 | 309,006 | 14,842 | 320×309 |
 | 11 | 193,029 | 9,234 | 258×320 |
 | **합계** | **3,403,205** | **169,940** | **95.01% 감소** |
+
+## 슬롯머신 그림 (개선 PR 7)
+
+- `public/slot/banana.svg`, `apple.svg`, `strawberry.svg`, `grape.svg`, `watermelon.svg`, `chamoe.svg`, `seven.svg`는 이 작업에서 직접 작성한 원본 SVG다. 외부 이미지·이모지·폰트 글리프를 사용하지 않았다.
+- 80×80 공통 viewBox에 과일 6종과 숫자 7을 path·ellipse·circle로 그렸다. 진한 `#493f46` 2px 선, 둥근 선 끝·모서리, 앱의 노랑·코랄·민트·보라 파스텔 색을 사용한다.
+- 별도 다운로드·변환·빌드 도구 없이 파일 자체가 원본이며 기기 글꼴에 영향을 받지 않는다. 기존 정적 자산 빌드와 서비스 워커 precache에 함께 포함된다.

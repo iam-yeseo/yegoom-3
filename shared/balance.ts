@@ -64,6 +64,11 @@ export const LOTTO_RULES = {
   prizes: { 5: 5000, 4: 3000, 3: 1000, 2: 500 },
 } as const;
 export const SHOP_HISTORY_DAYS = 7;
+export const SLOT_RULES = {
+  price: 500, jackpotPercent: 7, jackpotPrize: 2000,
+  symbols: ['banana', 'apple', 'strawberry', 'grape', 'watermelon', 'chamoe', 'seven'],
+  reels: 3, dailyLimit: null, historyLimit: 20,
+} as const;
 export const SPEETTO_RULES = {
   price: 300, winPercent: 10, prize: 1500,
   characters: ['axolotl', 'drop', 'cat', 'bunny', 'bread', 'manta', 'moon', 'monkey'],
