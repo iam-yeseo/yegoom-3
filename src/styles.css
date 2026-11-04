@@ -46,6 +46,12 @@
 * {
   box-sizing: border-box;
 }
+html {
+  scrollbar-gutter: stable;
+}
+dialog {
+  overscroll-behavior: contain;
+}
 body {
   margin: 0;
 }
@@ -1121,7 +1127,7 @@ button svg {
 .author-date { margin: 8px 20px 0; font-size: 13px; color: var(--muted); }
 .wake-author { display: flex; flex-direction: column; gap: 16px; padding: 24px 20px; text-align: center; }
 .wake-author h2, .prediction-history h2 { font-size: 17px; }
-.wake-clock { font-size: 40px; font-variant-numeric: tabular-nums; }
+.wake-clock { font-size: clamp(24px, 7vw, 36px); font-variant-numeric: tabular-nums; word-break: keep-all; }
 .wake-confirmation { padding: 26px; width: min(400px, calc(100% - 32px)); border: 0; border-radius: 24px; color: var(--text); background: var(--cream); box-shadow: var(--card-shadow); }
 .wake-confirmation::backdrop { background: rgba(58, 51, 64, .4); }
 .wake-confirmation h2 { font-size: 20px; margin-bottom: 12px; }
@@ -1129,7 +1135,7 @@ button svg {
 .wake-confirmation .text-button { display: block; margin: 12px auto 0; }
 .prediction-history { display: flex; flex-direction: column; gap: 14px; padding-top: 24px; }
 .history-round { display: flex; flex-direction: column; gap: 10px; }
-.history-heading { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; padding: 0 4px; }
+.history-heading { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: baseline; padding: 0 4px; }
 .history-heading h3, .history-heading span { font-size: 13px; }
 .history-heading span { color: var(--muted); }
 .prediction-help { padding-top: 24px; padding-bottom: 32px; }
@@ -1143,3 +1149,24 @@ button svg {
 .result-guess { font-size: clamp(18px, 5vw, 24px); white-space: nowrap; }
 .result-name { min-width: 0; }
 .result-rewards { flex-wrap: wrap; }
+
+/* Written-out times need room for the units even on a narrow phone. */
+.prediction-page:not(.luck) .countdown-row { flex-wrap: wrap; }
+.prediction-page:not(.luck) .countdown > strong.answer-number {
+  font-size: clamp(26px, 7vw, 40px);
+  letter-spacing: -1px;
+  white-space: normal;
+  word-break: keep-all;
+}
+.prediction-page:not(.luck) .result-player {
+  display: grid;
+  grid-template-columns: auto 46px minmax(0, 1fr);
+}
+.prediction-page:not(.luck) .result-guess {
+  grid-column: 2 / -1;
+  font-size: clamp(18px, 5vw, 24px);
+  white-space: normal;
+  word-break: keep-all;
+  text-align: right;
+}
+.result-name strong { overflow-wrap: anywhere; }

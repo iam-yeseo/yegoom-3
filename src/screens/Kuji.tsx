@@ -3,7 +3,7 @@ import { KUJI_RULES, kujiCost } from "../../shared/balance";
 import type { KujiGrade, KujiPurchase } from "../../shared/types";
 import { ApiFailure } from "../api";
 import { Toolbar, artSrc } from "../components/UI";
-import { anim, confetti, flipY, hop, pop, reduced, sparkle } from "../motion";
+import { anim, confetti, flipY, hop, openSheet, pop, reduced, sparkle } from "../motion";
 import { useShop } from "../shop";
 import "../preview.css";
 
@@ -16,15 +16,7 @@ function Sheet({ title, children, onClose }: { title: string; children: ReactNod
   const titleId = useId();
   useEffect(() => {
     const node = dialog.current!;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    node.showModal();
-    const entrance = anim(node.querySelector(".kuji-sheet"), [{ translate: "0 100%", opacity: 0 }, { translate: "0 0", opacity: 1 }], { dur: 420, ease: "spring" });
-    return () => {
-      entrance?.cancel();
-      node.close();
-      document.body.style.overflow = overflow;
-    };
+    return openSheet(node);
   }, []);
   return <dialog className="kuji-modal" ref={dialog} aria-labelledby={titleId}
     onCancel={event => { event.preventDefault(); onClose(); }}

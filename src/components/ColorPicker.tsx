@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { clamp, hexToHsv, hsvToHex, INK_PALETTE, normalizeHex, saturationValueAt, type HsvColor, type PaintColor } from "../color";
-import { anim } from "../motion";
+import { openSheet } from "../motion";
 
 interface ColorPickerProps {
   value: PaintColor;
@@ -41,17 +41,10 @@ export function ColorPicker({ value, onChange, onCommit, recentColors, onClose, 
   }
   useEffect(() => {
     const node = dialog.current!;
-    const previousFocus = document.activeElement;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    node.showModal();
-    const animation = anim(node.firstElementChild, [{ translate: "0 100%", opacity: 0 }, { translate: "0 0", opacity: 1 }], { dur: 420, ease: "spring" });
+    const closeSheet = openSheet(node);
     return () => {
       releasePointer();
-      animation?.cancel();
-      node.close();
-      document.body.style.overflow = overflow;
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+      closeSheet();
     };
   }, []);
 

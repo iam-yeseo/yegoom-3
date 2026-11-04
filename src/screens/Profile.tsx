@@ -13,10 +13,12 @@ import {
   useCharacterLookup,
   useDisplayNameLookup,
   useProfile,
+  honorific,
   type ArtKey,
 } from "../components/UI";
 import { KST, weekdayNames } from "../sample";
 import { anim, pop, reduced, useOnChange } from "../motion";
+import { formatTime } from "../format";
 import { PhotoPicker } from "../components/PhotoPicker";
 import { PasswordSheet } from "../components/PasswordSheet";
 
@@ -44,13 +46,6 @@ function dateLabel(iso: string) {
   const weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(parts.weekday);
   return `${parts.month}월 ${parts.day}일 ${weekdayNames[weekday]}`;
 }
-const timeLabel = (iso: string) =>
-  new Intl.DateTimeFormat("ko-KR", {
-    timeZone: KST,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(new Date(iso));
 
 export function Profile({
   username,
@@ -168,7 +163,7 @@ export function Profile({
   const owners = new Map<ArtKey, string[]>();
   for (const name of others) {
     const key = characterOf(name);
-    owners.set(key, [...(owners.get(key) ?? []), displayNameOf(name)]);
+    owners.set(key, [...(owners.get(key) ?? []), honorific(displayNameOf(name))]);
   }
   const rows = ledger.filter((entry) => entry.currency === currency);
   let lastDate = "";
@@ -183,7 +178,7 @@ export function Profile({
           </span>
         </div>
         <div className="profile-summary">
-          <h1>{displayName}</h1>
+          <h1>{honorific(displayName)}</h1>
           <div className="stats">
             <div>
               <span>골드</span>
@@ -276,7 +271,7 @@ export function Profile({
                     </span>
                     <span className="history-text">
                       <strong>{entry.reason}</strong>
-                      <small>{timeLabel(entry.createdAt)}</small>
+                      <small>{formatTime(entry.createdAt)}</small>
                     </span>
                     <b className={entry.amount > 0 ? "gain" : "loss"}>
                       {entry.amount > 0 ? "+" : "−"}

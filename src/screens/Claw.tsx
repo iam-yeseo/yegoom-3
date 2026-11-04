@@ -4,7 +4,7 @@ import { DOLL_COUNT, DOLL_TYPES } from "../../shared/claw-physics";
 import type { ClawResult, User } from "../../shared/types";
 import { useClaw } from "../claw-state";
 import { Avatar, Coin, Toolbar } from "../components/UI";
-import { anim, reduced, toast } from "../motion";
+import { anim, openSheet, reduced, toast } from "../motion";
 import { ClawController, initialView } from "../claw/controller";
 import { dollSrc } from "../claw/render";
 import "../preview.css";
@@ -39,10 +39,7 @@ function ResultDialog({ result, message, user, demo, onClose }: { result: ClawRe
   const won = result.prizes.length > 0;
   useEffect(() => {
     const node = dialog.current!;
-    const before = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    node.showModal();
-    const entrance = anim(node, [{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "translateY(0)" }], { dur: 200 });
+    const closeSheet = openSheet(node);
     // Particles stay inside this native dialog's top layer.
     const effects = !reduced() ? Array.from(particles.current?.children ?? []).map((particle, i) => {
       const angle = (Math.PI * 2 * i) / 12;
@@ -50,7 +47,7 @@ function ResultDialog({ result, message, user, demo, onClose }: { result: ClawRe
         { transform: `translate(${Math.cos(angle) * 100}px,${Math.sin(angle) * 70 - 25}px) rotate(${i * 30}deg) scale(1)`, opacity: 1, offset: .45 },
         { transform: `translate(${Math.cos(angle) * 115}px,${Math.sin(angle) * 70 + 55}px) rotate(${i * 50}deg) scale(.8)`, opacity: 0 }], { dur: 1100 });
     }) : [];
-    return () => { entrance?.cancel(); effects.forEach(effect => effect?.cancel()); node.close(); document.body.style.overflow = before; };
+    return () => { effects.forEach(effect => effect?.cancel()); closeSheet(); };
   }, []);
   return <dialog className="claw-result" ref={dialog} aria-labelledby="claw-result-title" aria-describedby="claw-result-description" onCancel={event => event.preventDefault()}>
     <div className={`claw-result-art ${result.prizes.length > 1 ? "is-many" : ""}`}>

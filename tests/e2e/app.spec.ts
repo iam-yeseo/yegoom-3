@@ -14,7 +14,7 @@ async function login(page: Page, username: string) {
   await page.getByLabel('아이디', { exact: true }).fill(username);
   await page.getByLabel('비밀번호', { exact: true }).fill('e2e-only-password-2026');
   await page.getByRole('button', { name: '예굼방 들어가기' }).click();
-  await expect(page.getByRole('heading', { name: username, exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: `${username}님`, exact: true })).toBeVisible();
 }
 
 test('mobile and desktop previews render all game screens without errors or overflow', async ({ page }) => {
@@ -143,7 +143,7 @@ test('preview seconds, history and help work without API access at both target w
   await captureWidths(page, 'preview-input', info);
   await page.getByText('게임 방법', { exact: true }).click();
   await expect(help).toHaveAttribute('open', '');
-  await expect(help).toContainText('10:30:00');
+  await expect(help).toContainText('10시 30분');
   await expect(help).toContainText('참여 보상 100G');
   await expect(help).toContainText('동점이면 모두');
   await expect(help.getByRole('row', { name: '1분 이내 25점' })).toBeVisible();
@@ -180,7 +180,7 @@ test('offwork author saves seconds privately and rewards appear in results, home
   await expect(page.locator('.fx-toast').filter({ hasText: '정답을 저장했어요' })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('spinbutton', { name: '초', exact: true })).toHaveValue('42');
-  await expect(page.locator('.prediction-input')).toContainText('18:37:42에 자동 공개');
+  await expect(page.locator('.prediction-input')).toContainText('18시 37분 42초에 자동 공개');
   await expect(page.locator('.submission-card')).toHaveCount(2);
   await captureWidths(page, 'authenticated-offwork-author', info);
   const other = await browser.newContext({ reducedMotion: 'reduce' });
@@ -199,11 +199,11 @@ test('offwork author saves seconds privately and rewards appear in results, home
     await expect(player.locator('.game-actions button[type="submit"]')).toContainText('제출 완료');
     expect((await snapshot(player)).user.gold).toBe(before.user.gold + 100);
     await page.reload();
-    const submitted = page.locator('.submission-card').filter({ hasText: 'yeseo' });
+    const submitted = page.locator('.submission-card').filter({ hasText: 'yeseo님' });
     await expect(submitted).toContainText('제출 완료');
-    await expect(submitted).not.toContainText('18:37:43');
+    await expect(submitted).not.toContainText('18시 37분 43초');
     await page.getByRole('button', { name: '지금 공개', exact: true }).click();
-    await expect(page.locator('.answer-number')).toHaveText('18:37:42');
+    await expect(page.locator('.answer-number')).toHaveText('18시 37분 42초');
     await player.reload();
     const result = player.locator('.result-list .result-card');
     await expect(result).toHaveCount(1);
@@ -214,7 +214,7 @@ test('offwork author saves seconds privately and rewards appear in results, home
     const after = await snapshot(player);
     expect(after.user.gold).toBe(before.user.gold + 200);
     expect(after.user.weeklyScore).toBe(before.user.weeklyScore + 25);
-    await expect(player.getByRole('region', { name: '최근 결과 기록' }).locator('.history-heading h3')).toHaveText(['2026-10-29', '2026-10-27', '2026-10-24']);
+    await expect(player.getByRole('region', { name: '최근 결과 기록' }).locator('.history-heading h3')).toHaveText(['2026년 10월 29일', '2026년 10월 27일', '2026년 10월 24일']);
     await captureWidths(player, 'authenticated-results', info);
     await player.goto('/#/');
     await expect(player.locator('.room-top .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
@@ -235,8 +235,8 @@ test('wake author confirms once, shows the server clock and cannot undo the reve
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await login(page, 'min');
   await page.goto('/#/game/wake');
-  await expect(page.locator('.author-date')).toContainText('2026-10-30');
-  await expect(page.locator('.wake-clock')).toHaveText(/09:00:\d{2}/);
+  await expect(page.locator('.author-date')).toContainText('2026년 10월 30일');
+  await expect(page.locator('.wake-clock')).toHaveText(/09시 00분 \d{2}초/);
   await expect(page.getByRole('spinbutton')).toHaveCount(0);
   await captureWidths(page, 'authenticated-wake-author', info);
   await page.getByRole('button', { name: '기상했어요', exact: true }).click();
@@ -248,10 +248,10 @@ test('wake author confirms once, shows the server clock and cannot undo the reve
   await expect(dialog).not.toBeVisible();
   await page.getByRole('button', { name: '기상했어요', exact: true }).click();
   await dialog.getByRole('button', { name: '기상 시각 확정', exact: true }).click();
-  await expect(page.locator('.answer-number')).toHaveText('09:00:00');
+  await expect(page.locator('.answer-number')).toHaveText('09시 00분 00초');
   await expect(page.getByRole('button', { name: '기상했어요', exact: true })).toHaveCount(0);
   await page.reload();
-  await expect(page.locator('.answer-number')).toHaveText('09:00:00');
+  await expect(page.locator('.answer-number')).toHaveText('09시 00분 00초');
   await expect(page.getByRole('button', { name: '기상했어요', exact: true })).toHaveCount(0);
 });
 
@@ -259,7 +259,7 @@ test('luck author edits a bounded hint and publishes the saved score', async ({ 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await login(page, 'yeseo');
   await page.goto('/#/game/luck');
-  await expect(page.locator('.prediction-input')).toContainText('18:00:00에 자동 공개');
+  await expect(page.locator('.prediction-input')).toContainText('18시 00분에 자동 공개');
   await page.getByRole('spinbutton', { name: /^정답 점수/ }).fill('77');
   const hint = page.getByLabel('함께 볼 힌트');
   await expect(hint).toHaveAttribute('maxlength', '200');
@@ -311,7 +311,7 @@ test('PWA caches the app shell and previews offline but never caches authenticat
   await context.setOffline(true);
   await page.reload();
   await expect(page.getByRole('status')).toContainText('오프라인');
-  await expect(page.getByRole('heading', { name: 'yeseo', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'yeseo님', exact: true })).toBeVisible();
   await page.goto('/#/preview/game/wake');
   await expect(page.getByRole('heading', { name: 'min님은 몇 시에 일어날까?' })).toBeVisible();
 });
@@ -376,16 +376,16 @@ test('seventh attendance claim waits for the celebration, collapses and loads pa
   expect(await duplicate.json()).toMatchObject({ awarded: false, user: { gold: after.user.gold } });
   await page.goto('/#/attendance');
   await expect(page.getByRole('heading', { name: '2026년 10월' })).toBeVisible();
-  await expect(page.getByLabel('2026-10-30 출석', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('2026년 10월 30일 출석', { exact: true })).toBeVisible();
   await expect(page.locator('.streak-node')).toHaveCount(7);
   await expect(page.locator('.streak-node').last()).toContainText('500');
   await captureWidths(page, 'authenticated-attendance', info, 2);
   const previousMonth = page.waitForResponse(response => response.url().includes('/api/me/attendance?month=2026-09'));
   await page.getByRole('button', { name: '이전 달', exact: true }).click();
   expect((await previousMonth).status()).toBe(200);
-  await expect(page.getByRole('heading', { name: '2026년 9월' })).toBeVisible();
-  await expect(page.getByLabel('2026-09-29 출석', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('2026-09-28 미출석', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '2026년 09월' })).toBeVisible();
+  await expect(page.getByLabel('2026년 09월 29일 출석', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('2026년 09월 28일 미출석', { exact: true })).toBeVisible();
   await page.goto('/#/profile');
   await expect(page.locator('.profile-summary .stats')).toContainText('7일');
   await expect(page.locator('.history-row').filter({ hasText: '출석' }).first()).toContainText('+500G');
@@ -442,7 +442,7 @@ test('character import runs only for a null server choice and selected character
   expect(imports).toEqual([{ character: 'moon', migrate: true, expectedUserId: 'e2e-siwon' }]);
   expect(await page.evaluate(() => localStorage.getItem('yegoom3:character:siwon'))).toBeNull();
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'siwon', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'siwon님', exact: true })).toBeVisible();
   expect(imports).toHaveLength(1);
   await page.goto('/#/profile');
   const bread = page.getByRole('button', { name: /^빵빵/ });
@@ -471,7 +471,7 @@ test('character import runs only for a null server choice and selected character
     const data = await snapshot(anotherDevice);
     expect(data.players.find(player => player.username === 'siwon')?.character).toBe('bread');
     await anotherDevice.goto('/#/game/luck');
-    const row = anotherDevice.getByRole('region', { name: '최근 결과 기록' }).locator('.result-card').filter({ hasText: 'siwon' }).first();
+    const row = anotherDevice.getByRole('region', { name: '최근 결과 기록' }).locator('.result-card').filter({ hasText: 'siwon님' }).first();
     await expect(row.locator('[data-character="bread"]')).toBeVisible();
     // Duplicate choices are permitted; ownership labels are informational.
     await anotherDevice.goto('/#/profile');
@@ -666,7 +666,7 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   const history = page.locator(`.ticket[data-ticket-id="${SAVED_LOTTO_ID}"]`);
   await expect(history).toContainText('1등 · 5개 일치');
   await expect(history).toContainText('+5,000G');
-  await expect(page.locator('.lotto-target')).toContainText('2026-10-30');
+  await expect(page.locator('.lotto-target')).toContainText('2026년 10월 30일');
   const before = await shopSnapshot<LottoResponse>(page, 'lotto');
   const attempts: LottoPurchaseInput[] = [];
   let dropped = false;
@@ -1106,7 +1106,7 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
     const guesser = await other.newPage();
     await login(guesser, 'yeseo');
     await guesser.goto('/#/play/catchmind');
-    await expect(guesser.getByRole('heading', { name: 'min이 그림을 그리고 있어요', exact: true })).toBeVisible();
+    await expect(guesser.getByRole('heading', { name: 'min님이 그림을 그리고 있어요', exact: true })).toBeVisible();
     for (const remaining of [3, 2, 1]) {
       const changed = catchmindResponse(page, 'reroll');
       await page.getByRole('button', { name: `제시어 바꾸기 (${remaining}회 남음)`, exact: true }).click();
@@ -1146,7 +1146,7 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
     await expect(page.getByRole('textbox', { name: '캐치마인드 정답', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '그림 올리기', exact: true })).toHaveCount(0);
     await guesser.reload();
-    const picture = guesser.getByRole('img', { name: 'min이 그린 그림', exact: true });
+    const picture = guesser.getByRole('img', { name: 'min님이 그린 그림', exact: true });
     await expect(picture).toBeVisible();
     await expect.poll(() => picture.evaluate(element => {
       const image = element as HTMLImageElement;
@@ -1196,7 +1196,7 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
     await guesser.goto('/#/profile');
     await guesser.goto('/#/play/catchmind');
     await guesser.reload();
-    await expect(guesser.locator('.pg-winner')).toContainText('yeseo');
+    await expect(guesser.locator('.pg-winner')).toContainText('yeseo님');
     const retried = catchmindResponse(guesser, 'guess');
     await guesser.getByRole('button', { name: '처리 결과 다시 확인', exact: true }).click();
     expect((await retried).status()).toBe(200);
@@ -1204,7 +1204,7 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
     expect(winningAttempts[1]).toEqual(winningAttempts[0]);
     await expect(guesser.getByRole('button', { name: '처리 결과 다시 확인', exact: true })).toHaveCount(0);
     await expect(guesser.getByRole('list', { name: '모두의 답', exact: true }).getByRole('listitem')).toHaveCount(4);
-    await expect(guesser.locator('.pg-winner')).toContainText('yeseo');
+    await expect(guesser.locator('.pg-winner')).toContainText('yeseo님');
     await expect(guesser.locator('.pg-winner')).toContainText('+3점');
     await expect(guesser.locator('.pg-winner')).toContainText('+5G');
     const after = await snapshot(guesser);
@@ -1216,7 +1216,7 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
     await expect(guesser.locator('.game-toolbar .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
     await captureWidths(guesser, 'authenticated-result', info, 4);
     await page.reload();
-    await expect(page.locator('.pg-winner')).toContainText('yeseo');
+    await expect(page.locator('.pg-winner')).toContainText('yeseo님');
     await expect(page.getByRole('button', { name: '다음 그림 그리기', exact: true })).toHaveCount(0);
     await guesser.goto('/#/profile');
     await expect(guesser.locator('.history-row').filter({ hasText: '캐치마인드' }).first()).toContainText('+5G');
@@ -1237,7 +1237,7 @@ test('six misses and a manual end keep the drawer turn without awarding gold or 
   await expect(page.getByLabel('그림 그리는 캔버스', { exact: true })).toBeVisible();
   await drawStroke(page, [[.25, .25], [.75, .75]]);
   await page.getByRole('button', { name: '그림 올리기', exact: true }).click();
-  await expect(page.getByRole('img', { name: 'yeseo이 그린 그림', exact: true })).toBeVisible();
+  await expect(page.getByRole('img', { name: 'yeseo님이 그린 그림', exact: true })).toBeVisible();
   const other = await browser.newContext({ reducedMotion: 'reduce' });
   try {
     const guesser = await other.newPage();
@@ -1266,7 +1266,7 @@ test('six misses and a manual end keep the drawer turn without awarding gold or 
     await expect(page.locator('.pg-prompt strong')).toBeVisible();
     await drawStroke(page, [[.25, .75], [.75, .25]]);
     await page.getByRole('button', { name: '그림 올리기', exact: true }).click();
-    await expect(page.getByRole('img', { name: 'yeseo이 그린 그림', exact: true })).toBeVisible();
+    await expect(page.getByRole('img', { name: 'yeseo님이 그린 그림', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '이번 판 끝내기', exact: true }).click();
     const confirmation = page.getByRole('dialog', { name: '이번 판을 끝낼까요?', exact: true });
     await confirmation.getByRole('button', { name: '취소', exact: true }).click();

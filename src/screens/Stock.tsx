@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Avatar, Character, Coin, Segmented, Toolbar, art, artSrc, useDisplayNameLookup } from "../components/UI";
-import { anim, pop, toast, useCountUp, useMountMotion, useOnChange } from "../motion";
+import { Avatar, Character, Coin, Segmented, Toolbar, art, artSrc, honorific, useDisplayNameLookup } from "../components/UI";
+import { anim, openSheet, pop, toast, useCountUp, useMountMotion, useOnChange } from "../motion";
+import { formatTime } from "../format";
 import { LIMIT, marketOpen, stocks as sampleStocks, type Stock } from "../sample";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -142,7 +143,7 @@ export function StockMarket({ gold, onBack, go }: { gold: number; onBack: () => 
           </div>
           <div className="closed-copy">
             <h2>장 마감</h2>
-            <p>평일 09:00 개장</p>
+            <p>평일 {formatTime("09:00")} 개장</p>
           </div>
         </div>
         <div className="screen-body stack">
@@ -155,7 +156,7 @@ export function StockMarket({ gold, onBack, go }: { gold: number; onBack: () => 
               <div className="list-row" key={name}>
                 <span className="plain-rank">{i + 1}</span>
                 <Avatar username={name} size={38} />
-                <strong>{displayNameOf(name)}</strong>
+                <strong>{honorific(displayNameOf(name))}</strong>
                 <b className={upDown(amount)}>{signed(amount)}G</b>
               </div>
             ))}
@@ -178,7 +179,7 @@ export function StockMarket({ gold, onBack, go }: { gold: number; onBack: () => 
             <span>내 주식</span>
             <span className="market-pill">
               <i />
-              18:00 마감
+              {formatTime("18:00")} 마감
             </span>
           </div>
           <p>
@@ -233,11 +234,11 @@ function Chart({ stock }: { stock: Stock }) {
         <circle className="chart-end" cx="330" cy={lastY} r="5" fill={color} stroke="#fff" strokeWidth="2.5" />
       </svg>
       <div className="chart-axis">
-        <span>09:00</span>
-        <span>11:00</span>
-        <span>13:00</span>
-        <span>15:00</span>
-        <span>18:00</span>
+        <span>{formatTime("09:00")}</span>
+        <span>{formatTime("11:00")}</span>
+        <span>{formatTime("13:00")}</span>
+        <span>{formatTime("15:00")}</span>
+        <span>{formatTime("18:00")}</span>
       </div>
     </section>
   );
@@ -256,13 +257,13 @@ function ConfirmSheet({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const sheet = useMountMotion<HTMLDivElement>((el) => {
-    anim(el.parentElement, [{ opacity: 0 }, { opacity: 1 }], { dur: 200 });
-    anim(el, [{ translate: "0 100%" }, { translate: "0 0" }], { dur: 420, ease: "spring" });
-  });
+  const sheet = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (sheet.current) return openSheet(sheet.current);
+  }, []);
   return (
-    <div className="kuji-scrim" onClick={(e) => e.target === e.currentTarget && onCancel()}>
-      <div className="kuji-sheet trade-sheet" ref={sheet} role="dialog" aria-label="거래 확인">
+    <dialog className="kuji-modal" ref={sheet} aria-label="거래 확인" onCancel={event => { event.preventDefault(); onCancel(); }} onClick={event => { if (event.target === event.currentTarget) onCancel(); }}>
+      <div className="kuji-sheet trade-sheet">
         <span className="detail-icon" style={{ background: art[stock.art].tint }}>
           <img className="character" src={artSrc(stock.art)} alt="" />
         </span>
@@ -281,7 +282,7 @@ function ConfirmSheet({
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }
 
@@ -308,7 +309,7 @@ export function StockDetail({ id, gold: startGold, onBack }: { id: string; gold:
               <strong>0</strong>
               <span>G</span>
             </p>
-            <small>11:42 상장폐지 · 직전 {won(stock.average)}G</small>
+            <small>{formatTime("11:42")} 상장폐지 · 직전 {won(stock.average)}G</small>
           </div>
           <span className="detail-icon gray">
             <img className="character" src={artSrc(stock.art)} alt="" />

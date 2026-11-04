@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { PASSWORD_RULES, validNewPassword } from "../../shared/password";
-import { anim, toast } from "../motion";
+import { openSheet, toast } from "../motion";
 import "../password.css";
 
 function PasswordField({ label, name, autoComplete, value, onChange, disabled }: {
@@ -38,18 +38,11 @@ export function PasswordSheet({ username, onClose, onChange }: {
   useEffect(() => {
     mounted.current = true;
     const node = dialog.current!;
-    const previousFocus = document.activeElement;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    node.showModal();
+    const closeSheet = openSheet(node);
     node.querySelector<HTMLInputElement>('input[name="currentPassword"]')?.focus();
-    const entrance = anim(node.querySelector(".password-sheet"), [{ translate: "0 30px", opacity: 0 }, { translate: "0 0", opacity: 1 }], { dur: 240, ease: "out" });
     return () => {
       mounted.current = false;
-      entrance?.cancel();
-      node.close();
-      document.body.style.overflow = overflow;
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+      closeSheet();
     };
   }, []);
   const close = () => { if (!pending.current) onClose(); };

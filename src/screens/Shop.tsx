@@ -4,6 +4,7 @@ import type { LottoPurchaseInput, LottoTicket, ShopKind, ShopPayment, SpeettoPur
 import { SectionTitle, Toolbar, art, artSrc } from "../components/UI";
 import { anim, confetti, crumbs, popIn, reduced, shake, toast, tween, useCountUp } from "../motion";
 import { useShop } from "../shop";
+import { formatDate, formatTime } from "../format";
 import { ShopCards } from "./Home";
 
 function InventoryCard({ kind }: { kind?: "lotto" | "speetto" }) {
@@ -77,7 +78,7 @@ function DrawNumbers({ date, numbers }: { date: string; numbers: number[] }) {
     ], { dur: 560, ease: "out" });
   }, [rolled]);
   return <section className="card lotto-draw"><div className="draw">
-    <span>{date} 당첨 번호</span>
+    <span>{formatDate(date)} 당첨 번호</span>
     <div ref={draw}>{numbers.map((number, i) => <i key={number} style={{ background: winColors[i], color: i ? "#fff" : "#5C4300", visibility: i < rolled ? "visible" : "hidden" }}>{number}</i>)}</div>
   </div></section>;
 }
@@ -88,7 +89,7 @@ function TicketCard({ ticket }: { ticket: LottoTicket }) {
       <span className={`ticket-tag ${ticket.rank ? "won" : ""}`}>{settled ? `${ticket.rank ? `${ticket.rank}등 · ` : ""}${ticket.matches}개 일치` : "추첨 대기"}</span>
       <b className={ticket.prize ? "gain" : "none"}>{settled ? ticket.prize ? `+${ticket.prize.toLocaleString("ko-KR")}G` : "낙첨" : ""}</b>
     </div>
-    <p className="ticket-date">{ticket.drawDate} · {LOTTO_RULES.drawTime.slice(0, 5)} 추첨</p>
+    <p className="ticket-date">{formatDate(ticket.drawDate)} · {formatTime(LOTTO_RULES.drawTime)} 추첨</p>
     <div className="ticket-balls">{ticket.numbers.map(number => {
       const index = ticket.winningNumbers?.indexOf(number) ?? -1;
       return <i key={number} data-n={number} style={index >= 0 ? { background: winColors[index], color: index ? "#fff" : "#5C4300" } : undefined}>{number}</i>;
@@ -157,9 +158,9 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
       <Toolbar title="데일리 로또" onBack={onBack} gold={shop.gold} />
       <div className="hero-number-row">
         <div className="hero-number"><span>다음 추첨까지</span><strong className="countdown-number">{left === null ? "—" : clock(left)}</strong></div>
-        <div className="lotto-meta"><span>{LOTTO_RULES.drawTime.slice(0, 5)} 추첨</span><small>장당 {LOTTO_RULES.price}G</small></div>
+        <div className="lotto-meta"><span>{formatTime(LOTTO_RULES.drawTime)} 추첨</span><small>장당 {LOTTO_RULES.price}G</small></div>
       </div>
-      {round && <p className="lotto-target">지금 사는 표 · {round.targetDrawDate} 추첨</p>}
+      {round && <p className="lotto-target">지금 사는 표 · {formatDate(round.targetDrawDate)} 추첨</p>}
     </div>
     <div className="screen-body stack">
       <InventoryCard kind="lotto" />
@@ -183,7 +184,7 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
         <h2>내 데일리 로또 {round?.tickets.length ?? 0}장</h2>
         {round?.tickets.length ? round.tickets.map(ticket => <TicketCard key={ticket.id} ticket={ticket} />) : !shop.loading && <p className="card empty-state">아직 구매한 표가 없어요.</p>}
       </section>
-      <details className="card shop-rules"><summary>데일리 로또 당첨금</summary><p>{LOTTO_RULES.maxNumber}개 숫자 중 {LOTTO_RULES.pickCount}개를 골라요. 매일 {LOTTO_RULES.drawTime.slice(0, 5)} 이후에는 다음 날 추첨 표를 살 수 있어요.</p>
+      <details className="card shop-rules"><summary>데일리 로또 당첨금</summary><p>{LOTTO_RULES.maxNumber}개 숫자 중 {LOTTO_RULES.pickCount}개를 골라요. 매일 {formatTime(LOTTO_RULES.drawTime)} 이후에는 다음 날 추첨 표를 살 수 있어요.</p>
         <table><thead><tr><th>일치</th><th>당첨금</th></tr></thead><tbody>{Object.entries(LOTTO_RULES.prizes).reverse().map(([matches, prize]) => <tr key={matches}><td>{matches}개</td><td>{prize.toLocaleString("ko-KR")}G</td></tr>)}</tbody></table>
       </details>
     </div>

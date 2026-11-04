@@ -3,7 +3,8 @@ import { ADMIN_LIMITS, type AdminChange, type AdminClawConfig, type AdminGameSet
 import { GAME_RULES } from "../../shared/balance";
 import { scoreThresholdLabel, validatePredictionRules } from "../../shared/game-settings";
 import type { GameId } from "../../shared/types";
-import { Character } from "../components/UI";
+import { Character, honorific } from "../components/UI";
+import { formatDateTime, formatTime, formatTimeSeconds } from "../format";
 import "../admin.css";
 
 interface Props {
@@ -103,7 +104,7 @@ function PredictionForm({ game, today, tomorrow, disabled, onSave }: {
     try {
       await onSave(game.id, validated.rules, effectiveFrom);
       dirty.current = false; setRules(copyRules(validated.rules));
-      setMessage(effectiveFrom === today ? "오늘 판에 적용했어요." : `${shortDate(effectiveFrom)} 00:00부터 적용하도록 저장했어요.`);
+      setMessage(effectiveFrom === today ? "오늘 판에 적용했어요." : `${shortDate(effectiveFrom)} 00시 00분부터 적용하도록 저장했어요.`);
     } catch (cause) { setError(explain(cause)); }
     finally { pending.current = false; setSaving(false); }
   }
@@ -143,12 +144,12 @@ function PredictionForm({ game, today, tomorrow, disabled, onSave }: {
     </fieldset>
     <fieldset className="admin-fieldset" disabled={blocked}>
       <legend>예측 마감 시각</legend>
-      {game.id === "wake" ? <p className="admin-fixed-deadline">{rules.deadline}<span>기상시간 마감은 고정이에요</span></p>
-        : <><ClockInput value={rules.deadline} onChange={deadline => change({ ...rules, deadline })} label={`${names[game.id]} 예측 마감`} disabled={blocked} /><p className="admin-form-note">{game.id === "luck" ? `${rules.revealTime} 자동 공개 전이어야 해요.` : "한국 시간 기준으로 적용돼요."}</p></>}
+      {game.id === "wake" ? <p className="admin-fixed-deadline">{formatTime(rules.deadline)}<span>기상시간 마감은 고정이에요</span></p>
+        : <><ClockInput value={rules.deadline} onChange={deadline => change({ ...rules, deadline })} label={`${names[game.id]} 예측 마감`} disabled={blocked} /><p className="admin-form-note">{game.id === "luck" ? `${formatTime(rules.revealTime!)} 자동 공개 전이어야 해요.` : "한국 시간 기준으로 적용돼요."}</p></>}
     </fieldset>
     <fieldset className="admin-fieldset admin-effective-date" disabled={blocked}>
       <legend>적용 시점</legend>
-      <label><input type="radio" name={formId} value={tomorrow} checked={effectiveFrom === tomorrow} onChange={() => { setEffectiveFrom(tomorrow); setError(""); setMessage(""); }} /><span><strong>내일부터 적용</strong><small>{shortDate(tomorrow)} 00:00 · 기본</small></span></label>
+      <label><input type="radio" name={formId} value={tomorrow} checked={effectiveFrom === tomorrow} onChange={() => { setEffectiveFrom(tomorrow); setError(""); setMessage(""); }} /><span><strong>내일부터 적용</strong><small>{shortDate(tomorrow)} 00시 00분 · 기본</small></span></label>
       <label className={!game.canApplyToday ? "is-unavailable" : undefined}><input type="radio" name={formId} value={today} checked={effectiveFrom === today} disabled={!game.canApplyToday} aria-describedby={`${formId}-today-reason`} onChange={() => { setEffectiveFrom(today); setError(""); setMessage(""); }} /><span><strong>오늘부터 적용</strong><small>{shortDate(today)}의 아직 시작하지 않은 판</small></span></label>
       <p className="admin-form-note" id={`${formId}-today-reason`}>{game.canApplyToday ? "오늘 예측도 정답도 없을 때만 선택할 수 있어요. 저장할 때 다시 확인해요." : game.activityReason ?? "오늘 이미 예측이나 정답이 있어 오늘 설정은 바꿀 수 없어요."}</p>
     </fieldset>
@@ -164,7 +165,7 @@ function PredictionCard({ game, state, disabled, onSave }: { game: AdminGameSett
   return <section className={`card admin-game-card admin-game-${game.id}`} aria-label={`${names[game.id]} 운영 설정`}>
     <button className="admin-card-toggle" type="button" aria-expanded={open} aria-controls={panel} onClick={() => setOpen(value => !value)}>
       <span className="admin-card-art"><Character username={GAME_RULES[game.id].author} /></span>
-      <span className="admin-card-title"><strong>{names[game.id]}</strong><span>{game.rules.deadline} 마감 · 참여 {game.rules.participationGold}G</span></span>
+      <span className="admin-card-title"><strong>{names[game.id]}</strong><span>{formatTime(game.rules.deadline)} 마감 · 참여 {game.rules.participationGold}G</span></span>
       <span className="admin-card-chevron" aria-hidden="true">{open ? "−" : "+"}</span>
     </button>
     <div className="admin-card-badges"><span className={`pill ${game.rules.enabled ? "mint" : "muted"}`}>{game.rules.enabled ? "오늘 운영" : "오늘은 쉬어요"}</span>{game.scheduledRules && <span className="pill lavender">내일 변경 예정</span>}</div>
@@ -212,10 +213,6 @@ function ClawCard({ config, disabled, onSave, onPlay }: { config: AdminClawConfi
   </section>;
 }
 
-const stamp = (value: string) => {
-  const time = new Date(value);
-  return Number.isFinite(time.getTime()) ? new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(time) : value;
-};
 function record(value: unknown): Record<string, unknown> { return value !== null && typeof value === "object" ? value as Record<string, unknown> : {}; }
 function gameForTarget(target: string): GameId | null {
   return (["wake", "offwork", "luck"] as const).find(id => target === id || target === `game:${id}` || target === `game/${id}`) ?? null;
@@ -228,7 +225,7 @@ function changeSummary(change: AdminChange): string[] {
   };
   if (game) {
     add("enabled", "운영", value => value === true ? "켜짐" : value === false ? "쉬어요" : "—");
-    add("participationGold", "참여", value => `${value ?? "—"}G`); add("firstGold", "1등", value => `${value ?? "—"}G`); add("deadline", "마감");
+    add("participationGold", "참여", value => `${value ?? "—"}G`); add("firstGold", "1등", value => `${value ?? "—"}G`); add("deadline", "마감", value => typeof value === "string" ? formatTimeSeconds(value) : "—");
     add("scoreTable", "배점표", value => Array.isArray(value) ? value.map(tier => {
       const row = record(tier); return `${scoreThresholdLabel(game, Number(row.maxDifference))} ${row.points}점`;
     }).join(" · ") : "—");
@@ -244,8 +241,8 @@ function Changes({ changes }: { changes: AdminChange[] }) {
     {changes.length ? <ol>{changes.map(change => {
       const game = gameForTarget(change.target); const summary = changeSummary(change);
       return <li className="card" key={change.id}>
-        <div className="admin-change-heading"><strong>{game ? names[game] : change.target === "claw" ? "인형뽑기" : change.target}</strong><time dateTime={change.createdAt}>{stamp(change.createdAt)}</time></div>
-        <p className="admin-change-by">{change.adminName}님 · {change.effectiveFrom.length === 10 ? `${shortDate(change.effectiveFrom)}부터 적용` : "다음 플레이부터 적용"}</p>
+        <div className="admin-change-heading"><strong>{game ? names[game] : change.target === "claw" ? "인형뽑기" : change.target}</strong><time dateTime={change.createdAt}>{formatDateTime(change.createdAt)}</time></div>
+        <p className="admin-change-by">{honorific(change.adminName)} · {change.effectiveFrom.length === 10 ? `${shortDate(change.effectiveFrom)}부터 적용` : "다음 플레이부터 적용"}</p>
         <ul>{summary.map((line, index) => <li key={index}>{line}</li>)}</ul>
       </li>;
     })}</ol> : <div className="card admin-empty">아직 변경 기록이 없어요.</div>}

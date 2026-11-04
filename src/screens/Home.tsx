@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, KUJI_RULES, LOTTO_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
+import { formatTime, formatTimeSeconds } from "../format";
 import type { CatchmindSummary, ClawSummary, GameState, KujiSummary } from "../../shared/types";
 import { useAttendance } from "../attendance";
 import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import {
   Avatar,
+  honorific,
   CharacterSprite,
   Chevron,
   Coin,
@@ -90,7 +92,7 @@ function left(deadline: string, roundDate: string) {
 }
 function predictionRow(game: GameState, me: string): GameRow {
   const unit = (value: string | null) =>
-    value === null ? "" : game.id === "luck" ? `${value}점` : value;
+    value === null ? "" : game.id === "luck" ? `${value}점` : formatTimeSeconds(value);
   const row = {
     path: `/game/${game.id}`,
     name: game.title,
@@ -119,15 +121,15 @@ function predictionRow(game: GameState, me: string): GameRow {
             : "기상했어요로 바로 공개"
           : game.id === "offwork"
             ? "퇴근하면 자동 공개"
-            : `${game.rules.revealTime} 공개`,
-      right: game.rules.deadline,
+            : `${formatTime(game.rules.revealTime!)} 공개`,
+      right: formatTime(game.rules.deadline),
     };
   if (game.phase === "closed")
     return {
       ...row,
       chip: "closed",
       sub: game.prediction ? `내 예측 ${unit(game.prediction)}` : "결과 대기",
-      right: game.rules.deadline,
+      right: formatTime(game.rules.deadline),
     };
   return {
     ...row,
@@ -137,16 +139,16 @@ function predictionRow(game: GameState, me: string): GameRow {
       : game.id === "luck" && game.hint
         ? `힌트 「${game.hint.split(/[.。]/)[0]}」`
         : left(game.rules.deadline, game.roundDate),
-    right: game.rules.deadline,
+    right: formatTime(game.rules.deadline),
   };
 }
 type DisplayNameLookup = (username: string, fallback?: string) => string;
 function catchmindRow(game: CatchmindSummary, me: string, displayNameOf: DisplayNameLookup): GameRow {
   const row = { path: "/play/catchmind", name: "캐치마인드", icon: "bread" as const, right: "" };
   if (game.status === "idle") return {
-    ...row, chip: "try", sub: game.turn ? `${displayNameOf(game.turn.username, game.turn.displayName)}의 그리기 차례` : "먼저 그리기를 맡아 보세요",
+    ...row, chip: "try", sub: game.turn ? `${honorific(displayNameOf(game.turn.username, game.turn.displayName))}의 그리기 차례` : "먼저 그리기를 맡아 보세요",
   };
-  const drawer = game.drawer ? displayNameOf(game.drawer.username, game.drawer.displayName) : "출제자";
+  const drawer = honorific(game.drawer ? displayNameOf(game.drawer.username, game.drawer.displayName) : "출제자");
   const mine = game.drawer?.username === me;
   if (game.status === "draft") return {
     ...row, chip: mine ? "host" : "open", sub: mine ? "내가 그림 그리는 중" : `${drawer}이 그림 그리는 중`,
@@ -158,8 +160,8 @@ function catchmindRow(game: CatchmindSummary, me: string, displayNameOf: Display
   return {
     ...row, chip: "done",
     sub: game.winner
-      ? `${answer} · ${game.winner.username === me ? "내가 맞힘" : `${displayNameOf(game.winner.username, game.winner.displayName)} 정답`} · 다음 출제`
-      : `${answer} · 다음 ${game.turn ? displayNameOf(game.turn.username, game.turn.displayName) : drawer}`,
+      ? `${answer} · ${game.winner.username === me ? "내가 맞힘" : `${honorific(displayNameOf(game.winner.username, game.winner.displayName))} 정답`} · 다음 출제`
+      : `${answer} · 다음 ${game.turn ? honorific(displayNameOf(game.turn.username, game.turn.displayName)) : drawer}`,
     right: game.winner?.username === me ? `+${CATCHMIND_RULES.score}점` : "",
   };
 }
@@ -225,7 +227,7 @@ function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
 }
 
 export function SoloGames({ go, claw }: { go: Go; claw: ClawSummary }) {
-  const nextGrant = new Date(claw.nextGrantAt).toLocaleTimeString("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false });
+  const nextGrant = formatTime(new Date(claw.nextGrantAt).toISOString());
   const open = FEATURES.stock && marketOpen();
   return (
     <>
@@ -272,7 +274,7 @@ export function ShopCards({ go }: { go: Go }) {
         </span>
         <span className="solo-text">
           <strong>데일리 로또</strong>
-          <small>{LOTTO_RULES.drawTime.slice(0, 5)} 추첨</small>
+          <small>{formatTime(LOTTO_RULES.drawTime)} 추첨</small>
           <small>이용권 {inventory.lottoTickets}장</small>
         </span>
       </button>
@@ -511,16 +513,16 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
     ? ""
     : me.rank === 1
       ? table[1]
-        ? `2위 ${displayNameOf(table[1].username, table[1].displayName)}와 ${me.weeklyScore - table[1].weeklyScore}점 차`
+        ? `2위 ${honorific(displayNameOf(table[1].username, table[1].displayName))}과 ${me.weeklyScore - table[1].weeklyScore}점 차`
         : "이번 주 1위"
-      : `1위 ${displayNameOf(top.username, top.displayName)}까지 ${top.weeklyScore - me.weeklyScore}점`;
+      : `1위 ${honorific(displayNameOf(top.username, top.displayName))}까지 ${top.weeklyScore - me.weeklyScore}점`;
   return (
     <div className={`home ${evening ? "evening" : ""}`}>
       <Room data={data} gold={data.gold} evening={evening} jumpRequest={jumpRequest} onJumpDone={finishJump} />
       <div className="home-score">
         <div className="home-score-row">
           <div>
-            <h1>{displayNameOf(data.username, data.displayName)}</h1>
+            <h1>{honorific(displayNameOf(data.username, data.displayName))}</h1>
             <p>
               <strong>{score}</strong>
               <span>점</span>
@@ -557,7 +559,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
                 <Avatar username={player.username} size={46} />
                 <span className="ranking-preview-main">
                   <span>
-                    <strong>{displayNameOf(player.username, player.displayName)}</strong>
+                    <strong>{honorific(displayNameOf(player.username, player.displayName))}</strong>
                     {player.username === data.username && <em>나</em>}
                     <b>{player.weeklyScore.toLocaleString("ko-KR")}</b>
                   </span>

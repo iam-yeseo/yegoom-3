@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { PROFILE_PHOTO } from "../../shared/profile";
 import { encodePhoto, loadPhoto, photoCanvas, type DecodedPhoto } from "../image-processing";
-import { anim } from "../motion";
+import { openSheet } from "../motion";
 import "../profile-photo.css";
 
 type Point = { x: number; y: number };
@@ -51,11 +51,7 @@ export function PhotoPicker({ file, onSave, onClose }: {
   };
   useEffect(() => {
     const node = dialog.current!;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    node.showModal();
-    const entrance = anim(node, [{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "translateY(0)" }], { dur: 200 });
-    return () => { entrance?.cancel(); node.close(); document.body.style.overflow = overflow; };
+    return openSheet(node);
   }, []);
   useEffect(() => {
     let active = true;

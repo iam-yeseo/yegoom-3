@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ATTENDANCE_RULES, attendanceRewardLabel } from "../../shared/balance";
 import { useAttendance } from "../attendance";
+import { formatDate } from "../format";
 import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import { Chevron, Coin, Gold, Toolbar } from "../components/UI";
 import { anim, coinFly, pop, sparkle, toast, useCountUp, useOnChange } from "../motion";
@@ -122,7 +123,7 @@ export function Attendance({ attendanceKey, gold, onBack }: {
       <section className="card calendar" aria-busy={calendarLoading}>
         <div className="calendar-head">
           <button aria-label="이전 달" onClick={() => shift(-1)}><Chevron size={20} color="#ADA4B3" /></button>
-          <h2>{year}년 {monthNumber}월</h2>
+          <h2>{year}년 {String(monthNumber).padStart(2, "0")}월</h2>
           <button aria-label="다음 달" disabled={current} onClick={() => shift(1)}><Chevron direction="right" size={20} color={current ? "#DDD6DC" : "#ADA4B3"} /></button>
         </div>
         {calendarLoading ? <p className="subtle-note" role="status">출석 기록을 불러오는 중…</p> : historyError && !current ?
@@ -137,7 +138,7 @@ export function Attendance({ attendanceKey, gold, onBack }: {
               const isToday = date === today;
               const past = date < today;
               const state = attended ? isToday ? "attended today" : "attended" : isToday ? "today" : past ? "missed" : "";
-              return <span key={day} className="calendar-day" aria-label={`${date} ${attended ? "출석" : "미출석"}`}><i className={state}>{day}</i></span>;
+              return <span key={day} className="calendar-day" aria-label={`${formatDate(date)} ${attended ? "출석" : "미출석"}`}><i className={state}>{day}</i></span>;
             })}
           </div>}
       </section>

@@ -2166,7 +2166,7 @@ em.delisted {
   position: fixed;
   inset: 0;
   z-index: 50;
-  overflow: hidden;
+  overflow: clip;
   pointer-events: none;
 }
 .fx-touch-effect {
@@ -2224,8 +2224,10 @@ em.delisted {
   left: 50%;
   bottom: calc(104px + env(safe-area-inset-bottom));
   translate: -50% 0;
-  height: 48px;
-  padding: 0 18px 0 8px;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  min-height: 48px;
+  padding: 8px 18px 8px 8px;
   border-radius: 999px;
   background: #fff;
   box-shadow: 0 10px 30px rgba(120, 90, 60, 0.16);
@@ -2235,7 +2237,8 @@ em.delisted {
   font-size: 15px;
   font-weight: 800;
   color: #3a3340;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   pointer-events: none;
 }
 .fx-toast-wrap {
@@ -2250,6 +2253,7 @@ em.delisted {
 }
 .fx-toast-wrap > span { flex-shrink: 0; }
 .fx-toast > span {
+  flex-shrink: 0;
   width: 32px;
   height: 32px;
   border-radius: 50%;
