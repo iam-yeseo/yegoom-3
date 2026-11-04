@@ -1,6 +1,23 @@
-# 무료 플랜 예산 — 개선 PR 2
+# 무료 플랜 예산 — 개선 PR 2·3
 
 측정일 2026-11-04. 기준 main `c873ae8`과 PR 2 코드를 같은 로컬 D1 fixture로 비교했다. 실제 운영 계정의 사용량이나 Workers CPU를 측정한 결과는 아니다. 원자료는 [D1 측정 JSON](free-plan-measurements.json), [CPU 측정 JSON](free-plan-cpu.json)이다.
+
+## 개선 PR 3 재측정
+
+PR #24 머지 main `6b52972`에서 홈·동점 문구·랭킹 이름 표시만 바꿨다. PR 2와 같은 `tests/integration.test.ts`의 인증 포함 fixture를 다시 실행했다. [PR 3 원자료](free-plan-pr3-measurements.json)의 bootstrap 12개 표본 모두 prepare 수·실행 SQL·binding 호출·rows_read가 기존 값과 정확히 같으며, 정산 없는 rows_written은 0이다. 테스트가 PR 2 원자료를 읽어 각 표본의 비용 증가를 거절한다.
+
+과거 골드/이용권 원장 각각 10,000행 기준(쿼리/rows_read):
+
+| bootstrap 상태 | PR 2 → PR 3, 09:00 KST | PR 2 → PR 3, 18:00 KST |
+| --- | --- | --- |
+| 캐치마인드 없음·첫 조회/반복 | 15/161 → 15/161 | 15/162 → 15/162 |
+| 캐치마인드 공개 | 17/164 → 17/164 | 17/165 → 17/165 |
+
+폴링은 홈·랭킹 30초/나머지 60초, 숨김·뽑기·미리보기 중단으로 동일하다. 일일 예산은 아래 PR 2 표를 유지한다. 로컬 D1 측정이며 운영 관측값은 아니다. 마이그레이션과 새 API 경로는 없다. 상단 사진은 랭킹 행과 같은 기존 버전 URL을 사용한다.
+
+클라이언트 순위 계산은 `6b52972`의 실제 `standings()`와 새 함수를 같은 점수 내림차순·전원 다른 점수 입력으로 비교했다. `weeklyScore` getter로 정렬·행 복사·순위 탐색의 점수 접근 횟수를 세면 4명은 **30→17회**, 1,000명은 **1,003,998→4,997회**이며 반환 순위는 같다. `findIndex` 반복을 없앤 작업량 비교로, CPU 시간이나 운영 렌더 횟수 측정은 아니다. 상세 방법과 값은 PR 3 원자료의 `standingsWork`에 있다. 새 함수는 정렬 O(n log n) 후 순위 배정 O(n)이며 화면에서 메모화해 쓴다.
+
+PR 3 최종 검증: `npm run check` **12파일/646개**(순위 단위 **19개**, D1 통합 **272개** 포함), 전체 Playwright **82개** 통과. [아침 홈 390px](screenshots/update-pr3-morning-home-390.png)·[560px](screenshots/update-pr3-morning-home-560.png), [저녁 홈 390px](screenshots/update-pr3-evening-home-390.png)·[560px](screenshots/update-pr3-evening-home-560.png), [공동 1위 390px](screenshots/update-pr3-joint-first-390.png)·[560px](screenshots/update-pr3-joint-first-560.png), [랭킹 390px](screenshots/update-pr3-ranking-390.png)·[560px](screenshots/update-pr3-ranking-560.png)를 저장하고 확인했다.
 
 ## 공식 한도 확인
 
@@ -114,7 +131,7 @@ main JS는 기존 약 504kB에서 **437.06kB, gzip 140.92kB**로 줄었다. 운�
 
 랭킹 이름·동률은 PR 3, 캐치마인드 버전 폴링·그리기 최적화는 PR 4, 뽑기 프레임·CPU 계측은 PR 5에서 진행한다. PR 8의 순위 API와 PR 10~12의 주식 요청을 추가할 때 이 표와 fixture를 갱신한다. 지시서 번호·기본값을 바꾸지 않았으며 실제 코드와 달랐던 마이그레이션 번호, 영수증 FK 보존, 공식 한도 보충은 [결정 기록](decisions.md)에 남겼다.
 
-## 최종 검증
+## PR 2 최종 검증
 
 - `npm run check`: 타입 검사·Vitest **11파일/626개**(D1 통합 **271개**)·프로덕션 빌드 통과.
 - `npm run test:e2e`: 전체 **79개 통과**. 새 무료 플랜 화면 흐름 4개 포함. 고정 시계를 사용하는 기존 테스트는 lazy 화면이 표시될 때까지 시계를 진행하고, 계정 전환 시 10초 복귀 유예를 지난 뒤 조회하도록 맞췄다.

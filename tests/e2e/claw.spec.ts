@@ -40,7 +40,7 @@ async function login(page: Page, username: string) {
   await page.getByLabel('아이디', { exact: true }).fill(username);
   await page.getByLabel('비밀번호', { exact: true }).fill('e2e-only-password-2026');
   await button(page, '예굼방 들어가기').click({ force: true });
-  await expect(page.getByRole('heading', { name: `${username}님`, exact: true })).toBeVisible();
+  await expect(page.locator('.room-name').filter({ hasText: `${username}님` })).toBeVisible();
   await page.evaluate(() => { location.hash = '/play/claw'; });
   await waitForMachine(page);
   await expect(canvas(page)).toHaveAccessibleName(/인형 30개/);
@@ -372,7 +372,7 @@ test('claw reads on entry and visibility, never polls, and gives administrators 
   await page.getByLabel('아이디', { exact: true }).fill('admin');
   await page.getByLabel('비밀번호', { exact: true }).fill('e2e-only-password-2026');
   await button(page, '예굼방 들어가기').click({ force: true });
-  await expect(page.getByRole('heading', { name: 'admin님', exact: true })).toBeVisible();
+  await expect(page.locator('.room-name').filter({ hasText: 'admin님' })).toBeVisible();
   let reads = 0;
   page.on('request', request => { if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/claw') reads++; });
   await page.evaluate(() => { location.hash = '/play/claw'; });

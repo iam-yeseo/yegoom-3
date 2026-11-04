@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { honorific, Avatar, CharacterSprite, Toolbar, preloadSprites, useCharacter, useDisplayNameLookup } from "../components/UI";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { plainName, Avatar, CharacterSprite, Toolbar, preloadSprites, useCharacter, useDisplayNameLookup } from "../components/UI";
 import { kstParts, weekdayNames } from "../sample";
 import { anim, confetti, dropIn, reduced, tween } from "../motion";
-import { standings, type HomePlayer } from "./Home";
+import { standings, type RankingPlayer } from "../ranking";
 
 const podiumStyle = {
   1: { height: 186, bg: "#FFE7A3", fg: "#94700A", size: 140, duration: "3s" },
@@ -96,7 +96,7 @@ export function Ranking({
 }: {
   me: string;
   gold: number;
-  players: HomePlayer[];
+  players: RankingPlayer[];
   /** My points per weekday (Mon–Sun) this week. */
   daily: number[];
   lastWeek: { username: string; score: number }[] | null;
@@ -111,7 +111,10 @@ export function Ranking({
     const timer = window.setInterval(() => setNow(Date.now() + offset), 30_000);
     return () => clearInterval(timer);
   }, [serverTime]);
-  const table = standings(players);
+  const table = useMemo(() => standings(players), [players]);
+  const lastWeekTable = useMemo(() => lastWeek ? standings(lastWeek.map(row => ({
+    ...row, displayName: displayNameOf(row.username), weeklyScore: row.score,
+  }))) : null, [lastWeek, displayNameOf]);
   // Second place on the left, first in the middle, third on the right.
   const podium = [table[1], table[0], table[2]].filter(Boolean);
   const today = kstParts(new Date(now)).weekday;
@@ -144,7 +147,7 @@ export function Ranking({
                   <span className="podium-rank" style={{ color: style.fg }}>
                     {player.rank}
                   </span>
-                  <span className="podium-name">{honorific(displayNameOf(player.username, player.displayName))}</span>
+                  <span className="podium-name">{plainName(displayNameOf(player.username, player.displayName))}</span>
                   <strong>
                     <CountFrom value={player.weeklyScore} delay={(3 - Math.min(player.rank, 3)) * 160 + 500} />
                   </strong>
@@ -158,7 +161,7 @@ export function Ranking({
         <section className="card daily-card">
           <div className="card-head">
             <h2>요일별 점수</h2>
-            <span>{honorific(me)}</span>
+            <span>{plainName(me)}</span>
           </div>
           <div className="daily-bars">
             {weekdayNames.map((name, i) => {
@@ -179,22 +182,22 @@ export function Ranking({
             })}
           </div>
         </section>
-        {lastWeek && (
+        {lastWeekTable && (
           <section className="card last-week">
             <div className="card-head">
               <h2>지난주</h2>
               <span>{weekOfMonth(lastWeekDate)}</span>
             </div>
-            {lastWeek.map((row, i) => (
+            {lastWeekTable.map((row) => (
               <div className="list-row" key={row.username}>
                 <span
                   className="rank-dot"
-                  style={{ background: badge[i][0], color: badge[i][1] }}
+                  style={{ background: badge[Math.min(row.rank, 3) - 1][0], color: badge[Math.min(row.rank, 3) - 1][1] }}
                 >
-                  {i + 1}
+                  {row.rank}
                 </span>
-                <Avatar username={row.username} size={40} />
-                <strong>{honorific(displayNameOf(row.username))}</strong>
+                <Avatar username={row.username} size={40} nameFormat="plain" />
+                <strong>{plainName(row.displayName)}</strong>
                 <b>{row.score}점</b>
               </div>
             ))}

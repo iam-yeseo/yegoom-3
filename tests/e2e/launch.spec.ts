@@ -55,7 +55,7 @@ async function login(page: Page, username: string, origin = LAUNCH_ORIGIN) {
   await page.getByLabel('아이디', { exact: true }).fill(username);
   await page.getByLabel('비밀번호', { exact: true }).fill('e2e-only-password-2026');
   await page.getByRole('button', { name: '예굼방 들어가기', exact: true }).click();
-  await expect(page.getByRole('heading', { name: `${username}님`, exact: true })).toBeVisible();
+  await expect(page.locator('.room-name').filter({ hasText: `${username}님` })).toBeVisible();
 }
 async function navigate(page: Page, path: string) {
   await page.evaluate(value => { location.hash = value; }, path);
@@ -133,7 +133,7 @@ test('stock entry points stay closed with accessible notices for real and previe
       await page.goto(`${LAUNCH_ORIGIN}/#${path}`);
       await expect(stock(page)).toBeVisible();
       await expect.poll(() => new URL(page.url()).hash.includes('/stock')).toBe(false);
-      await expect(page.getByRole('heading', { name: 'yeseo님', exact: true })).toBeVisible();
+      await expect(page.locator('.room-name').filter({ hasText: 'yeseo님' })).toBeVisible();
       await page.keyboard.press('Escape');
     }
     expect(previewRequests).toEqual([]);
@@ -190,7 +190,7 @@ for (const [width, username, motion] of [[390, 'min', 'no-preference'], [560, 's
     await screenshot(page, 'authenticated', 'gift-after', width, info);
     await gift(page).getByRole('button', { name: '확인', exact: true }).click();
     await page.reload();
-    await expect(page.getByRole('heading', { name: `${username}님`, exact: true })).toBeVisible();
+    await expect(page.locator('.room-name').filter({ hasText: `${username}님` })).toBeVisible();
     await expect(gift(page)).toHaveCount(0);
     await expect(page.getByRole('button', { name: '선물 받기', exact: true })).toHaveCount(0);
     const after = await snapshot(page);

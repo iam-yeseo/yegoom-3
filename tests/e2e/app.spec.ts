@@ -14,7 +14,7 @@ async function login(page: Page, username: string) {
   await page.getByLabel('아이디', { exact: true }).fill(username);
   await page.getByLabel('비밀번호', { exact: true }).fill('e2e-only-password-2026');
   await page.getByRole('button', { name: '예굼방 들어가기' }).click();
-  await expect(page.getByRole('heading', { name: `${username}님`, exact: true })).toBeVisible();
+  await expect(page.locator('.room-name').filter({ hasText: `${username}님` })).toBeVisible();
 }
 
 test('mobile and desktop previews render all game screens without errors or overflow', async ({ page }) => {
@@ -311,7 +311,7 @@ test('PWA caches the app shell and previews offline but never caches authenticat
   await context.setOffline(true);
   await page.reload();
   await expect(page.getByRole('status')).toContainText('오프라인');
-  await expect(page.getByRole('heading', { name: 'yeseo님', exact: true })).toBeVisible();
+  await expect(page.locator('.room-name').filter({ hasText: 'yeseo님' })).toBeVisible();
   await page.goto('/#/preview/game/wake');
   await expect(page.getByRole('heading', { name: 'min님은 몇 시에 일어날까?' })).toBeVisible();
 });
@@ -443,7 +443,7 @@ test('character import runs only for a null server choice and selected character
   expect(imports).toEqual([{ character: 'moon', migrate: true, expectedUserId: 'e2e-siwon' }]);
   expect(await page.evaluate(() => localStorage.getItem('yegoom3:character:siwon'))).toBeNull();
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'siwon님', exact: true })).toBeVisible();
+  await expect(page.locator('.room-name').filter({ hasText: 'siwon님' })).toBeVisible();
   expect(imports).toHaveLength(1);
   await page.goto('/#/profile');
   const bread = page.getByRole('button', { name: /^빵빵/ });
