@@ -579,6 +579,13 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
   } else throw new HttpError(404, 'NOT_FOUND', '요청한 게임 기능이 없어요.');
   const refreshedAt = new Date();
   await settlePublishedRounds(env.DB, refreshedAt);
+  // A result published during market hours moves its stock now (§7-2). The game
+  // write has already committed; a stock failure is retried by the next read.
+  if (FEATURES.stock && env.STOCK_SEED_SECRET) {
+    await advanceStocks(env.DB, env.STOCK_SEED_SECRET, refreshedAt.getTime()).catch(error => {
+      console.error('Stock game event failed', error instanceof Error ? error.name : 'UnknownError');
+    });
+  }
   return json({ game: await readGame(env.DB, user, id, refreshedAt) });
 }
 async function adminState(db: D1Database, now: Date): Promise<AdminState> {

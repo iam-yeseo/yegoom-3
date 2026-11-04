@@ -2,6 +2,7 @@ import { STOCKS, STOCK_RULES, stockInfo, type Ticker } from './stocks';
 import { addTradingDays, isTradingDay, kstDateOf, kstTimestamp, nextDate, tickTimes, tradesOn, TICKS_PER_DAY } from './market-calendar';
 import { applyEffect, normalFrom, seededRandom, stepPrice } from './stock-engine';
 import { disclosureArticle, newsArticle, type DisclosureKind } from './stock-news-templates';
+import { mosquitoArticle, STOCK_GAME_RULES } from './stock-games';
 
 /** The market simulation shared by the Worker (HMAC day seeds, D1 state) and the
  * serverless preview (fixed seeds, memory). Given the same rows, ticks, seeds and
@@ -14,10 +15,13 @@ export interface StockRow {
   status: StockStatus; warningSince: string | null; delistedOn: string | null; relistOn: string | null;
   lastTickAt: number; version: number;
 }
-export interface MarketTick { at: number; date: string; index: number }
-/** A price event decided elsewhere (game results, PR 11; rumors, PR 12). */
-export interface PendingEvent { id: string; ticker: Ticker; effectBp: number; applyAt: number }
-export type NewsKind = 'news' | 'disclosure';
+/** A 10-minute tick (index 0 = 09:00 open … 54 = 18:00 close), or an event step
+ * (index -1) that moves one stock the moment an event is published in market hours. */
+export interface MarketTick { at: number; date: string; index: number; ticker?: Ticker }
+/** A price event decided elsewhere (game results; rumors in PR 12). Its article,
+ * if any, is published when the price moves. */
+export interface PendingEvent { id: string; ticker: Ticker; effectBp: number; applyAt: number; kind?: string; headline?: string; body?: string }
+export type NewsKind = 'news' | 'disclosure' | 'game' | 'mosquito';
 export interface NewsRecord {
   id: string; ticker: Ticker; kind: NewsKind; publishAt: number;
   headline: string; body: string; effectBp: number | null;
@@ -54,6 +58,24 @@ export function pendingTicks(from: number, until: number, holidays: ReadonlyMap<
     }
   }
   return out;
+}
+/** Ticks plus event steps: an event published while the market is open (on a
+ * trading day of its stock) moves that stock at that instant, not at the next tick. */
+export function marketSteps(from: number, until: number, holidays: ReadonlyMap<string, string>, events: readonly PendingEvent[],
+  limit: number = STOCK_RULES.maxCatchUpTicks): MarketTick[] {
+  const ticks = pendingTicks(from, until, holidays, limit);
+  const end = ticks.length >= limit ? ticks[ticks.length - 1]!.at : until;
+  const steps: MarketTick[] = [];
+  for (const event of events) {
+    const at = Math.max(event.applyAt, from + 1);
+    if (at > end) continue;
+    const date = kstDateOf(at);
+    if (!isTradingDay(date, holidays) || !tradesOn(event.ticker, date)) continue;
+    if (at <= kstTimestamp(date, STOCK_RULES.openTime) || at >= kstTimestamp(date, STOCK_RULES.closeTime)) continue;
+    if (ticks.some(tick => tick.at === at) || steps.some(step => step.at === at && step.ticker === event.ticker)) continue;
+    steps.push({ at, date, index: -1, ticker: event.ticker });
+  }
+  return [...ticks, ...steps].sort((a, b) => a.at - b.at || (a.ticker ?? '').localeCompare(b.ticker ?? ''));
 }
 /** The latest tick instant at or before `now` on a trading day, or null. */
 export function latestTickAt(now: number, holidays: ReadonlyMap<string, string>): number | null {
@@ -92,6 +114,21 @@ export function scheduledNews(seed: string, date: string): ScheduledNews[] {
   });
 }
 
+export interface ScheduledMosquito { id: string; index: number; success: boolean; effectBp: number; variant: number }
+/** YEGM's mosquito hunts of a day (0–2), on its trading days only. */
+export function scheduledMosquito(seed: string, date: string): ScheduledMosquito[] {
+  if (!tradesOn('YEGM', date)) return [];
+  const random = seededRandom(`${seed}|mosquito`);
+  const { maxPerDay, successRate, effect: [low, high] } = STOCK_GAME_RULES.mosquito;
+  const count = Math.floor(random() * (maxPerDay + 1));
+  return Array.from({ length: count }, (_, n) => {
+    const index = 1 + Math.floor(random() * (TICKS_PER_DAY - 2));
+    const success = random() < successRate;
+    const size = low + random() * (high - low);
+    return { id: `mosquito:${date}:${n}`, index, success, effectBp: Math.round((success ? 1 : -1) * size * 10_000), variant: Math.floor(random() * 1000) };
+  });
+}
+
 function disclosure(ticker: Ticker, kind: DisclosureKind, date: string, at: number): NewsRecord {
   return { id: `disclosure:${kind}:${ticker}:${date}`, ticker, kind: 'disclosure', publishAt: at, effectBp: null, ...disclosureArticle(ticker, kind) };
 }
@@ -103,11 +140,34 @@ export function advanceMarket(input: readonly StockRow[], ticks: readonly Market
   const result: AdvanceResult = { rows, ticks: [], daily: [], news: [], appliedEvents: [], delisted: [] };
   const applied = new Set<string>();
   const newsOf = new Map<string, ScheduledNews[]>();
+  const mosquitoOf = new Map<string, ScheduledMosquito[]>();
+  const eventNews = (event: PendingEvent, at: number) => {
+    if (event.headline && event.body) result.news.push({ id: `event:${event.id}`, ticker: event.ticker, kind: event.kind === 'mosquito' ? 'mosquito' : 'game',
+      publishAt: at, headline: event.headline, body: event.body, effectBp: event.effectBp });
+  };
   for (const tick of ticks) {
     const seed = seedOf(tick.date);
     let todays = newsOf.get(tick.date);
     if (!todays) newsOf.set(tick.date, todays = scheduledNews(seed, tick.date));
+    let hunts = mosquitoOf.get(tick.date);
+    if (!hunts) mosquitoOf.set(tick.date, hunts = scheduledMosquito(seed, tick.date));
     const closing = tick.index === TICKS_PER_DAY - 1;
+    if (tick.index === -1) {
+      // Event step: only the event's stock moves, at the publication instant.
+      for (const row of rows) row.lastTickAt = tick.at;
+      const row = rows.find(item => item.ticker === tick.ticker)!;
+      const due = events.filter(event => event.ticker === row.ticker && event.applyAt <= tick.at && !applied.has(event.id));
+      for (const event of due) { applied.add(event.id); result.appliedEvents.push({ id: event.id, at: tick.at }); }
+      if (row.status === 'delisted' || !due.length) continue;
+      row.version += 1;
+      row.price = applyEffect(row.price, row.prevClose, due.reduce((sum, event) => sum + event.effectBp, 0) / 10_000);
+      row.dayOpen ??= row.price;
+      row.dayHigh = Math.max(row.dayHigh ?? row.price, row.price);
+      row.dayLow = Math.min(row.dayLow ?? row.price, row.price);
+      result.ticks.push({ ticker: row.ticker, at: tick.at, price: row.price });
+      for (const event of due) eventNews(event, tick.at);
+      continue;
+    }
     for (const row of rows) {
       const info = stockInfo(row.ticker)!;
       row.lastTickAt = tick.at;
@@ -121,7 +181,9 @@ export function advanceMarket(input: readonly StockRow[], ticks: readonly Market
         result.news.push(disclosure(row.ticker, 'relist', tick.date, tick.at));
       }
       const scheduled = todays.filter(item => item.ticker === row.ticker && item.index === tick.index);
-      const effect = (due.reduce((sum, event) => sum + event.effectBp, 0) + scheduled.reduce((sum, item) => sum + item.effectBp, 0)) / 10_000;
+      const hunted = row.ticker === 'YEGM' ? hunts.filter(item => item.index === tick.index) : [];
+      const effect = (due.reduce((sum, event) => sum + event.effectBp, 0) + scheduled.reduce((sum, item) => sum + item.effectBp, 0)
+        + hunted.reduce((sum, item) => sum + item.effectBp, 0)) / 10_000;
       if (tick.index === 0) {
         row.prevClose = row.price;
         row.price = applyEffect(row.price, row.prevClose, effect);
@@ -136,6 +198,10 @@ export function advanceMarket(input: readonly StockRow[], ticks: readonly Market
       for (const item of scheduled) {
         result.news.push({ id: item.id, ticker: item.ticker, kind: 'news', publishAt: tick.at, effectBp: item.effectBp, ...newsArticle(item.ticker, item.effectBp > 0, item.variant) });
       }
+      for (const item of hunted) {
+        result.news.push({ id: item.id, ticker: 'YEGM', kind: 'mosquito', publishAt: tick.at, effectBp: item.effectBp, ...mosquitoArticle(item.success, item.variant) });
+      }
+      for (const event of due) eventNews(event, tick.at);
       if (!closing) continue;
       result.daily.push({ ticker: row.ticker, date: tick.date, open: row.dayOpen!, high: row.dayHigh!, low: row.dayLow!, close: row.price });
       if (row.price < info.listingPrice * STOCK_RULES.delistRatio) {
