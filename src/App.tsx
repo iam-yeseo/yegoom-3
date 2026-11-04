@@ -665,6 +665,16 @@ export default function App() {
       setPreviewAdminState(next);
     } else await saveAdmin(owner => api.saveGameSettings(id, rules, effectiveFrom, owner));
   }
+  async function saveAdminHoliday(date: string, reason: string | null) {
+    if (adminDemo) {
+      const current = previewAdminStateRef.current;
+      const marketHolidays = reason === null ? current.marketHolidays.filter(item => item.date !== date)
+        : [...current.marketHolidays.filter(item => item.date !== date), { date, reason }].sort((a, b) => a.date.localeCompare(b.date));
+      const next = { ...current, marketHolidays };
+      previewAdminStateRef.current = next;
+      setPreviewAdminState(next);
+    } else await saveAdmin(owner => reason === null ? api.removeMarketHoliday(date) : api.addMarketHoliday(date, reason, owner));
+  }
   async function saveAdminClaw(config: AdminClawConfig) {
     if (adminDemo) {
       const next = savePreviewClaw(previewAdminStateRef.current, config);
@@ -726,7 +736,7 @@ export default function App() {
   else if (path === "/admin" && adminAllowed) content = <Admin key={adminDemo ? "preview-admin" : me.id}
     state={adminDemo ? { ...previewAdminState, catchmindWordsRemaining: previewCatchmind.wordsRemaining } : adminData?.owner === me.id ? adminData.state : null}
     loading={adminLoading} error={adminError} onReload={() => void reloadAdmin()}
-    onSaveGame={saveAdminGame} onSaveClaw={saveAdminClaw} onPlayClaw={() => go("/play/claw")} preview={adminDemo} />;
+    onSaveGame={saveAdminGame} onSaveClaw={saveAdminClaw} onSaveHoliday={saveAdminHoliday} onPlayClaw={() => go("/play/claw")} preview={adminDemo} />;
   else if (play === "kuji") content = <Kuji onBack={home} />;
   else if (path === "/play/catchmind/gallery") content = <CatchmindGallery demo={demo} gold={me.gold} onBack={() => go("/play/catchmind")} />;
   else if (play === "catchmind") content = <Catchmind user={me} demo={demo} onBack={home} />;

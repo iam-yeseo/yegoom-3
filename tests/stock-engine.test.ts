@@ -4,6 +4,7 @@ import { addTradingDays, holidayName, isTradingDay, kstTimestamp, marketStatus, 
 import { clampToLimit, stepPrice } from '../shared/stock-engine';
 import { advanceMarket, advanceStart, initialRows, nextTickAt, pendingTicks, scheduledNews, type StockRow } from '../shared/stock-market';
 import { newsArticle, NEWS_TEMPLATES, subjectParticle } from '../shared/stock-news-templates';
+import { stockCronDue } from '../worker/stocks';
 
 const none = new Map<string, string>();
 const seedOf = (date: string) => `test|${date}`;
@@ -23,6 +24,13 @@ describe('market calendar', () => {
     const extra = new Map([['2026-11-06', '임시 휴장']]);
     expect(marketStatus(at('2026-11-06', '12:00'), extra)).toMatchObject({ open: false, holiday: '임시 휴장' });
     expect(addTradingDays('2026-11-05', 2, extra)).toBe('2026-11-10');
+  });
+  it('runs the stock Cron only on weekdays from the open through the close tick', () => {
+    expect(stockCronDue(at('2026-11-05', '08:50'))).toBe(false);
+    expect(stockCronDue(at('2026-11-05', '09:00'))).toBe(true);
+    expect(stockCronDue(at('2026-11-05', '18:00'))).toBe(true);
+    expect(stockCronDue(at('2026-11-05', '18:10'))).toBe(false);
+    expect(stockCronDue(at('2026-11-07', '12:00'))).toBe(false);
   });
   it('trades YEGM only on Wednesdays in December–February', () => {
     expect(tradesOn('YEGM', '2026-12-02')).toBe(true); // Wednesday

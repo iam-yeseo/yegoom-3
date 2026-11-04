@@ -15,6 +15,8 @@ interface Props {
   onReload: () => void;
   onSaveGame: (id: GameId, rules: PredictionRules, effectiveFrom: string) => Promise<void>;
   onSaveClaw: (config: AdminClawConfig) => Promise<void>;
+  /** reason null removes the holiday. */
+  onSaveHoliday: (date: string, reason: string | null) => Promise<void>;
   onPlayClaw: () => void;
   preview?: boolean;
 }
@@ -250,7 +252,46 @@ function Changes({ changes }: { changes: AdminChange[] }) {
   </section>;
 }
 
-export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw, onPlayClaw, preview = false }: Props) {
+/** Temporary market holidays (elections, temporary public holidays). Upcoming
+ * news and price events are never shown here (docs/plan-stock.md §1-2). */
+function MarketHolidayCard({ state, disabled, onSave }: { state: AdminState; disabled: boolean; onSave: Props["onSaveHoliday"] }) {
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState(state.tomorrow);
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const panel = useId();
+  async function run(action: () => Promise<void>, done: string) {
+    if (saving) return;
+    setSaving(true); setError(""); setMessage("");
+    try { await action(); setMessage(done); } catch (cause) { setError(explain(cause)); } finally { setSaving(false); }
+  }
+  return <section className="card admin-claw-card admin-holiday-card" aria-label="주식 시장 임시 휴장일">
+    <button className="admin-card-toggle" type="button" aria-expanded={open} aria-controls={panel} onClick={() => setOpen(value => !value)}>
+      <span className="admin-card-art"><Character artKey="moon" /></span><span className="admin-card-title"><strong>주식 시장 휴장일</strong><span>주말·공휴일 말고 쉬는 날 추가</span></span><span className="admin-card-chevron" aria-hidden="true">{open ? "−" : "+"}</span>
+    </button>
+    <div className="admin-card-badges"><span className="pill peach">{state.marketHolidays.length ? `예정 ${state.marketHolidays.length}일` : "예정 없음"}</span></div>
+    <div id={panel} hidden={!open}>
+      <ul className="admin-holiday-list">
+        {state.marketHolidays.map(holiday => <li key={holiday.date}><span>{shortDate(holiday.date)} · {holiday.reason}</span>
+          <button className="text-button" type="button" disabled={disabled || saving} onClick={() => void run(() => onSave(holiday.date, null), "휴장일을 지웠어요.")}>지우기</button></li>)}
+      </ul>
+      <form className="admin-holiday-form" aria-label="휴장일 추가" onSubmit={(event: FormEvent) => { event.preventDefault(); void run(async () => { await onSave(date, reason.trim()); setReason(""); }, "휴장일을 추가했어요."); }}>
+        <fieldset className="admin-fieldset" disabled={disabled || saving}>
+          <label className="admin-field"><span>날짜</span><input type="date" required min={state.today} value={date} onChange={event => setDate(event.target.value)} /></label>
+          <label className="admin-field"><span>이유</span><input type="text" required maxLength={20} placeholder="예: 선거일" value={reason} onChange={event => setReason(event.target.value)} /></label>
+        </fieldset>
+        <p className="admin-claw-explanation">이미 장이 열린 날(오늘 9시 이후)은 바꿀 수 없어요. 앞으로의 뉴스와 가격 사건은 운영자도 볼 수 없어요.</p>
+        {error && <p className="admin-form-error" role="alert">{error}</p>}
+        {message && <p className="admin-form-success" role="status">{message}</p>}
+        <button className="primary-button admin-save" type="submit" disabled={disabled || saving || !reason.trim()}>{saving ? "저장 중…" : "휴장일 추가"}</button>
+      </form>
+    </div>
+  </section>;
+}
+
+export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw, onSaveHoliday, onPlayClaw, preview = false }: Props) {
   return <div className="admin-page">
     <header className="admin-heading"><span className="pill lavender">{preview ? "운영 화면 미리보기" : "운영자 전용"}</span><h1>운영</h1><p>게임 규칙을 확인하고 다음 판을 준비해요.</p></header>
     <div className="screen-body admin-body">
@@ -266,6 +307,7 @@ export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw,
           {state.games.map(game => <PredictionCard key={game.id} game={game} state={state} disabled={loading} onSave={onSaveGame} />)}
         </section>
         <ClawCard config={state.claw} disabled={loading} onSave={onSaveClaw} onPlay={onPlayClaw} />
+        <MarketHolidayCard state={state} disabled={loading} onSave={onSaveHoliday} />
         <Changes changes={state.changes} />
       </>}
     </div>

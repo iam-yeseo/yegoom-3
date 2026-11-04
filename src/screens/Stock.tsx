@@ -16,6 +16,7 @@ const upDown = (n: number) => (n > 0 ? "up" : n < 0 ? "down" : "");
 const changeOf = (stock: StockQuote) => ((stock.price - stock.prevClose) / stock.prevClose) * 100;
 const info = (ticker: string) => stockInfo(ticker)!;
 const LIMIT = STOCK_RULES.dailyLimit;
+const kstDay = (iso: string) => new Date(Date.parse(iso) + 9 * 3_600_000).toISOString().slice(0, 10);
 
 type Clocked = { market: MarketClock; serverTime: string } | null;
 /** Read once now and again just after every 10-minute tick (only while the page
@@ -66,7 +67,7 @@ function Badge({ stock, big }: { stock: StockQuote; big?: boolean }) {
 export function StockBadge({ stock, size = "row", gray }: { stock: StockInfo; size?: "row" | "detail" | "small"; gray?: boolean }) {
   return (
     <span className={`stock-badge ${size} ${gray ? "gray" : ""}`} style={gray ? undefined : { background: stock.tint, color: stock.ink }} aria-hidden="true">
-      {stock.ticker.slice(0, 2)}
+      {stock.badge}
     </span>
   );
 }
@@ -107,7 +108,7 @@ function NewsCard({ item, go }: { item: StockNewsItem; go?: (path: string) => vo
         {company && (go
           ? <button className="news-stock" onClick={() => go(`/stock/${company.ticker}`)}><StockBadge stock={company} size="small" />{company.name}</button>
           : <span className="news-stock"><StockBadge stock={company} size="small" />{company.name}</span>)}
-        <time dateTime={item.publishAt}>{formatTime(item.publishAt)}</time>
+        <time dateTime={item.publishAt}>{kstDay(item.publishAt) === kstDay(new Date().toISOString()) ? formatTime(item.publishAt) : formatDateTime(item.publishAt).slice(6)}</time>
         {item.effectBp !== null && item.effectBp !== 0 && <b className={upDown(item.effectBp)}>{percent(item.effectBp / 100)}</b>}
       </header>
       <h3>{item.kind === "rumor" && <span className="rumor-label">[찌라시] </span>}{item.headline}</h3>

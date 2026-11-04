@@ -28,7 +28,7 @@ test('mobile and desktop previews render all game screens without errors or over
   page.on('pageerror', error => errors.push(error.message));
   for (const width of [320, 390, 560, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const route of ['/preview','/preview/games','/preview/ranking','/preview/attendance','/preview/profile','/preview/game/wake','/preview/game/luck','/preview/game/offwork','/preview/play/catchmind','/preview/play/kuji','/preview/play/claw','/preview/stock','/preview/stock/upa','/preview/stock/bang','/preview/shop','/preview/shop/lotto','/preview/shop/speetto','/preview/shop/slot']) {
+    for (const route of ['/preview','/preview/games','/preview/ranking','/preview/attendance','/preview/profile','/preview/game/wake','/preview/game/luck','/preview/game/offwork','/preview/play/catchmind','/preview/play/kuji','/preview/play/claw','/preview/stock','/preview/stock/YEGM','/preview/stock/EEVA','/preview/stock/news','/preview/shop','/preview/shop/lotto','/preview/shop/speetto','/preview/shop/slot']) {
       await page.goto(`/#${route}`);
       await expect(page.locator('main')).toBeVisible();
       await expect(page.locator('main')).not.toContainText('NaN');

@@ -18,7 +18,9 @@ const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventor
   'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts', 'announcements', 'luck_photos'];
 // The launch-era reset does not cover the later slot-machine receipts.
 // Post-launch records (slot receipts, nickname tags) are outside the launch-era reset.
-const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins', 'nickname_tags'];
+const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins', 'nickname_tags',
+  // The stock market (0015) starts after launch; a launch reset never touches it.
+  'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -98,12 +100,19 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO claw_coin_purchases (id, user_id, request_id, quantity, cost, created_at) VALUES ('old-coins', 'min', 'old-coins-request', 5, 500, '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at) VALUES ('retained-slot', 'min', 'retained-slot-request', 500, '[\"banana\",\"apple\",\"seven\"]', 0, '2026-11-01', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at) VALUES ('retained-tag', 'min', 'retained-tag-request', 'A', '반짝이는', 1, '2026-11-01', '2026-11-01T00:00:00Z')"),
+      db.prepare("INSERT INTO stock_ticks (ticker, at, price) VALUES ('YEGM', 1, 500)"),
+      db.prepare("INSERT INTO stock_daily (ticker, date, open, high, low, close) VALUES ('YEGM', '2026-11-05', 500, 510, 490, 505)"),
+      db.prepare("INSERT INTO stock_events (id, ticker, kind, effect_bp, apply_at, created_at) VALUES ('retained-event', 'MINJ', 'game', 400, 1, 'x')"),
+      db.prepare("INSERT INTO stock_news (id, ticker, kind, publish_at, headline, body, created_at) VALUES ('retained-news', 'YEGM', 'news', 1, '제목', '본문', 'x')"),
+      db.prepare("INSERT INTO stock_holdings (user_id, ticker, quantity, cost_basis) VALUES ('min', 'YEGM', 1, 505)"),
+      db.prepare("INSERT INTO stock_trades (id, user_id, request_id, ticker, side, quantity, price, fee, total, date, created_at) VALUES ('retained-trade', 'min', 'retained-trade', 'YEGM', 'buy', 1, 500, 5, 505, '2026-11-05', 'x')"),
+      db.prepare("INSERT INTO market_holidays (date, reason, created_by, created_at) VALUES ('2026-12-03', '선거', 'admin', 'x')"),
     ]);
   });
   afterAll(async () => { await worker?.dispose(); });
 
   async function contents(tables: string[]) {
-    return Object.fromEntries(await Promise.all(tables.map(async table => [table, (await db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()).results])));
+    return Object.fromEntries(await Promise.all(tables.map(async table => [table, (await db.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all()).results])));
   }
   async function triggers() {
     return (await db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all<{ name: string; sql: string }>()).results;

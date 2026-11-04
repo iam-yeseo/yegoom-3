@@ -98,17 +98,13 @@ async function screenshot(page: Page, mode: 'authenticated' | 'preview', state: 
   await info.attach(`${mode}-${state}-${width}`, { path, contentType: 'image/png' });
 }
 
-test('stock entry points stay closed with accessible notices for real and preview users', async ({ page }, info) => {
+test('stock entry points stay closed with accessible notices for real users until the market opens', async ({ page }, info) => {
   test.setTimeout(60000);
   await login(page, 'yeseo');
-  for (const mode of ['authenticated', 'preview'] as const) {
+  // The serverless preview opens the sample market (tests/e2e/stock-pr10.spec.ts).
+  for (const mode of ['authenticated'] as const) {
     const previewRequests: string[] = [];
-    const home = mode === 'preview' ? '/preview' : '/';
-    const prefix = mode === 'preview' ? '/preview' : '';
-    if (mode === 'preview') {
-      await page.route('**/api/**', route => { previewRequests.push(route.request().url()); return route.abort(); });
-      await page.goto(`${LAUNCH_ORIGIN}/#${home}`);
-    }
+    const prefix = '';
     const card = page.getByRole('button').filter({ hasText: '주식 시장' });
     await expect(card).toContainText('준비 중');
     await card.click();
@@ -129,7 +125,7 @@ test('stock entry points stay closed with accessible notices for real and previe
     await card.click();
     await page.mouse.click(2, 2);
     await expect(stock(page)).toHaveCount(0);
-    for (const path of [`${prefix}/stock`, `${prefix}/stock/upa`, `${prefix}/stock/bang`]) {
+    for (const path of [`${prefix}/stock`, `${prefix}/stock/YEGM`, `${prefix}/stock/news`]) {
       await page.goto(`${LAUNCH_ORIGIN}/#${path}`);
       await expect(stock(page)).toBeVisible();
       await expect.poll(() => new URL(page.url()).hash.includes('/stock')).toBe(false);
