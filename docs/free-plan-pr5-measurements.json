@@ -1,0 +1,171 @@
+{
+  "measuredOn": "2026-11-04",
+  "baseCommit": "2f20512",
+  "source": "tests/integration.test.ts: claw authenticated request budgets / keeps authenticated machine reads, play receipts and bootstrap within the PR 4 main costs",
+  "environment": {
+    "node": "v24.19.0",
+    "miniflare": "4.20260730.0",
+    "database": "isolated local D1/workerd per checkout; no remote production access"
+  },
+  "commands": {
+    "baseline": "In a detached worktree at 2f20512 with the same test-only fixture: FREE_PLAN_CLAW_MEASUREMENTS=/tmp/yegoom-pr5-claw-before.json XDG_CONFIG_HOME=/tmp/yegoom-config npm test -- tests/integration.test.ts -t \"keeps authenticated machine reads, play receipts and bootstrap\"",
+    "after": "FREE_PLAN_CLAW_MEASUREMENTS=/tmp/yegoom-pr5-claw-after.json XDG_CONFIG_HOME=/tmp/yegoom-config npm test -- tests/integration.test.ts -t \"keeps authenticated machine reads, play receipts and bootstrap\"",
+    "regression": "Without FREE_PLAN_CLAW_MEASUREMENTS the same test rejects any prepares/queries/bindingCalls/rowsRead/rowsWritten increase over before.",
+    "historicalBootstrap": "The existing \"bounds authenticated polling queries and rows as historical ledgers grow\" test remains in npm run check and protects the 12 bootstrap samples against the unchanged PR 2 baseline. These eight new samples use empty prior ledgers."
+  },
+  "fixture": {
+    "kstDate": "2026-10-30",
+    "clockKst": "09:00",
+    "activePlayers": 3,
+    "administrators": 1,
+    "priorLedgerRows": 0,
+    "sequence": "Authenticated min: bootstrap without account, first machine creation, existing machine read, bootstrap, fixed seed=1 generation=1 30-doll board and payout_every=1, new play at x=.23/stop=null, exact saved retry, machine read, bootstrap. The SQL fixture forces the existing guaranteed strong-grip configuration so reward writes are measured deterministically; app/server rules are unchanged.",
+    "serverContractAssertions": "New play spends one free coin and increments version once; returned prizes/final board match simulateAttempt with the authoritative grip; gold and score match the saved response and bootstrap; retry returns identical result without another write; one play receipt and balanced append-only ledgers.",
+    "writes": "Only first machine initialization and the new rewarded play write in this fixture. Bootstrap, existing reads and the stored retry write zero rows."
+  },
+  "counting": {
+    "prepares": "DB.prepare calls",
+    "queries": "Executed SQL statements, including each statement inside DB.batch",
+    "bindingCalls": "Each all/first/run call or one DB.batch call",
+    "rowsRead": "Sum of actual D1 result.meta.rows_read; authentication included",
+    "rowsWritten": "Sum of actual D1 result.meta.rows_written; includes trigger/index effects"
+  },
+  "before": [
+    {
+      "label": "bootstrap before machine",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 23,
+      "rowsWritten": 0
+    },
+    {
+      "label": "GET initial machine",
+      "prepares": 7,
+      "queries": 7,
+      "bindingCalls": 7,
+      "rowsRead": 8,
+      "rowsWritten": 3
+    },
+    {
+      "label": "GET existing machine",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "label": "bootstrap existing machine",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 24,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST rewarded play",
+      "prepares": 13,
+      "queries": 13,
+      "bindingCalls": 10,
+      "rowsRead": 17,
+      "rowsWritten": 17
+    },
+    {
+      "label": "POST saved play retry",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 5,
+      "rowsWritten": 0
+    },
+    {
+      "label": "GET after play",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "label": "bootstrap after play",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 29,
+      "rowsWritten": 0
+    }
+  ],
+  "after": [
+    {
+      "label": "bootstrap before machine",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 23,
+      "rowsWritten": 0
+    },
+    {
+      "label": "GET initial machine",
+      "prepares": 7,
+      "queries": 7,
+      "bindingCalls": 7,
+      "rowsRead": 8,
+      "rowsWritten": 3
+    },
+    {
+      "label": "GET existing machine",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "label": "bootstrap existing machine",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 24,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST rewarded play",
+      "prepares": 13,
+      "queries": 13,
+      "bindingCalls": 10,
+      "rowsRead": 17,
+      "rowsWritten": 17
+    },
+    {
+      "label": "POST saved play retry",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 5,
+      "rowsWritten": 0
+    },
+    {
+      "label": "GET after play",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "label": "bootstrap after play",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 29,
+      "rowsWritten": 0
+    }
+  ],
+  "comparison": {
+    "allEightSamplesIdentical": true,
+    "additionalServerPolling": 0,
+    "newMigration": false,
+    "scope": "PR 5 changes browser layout/rendering/replay scheduling. Worker, SQL, HTTP routes, odds, rewards and bootstrap polling remain unchanged; local fixture counts do not claim production Worker CPU timing."
+  }
+}

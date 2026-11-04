@@ -1,11 +1,12 @@
 import { CLAW_RULES } from "../../shared/balance";
-import { MACHINE, CLAW, FPS, moveClaw, planDescent, simulateAttempt, type Board, type SimulationFrame } from "../../shared/claw-physics";
-import type { ClawPlayInput, ClawResponse, ClawResult, ClawState } from "../../shared/types";
+import { MACHINE, CLAW, FPS, moveClaw, planDescent, type Board, type SimulationFrame } from "../../shared/claw-physics";
+import type { ClawPlayInput, ClawResult, ClawState } from "../../shared/types";
 import type { useClaw } from "../claw-state";
 import { ApiFailure } from "../api";
 import { reduced } from "../motion";
 import { createRenderer, type RenderScene } from "./render";
 import { createSound } from "./sound";
+import { createReplayBuilder } from "./replay";
 
 export type ClawMode = "idle" | "ready" | "descending" | "waiting" | "playing" | "result";
 export interface MachineView {
@@ -19,12 +20,12 @@ type Direction = "left" | "right";
 const initialStatus = `코인을 넣으면 ${CLAW_RULES.controlDurationMs / 1000}초 동안 집게를 움직일 수 있어요.`;
 export const initialView = (): MachineView => ({ mode: "idle", status: initialStatus, timer: CLAW_RULES.controlDurationMs / 1000,
   x: MACHINE.home, dolls: 0, muted: false, now: Date.now(), flashing: false, insertion: 0, result: null, replayMessage: "", held: [] });
-const sameIds = (a: Board, b: Board) => a.map(doll => doll.id).join() === b.map(doll => doll.id).join();
 
 /** The original control timing and deterministic replay, with a disposable lifecycle. */
 export class ClawController {
   private renderer: ReturnType<typeof createRenderer>;
   private sound = createSound();
+  private replayBuilder = createReplayBuilder();
   private held = new Set<Direction>();
   private mode: ClawMode = "idle";
   private status = initialStatus;
@@ -33,8 +34,10 @@ export class ClawController {
   private deadline = 0;
   private lastTick = CLAW_RULES.controlDurationMs / 1000;
   private lastFrame = 0;
-  private lastNotify = 0;
   private frameId = 0;
+  private dirty = true;
+  private lastView: MachineView | null = null;
+  private flashPhase = false;
   private alive = true;
   private insertion = 0;
   private forceStrong = false;
@@ -45,17 +48,21 @@ export class ClawController {
   private scene: RenderScene = { mode: "idle", board: null, view: { dolls: [], held: null, chute: [] }, prizeFlashUntil: 0,
     claw: { x: MACHINE.home, y: CLAW.top, closed: 0, velocity: 0, swing: 0, swingVelocity: 0 } };
   constructor(canvas: HTMLCanvasElement, private client: () => Client, private update: (view: MachineView) => void) {
-    this.renderer = createRenderer(canvas);
+    this.renderer = createRenderer(canvas, () => { this.dirty = true; this.wake(); });
+    this.replayBuilder.warm();
     const initial = client().pendingPlay?.board ?? client().state?.board;
     if (initial) this.setScene(initial);
     this.sync();
     this.notify();
-    this.frameId = requestAnimationFrame(this.frame);
+    document.addEventListener("visibilitychange", this.visibility);
+    this.wake();
   }
   private now = () => Date.now() + this.clockOffset;
   private setScene(board: Board) {
     this.scene.board = board;
     this.scene.view = { dolls: board.map(doll => ({ ...doll, x: doll.x * MACHINE.width, y: doll.y * MACHINE.height })), held: null, chute: [] };
+    this.dirty = true;
+    this.wake();
   }
   sync() {
     const current = this.client().state;
@@ -67,19 +74,31 @@ export class ClawController {
     this.notify();
   }
   get idle() { return this.mode === "idle"; }
+  get serverNow() { return this.now(); }
+  get position() { return this.scene.claw.x; }
   private notify() {
     if (!this.alive) return;
     const client = this.client();
     const status = this.mode === "idle" ? client.pendingPlay ? "같은 시도의 결과를 다시 확인해 주세요. 코인은 중복 사용되지 않아요."
       : this.state?.isAdmin ? "운영자 테스트는 코인 없이 이용해요. 점수와 골드 보상은 없어요."
       : this.state && this.state.coins < 1 ? "코인이 모두 떨어졌어요. 다음 충전을 기다리거나 코인을 살 수 있어요." : this.status : this.status;
-    this.update({ mode: this.mode, status, timer: this.mode === "ready" ? Math.max(0, Math.ceil((this.deadline - performance.now()) / 1000)) : CLAW_RULES.controlDurationMs / 1000,
+    const next: MachineView = { mode: this.mode, status, timer: this.mode === "ready" ? Math.max(0, Math.ceil((this.deadline - performance.now()) / 1000)) : CLAW_RULES.controlDurationMs / 1000,
       x: this.scene.claw.x, dolls: this.scene.view.dolls.length + Number(Boolean(this.scene.view.held)), muted: this.sound.muted,
       now: this.now(), flashing: !reduced() && performance.now() < this.scene.prizeFlashUntil, insertion: this.insertion,
-      result: this.result, replayMessage: this.replayMessage, held: [...this.held] });
+      result: this.result, replayMessage: this.replayMessage, held: [...this.held] };
+    const previous = this.lastView;
+    // The screen's small DOM clocks and canvas description read serverNow and
+    // position directly. Neither wall-clock time nor carriage motion requires a
+    // React commit of the whole machine. Countdown state changes once a second.
+    if (previous && previous.mode === next.mode && previous.status === next.status && previous.timer === next.timer
+      && previous.dolls === next.dolls && previous.muted === next.muted && previous.flashing === next.flashing
+      && previous.insertion === next.insertion && previous.result === next.result && previous.replayMessage === next.replayMessage
+      && previous.held.length === next.held.length && previous.held.every((key, index) => key === next.held[index])) return;
+    this.lastView = next;
+    this.update(next);
   }
   private setStatus(message: string) { this.status = message; this.notify(); }
-  private setMode(mode: ClawMode) { this.mode = mode; this.scene.mode = mode; this.notify(); }
+  private setMode(mode: ClawMode) { this.mode = mode; this.scene.mode = mode; this.dirty = true; this.notify(); this.wake(); }
   press(key: Direction) {
     if (this.mode !== "ready" || this.held.has(key)) return;
     this.held.add(key); this.sound.motor("side"); this.notify();
@@ -135,14 +154,13 @@ export class ClawController {
       const result = response.result;
       // A replay failure must never hide a result that the server already saved.
       try {
-        const sim = simulateAttempt(board, { x: result.x, stop: result.stop, pickup: result.grip.pickup, carry: result.grip.carry }, { record: true });
-        const consistent = result.engine === CLAW_RULES.engine && sim.reason === result.reason && sameIds(sim.prizes, result.prizes)
-          && ((result.cleared ?? Boolean(result.clearBonus)) || JSON.stringify(sim.board) === JSON.stringify(response.board));
-        if (!consistent || !sim.frames) throw new Error("뽑기 재생이 서버 결과와 달라 결과만 보여 줘요.");
-        const index = Math.max(0, sim.frames.findIndex(frame => frame.phase !== "descend"));
-        this.replay = { frames: sim.frames, index, playhead: index, previous: null, last: performance.now(), result };
+        const frames = await this.replayBuilder.build(board, result, response.board);
+        if (!this.alive) return;
+        const index = Math.max(0, frames.findIndex(frame => frame.phase !== "descend"));
+        this.replay = { frames, index, playhead: index, previous: null, last: performance.now(), result };
         this.setMode("playing");
       } catch (error) {
+        if (!this.alive) return;
         console.warn("뽑기 재생을 확인하지 못해 저장된 결과를 보여 줘요.", error);
         this.replayMessage = "재생을 확인하지 못해 저장된 결과를 보여 드려요.";
         this.showResult(result);
@@ -158,6 +176,7 @@ export class ClawController {
   private apply(frame: SimulationFrame) {
     Object.assign(this.scene.claw, { x: frame.cx / MACHINE.width, y: frame.cy, closed: frame.closed, swing: frame.swing });
     this.scene.view = { dolls: frame.dolls, held: frame.held, chute: frame.chute };
+    this.dirty = true;
   }
   private cue(before: SimulationFrame | null, frame: SimulationFrame, result: ClawResult) {
     if (!before) return;
@@ -194,12 +213,40 @@ export class ClawController {
     this.setMode("idle");
     void this.client().load();
   }
-  private resetArm() { Object.assign(this.scene.claw, { x: MACHINE.home, y: CLAW.top, closed: 0, velocity: 0, swing: 0, swingVelocity: 0 }); }
+  private resetArm() {
+    Object.assign(this.scene.claw, { x: MACHINE.home, y: CLAW.top, closed: 0, velocity: 0, swing: 0, swingVelocity: 0 });
+    this.dirty = true;
+    this.wake();
+  }
+  private wake() {
+    if (this.alive && !document.hidden && !this.frameId) {
+      // The old continuous loop already had a previous frame when control
+      // began. Preserve that first elapsed step when waking a sleeping loop,
+      // while excluding time spent hidden or settled.
+      if (!this.lastFrame) this.lastFrame = performance.now();
+      this.frameId = requestAnimationFrame(this.frame);
+    }
+  }
+  private visibility = () => {
+    if (document.hidden) {
+      this.releaseAll();
+      cancelAnimationFrame(this.frameId);
+      this.frameId = 0;
+    } else {
+      this.lastFrame = 0;
+      if (this.replay) this.replay.last = performance.now();
+      this.dirty = true;
+      this.notify();
+      this.wake();
+    }
+  };
   private frame = (time: number) => {
-    if (!this.alive) return;
-    const dt = Math.min((time - (this.lastFrame || time)) / 1000, 1 / 30);
-    this.lastFrame = time;
+    this.frameId = 0;
+    if (!this.alive || document.hidden) return;
+    const dt = Math.max(0, Math.min((time - (this.lastFrame || time)) / 1000, 1 / 30));
+    this.lastFrame = Math.max(this.lastFrame, time);
     const claw = this.scene.claw;
+    const previous = { x: claw.x, y: claw.y, closed: claw.closed, swing: claw.swing };
     if (this.mode === "ready") {
       const previousVelocity = claw.velocity;
       Object.assign(claw, moveClaw(claw, Number(this.held.has("right")) - Number(this.held.has("left")), dt));
@@ -225,17 +272,37 @@ export class ClawController {
       else {
         const frame = replay.frames[replay.index];
         if (frame !== replay.previous) { this.cue(replay.previous, frame, replay.result); this.apply(frame); replay.previous = frame; }
-        const step = Math.min((time - replay.last) / 1000, 1 / 20); replay.last = time;
+        // A newly scheduled rAF can carry an earlier frame timestamp than the
+        // worker reply's performance.now(). Never rewind its zero-based index.
+        const step = Math.max(0, Math.min((time - replay.last) / 1000, 1 / 20));
+        replay.last = Math.max(replay.last, time);
         const speed = reduced() ? 2 : frame.chute.length && frame.phase !== "carry" ? .55 : 1;
         replay.playhead += step * FPS * speed; replay.index = Math.floor(replay.playhead);
       }
     } else {
       claw.swingVelocity += (-35 * claw.swing - 5 * claw.swingVelocity) * dt;
       claw.swing = Math.max(-.22, Math.min(.22, claw.swing + claw.swingVelocity * dt));
+      if (reduced() || Math.abs(claw.swing) < .0001 && Math.abs(claw.swingVelocity) < .0001) {
+        claw.swing = 0; claw.swingVelocity = 0;
+      }
     }
-    this.renderer.draw(time, this.scene);
-    if (time - this.lastNotify >= 100) { this.lastNotify = time; this.notify(); }
-    this.frameId = requestAnimationFrame(this.frame);
+    const active = ["ready", "descending", "playing"].includes(this.mode);
+    const swinging = !reduced() && (claw.swing !== 0 || claw.swingVelocity !== 0);
+    const flashing = !reduced() && time < this.scene.prizeFlashUntil;
+    const phase = flashing && Math.floor(time / 120) % 2 === 0;
+    if (active || previous.x !== claw.x || previous.y !== claw.y || previous.closed !== claw.closed
+      || previous.swing !== claw.swing || phase !== this.flashPhase) this.dirty = true;
+    this.flashPhase = phase;
+    if (this.dirty) { this.renderer.draw(time, this.scene); this.dirty = false; }
+    this.notify();
+    if (active || swinging || flashing) this.wake();
+    else this.lastFrame = 0;
   };
-  destroy() { this.alive = false; cancelAnimationFrame(this.frameId); this.renderer.destroy(); this.sound.dispose(); this.held.clear(); }
+  destroy() {
+    this.alive = false;
+    cancelAnimationFrame(this.frameId);
+    document.removeEventListener("visibilitychange", this.visibility);
+    this.replayBuilder.destroy();
+    this.renderer.destroy(); this.sound.dispose(); this.held.clear();
+  }
 }

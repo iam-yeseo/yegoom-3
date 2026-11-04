@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { CLAW_RULES } from "../../shared/balance";
 import { DOLL_COUNT, DOLL_TYPES } from "../../shared/claw-physics";
 import type { ClawResult, User } from "../../shared/types";
@@ -11,6 +11,53 @@ import "../preview.css";
 import "../claw/claw.css";
 
 const refillHours = Array.from({ length: Math.ceil(24 * 60 * 60 * 1000 / CLAW_RULES.coinIntervalMs) }, (_, i) => String(i * CLAW_RULES.coinIntervalMs / (60 * 60 * 1000)).padStart(2, "0")).join("·");
+
+/** These clock labels change without rerendering an otherwise resting machine. */
+function useLabelClock(update: (checkBoundary: boolean) => void) {
+  useLayoutEffect(() => {
+    update(false);
+    const timer = window.setInterval(() => { if (!document.hidden) update(true); }, 1000);
+    // Entry and visibility already perform a machine read in the screen effect.
+    const visible = () => update(false);
+    document.addEventListener("visibilitychange", visible);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+  }, [update]);
+}
+function refillLabel(next: number | null, now: number) {
+  if (next === null) return "코인을 확인하고 있어요";
+  const seconds = Math.max(0, Math.ceil((next - now) / 1000));
+  return seconds ? `다음 충전까지 ${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}시간 ` : ""}${Math.floor(seconds % 3600 / 60)}분 ${String(seconds % 60).padStart(2, "0")}초` : "충전 확인 중…";
+}
+const RefillClock = memo(function RefillClock({ next, now, onDue }: { next: number | null; now: () => number; onDue: () => void }) {
+  const label = useRef<HTMLElement>(null);
+  const update = useCallback((checkBoundary: boolean) => {
+    if (document.hidden) return;
+    const time = now(), text = refillLabel(next, time);
+    if (label.current && label.current.textContent !== text) label.current.textContent = text;
+    if (checkBoundary && next !== null && time >= next) onDue();
+  }, [next, now, onDue]);
+  useLabelClock(update);
+  return <small ref={label}>{refillLabel(next, now())}</small>;
+});
+const PrimaryButton = memo(function PrimaryButton({ mode, label, disabled, pending, admin, nextPlayAt, now, onActivate }: {
+  mode: string; label: string; disabled: boolean; pending: boolean; admin: boolean; nextPlayAt: number;
+  now: () => number; onActivate: () => void;
+}) {
+  const button = useRef<HTMLButtonElement>(null), detail = useRef<HTMLElement>(null);
+  const subtitle = useCallback((time: number) => {
+    const cooling = mode === "idle" && !pending ? Math.max(0, nextPlayAt - time) : 0;
+    return { cooling, text: mode === "ready" ? "DROP" : mode === "descending" ? "STOP" : pending && mode === "idle" ? "RETRY" : cooling > 0 ? `${Math.ceil(cooling / 1000)}초 뒤 다시` : admin ? "TEST PLAY" : "1 COIN" };
+  }, [mode, pending, nextPlayAt, admin]);
+  const update = useCallback(() => {
+    if (document.hidden) return;
+    const { cooling, text } = subtitle(now());
+    if (button.current) button.current.disabled = disabled || cooling > 0;
+    if (detail.current && detail.current.textContent !== text) detail.current.textContent = text;
+  }, [disabled, now, subtitle]);
+  useLabelClock(update);
+  return <button ref={button} className={`claw-drop ${["ready", "descending"].includes(mode) ? "is-armed" : ""}`} type="button"
+    aria-label={label} disabled={disabled} onClick={onActivate} data-notouchfx><span>{label}</span><small ref={detail}>{subtitle(now()).text}</small></button>;
+});
 
 function resultCopy(result: ClawResult, admin: boolean) {
   const won = result.prizes;
@@ -73,6 +120,12 @@ function SoundIcon({ muted }: { muted: boolean }) {
 export function Claw({ user, onBack, demo = false }: { user: User; onBack: () => void; demo?: boolean }) {
   const game = useClaw();
   const latest = useRef(game); latest.current = game;
+  // Child layout effects run before controller.sync(). Establish the clock from
+  // the latest response during this render so the first label is server-based.
+  const clock = useRef({ state: game.state, offset: game.state ? game.state.serverNow - Date.now() : 0 });
+  if (clock.current.state !== game.state) {
+    clock.current = { state: game.state, offset: game.state ? game.state.serverNow - Date.now() : 0 };
+  }
   const canvas = useRef<HTMLCanvasElement>(null);
   const controller = useRef<ClawController | null>(null);
   const [view, setView] = useState(initialView);
@@ -80,6 +133,14 @@ export function Claw({ user, onBack, demo = false }: { user: User; onBack: () =>
   const [buying, setBuying] = useState(false);
   const purchaseLock = useRef(false);
   const refillAttempt = useRef<number | null>(null);
+  const serverNow = useCallback(() => Date.now() + clock.current.offset, []);
+  const refillDue = useCallback(() => {
+    const current = latest.current, next = current.state?.nextGrantAt;
+    if (current.state?.isAdmin || !next || serverNow() < next || document.hidden || !controller.current?.idle || current.busy || current.loading || current.pendingPlay || current.pendingPurchase || refillAttempt.current === next) return;
+    refillAttempt.current = next;
+    void current.load().catch(() => {});
+  }, [serverNow]);
+  const activate = useCallback(() => controller.current?.primary(), []);
   useEffect(() => {
     let runtime: ClawController;
     try { runtime = new ClawController(canvas.current!, () => latest.current, setView); controller.current = runtime; }
@@ -104,21 +165,24 @@ export function Claw({ user, onBack, demo = false }: { user: User; onBack: () =>
     };
   }, []);
   useEffect(() => { controller.current?.sync(); }, [game.state, game.pendingPlay, game.error]);
-  // A local clock updates the label; the network is touched only once per refill boundary.
+  // Position is descriptive canvas metadata, so moving it need not rerender the
+  // controls. A resting machine has neither this timer nor React clock updates.
   useEffect(() => {
-    const next = game.state?.nextGrantAt;
-    if (game.state?.isAdmin || !next || view.now < next || document.hidden || view.mode !== "idle" || game.busy || game.loading || game.pendingPlay || game.pendingPurchase || refillAttempt.current === next) return;
-    refillAttempt.current = next;
-    void game.load().catch(() => {});
-  }, [view.now, view.mode, game.state?.nextGrantAt, game.state?.isAdmin, game.busy, game.loading, game.pendingPlay, game.pendingPurchase, game.load]);
+    const update = () => {
+      if (document.hidden || !canvas.current || !controller.current) return;
+      const label = `왼쪽에 배출구, 오른쪽에 인형 ${view.dolls}개가 쌓인 인형뽑기 기계. 집게 위치는 왼쪽에서 ${Math.round(controller.current.position * 100)}퍼센트입니다.`;
+      if (canvas.current.getAttribute("aria-label") !== label) canvas.current.setAttribute("aria-label", label);
+    };
+    update();
+    if (view.mode === "idle" || view.mode === "result") return;
+    const timer = window.setInterval(update, 100);
+    return () => clearInterval(timer);
+  }, [view.mode, view.dolls]);
   const state = game.state;
   const admin = user.role === "admin" || state?.isAdmin;
   const idle = view.mode === "idle";
-  const cooling = Math.max(0, (state?.nextPlayAt ?? 0) - view.now);
-  const seconds = Math.max(0, Math.ceil(((state?.nextGrantAt ?? view.now) - view.now) / 1000));
-  const refill = state ? seconds ? `다음 충전까지 ${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}시간 ` : ""}${Math.floor(seconds % 3600 / 60)}분 ${String(seconds % 60).padStart(2, "0")}초` : "충전 확인 중…" : "코인을 확인하고 있어요";
   const primaryLabel = view.mode === "ready" ? "집게 내리기" : view.mode === "descending" ? "멈추기" : !idle ? "뽑는 중…" : game.pendingPlay ? "결과 확인" : admin ? "테스트 시작" : "코인 넣기";
-  const primaryDisabled = Boolean((!state && !game.pendingPlay) || game.busy || buying || game.pendingPurchase || localError || (idle ? !game.pendingPlay && ((!admin && (state?.coins ?? 0) < 1) || cooling > 0 || game.loading) : !["ready", "descending"].includes(view.mode)));
+  const primaryDisabled = Boolean((!state && !game.pendingPlay) || game.busy || buying || game.pendingPurchase || localError || (idle ? !game.pendingPlay && ((!admin && (state?.coins ?? 0) < 1) || game.loading) : !["ready", "descending"].includes(view.mode)));
   const buyDisabled = Boolean(admin || !state || !idle || game.busy || game.loading || buying || game.pendingPlay || game.pendingPurchase);
   async function buy(quantity: 1 | 5) {
     if (purchaseLock.current || !idle || admin) return;
@@ -133,7 +197,7 @@ export function Claw({ user, onBack, demo = false }: { user: User; onBack: () =>
   return <section className="preview-game pg-claw claw-page">
     <Toolbar title="캐릭터 뽑기" onBack={onBack} gold={user.gold} />
     <section className="claw-wallet card" aria-label={admin ? "운영자 테스트" : "내 코인"}>
-      {admin ? <div className="claw-admin-wallet"><div><small>운영자 테스트</small><strong>무제한</strong></div><p>코인 차감 없이 플레이해요.<br />점수·골드 보상 없음</p></div> : <><div className="claw-wallet-heading"><Coin size={34} /><div><small>내 코인</small><strong>{state?.coins ?? "—"}<span>개</span></strong></div><div className="claw-wallet-detail"><span>무료 {state?.freeCoins ?? "—"}개 · 구매 {state?.purchasedCoins ?? "—"}개</span><small>{refill}</small></div></div>
+      {admin ? <div className="claw-admin-wallet"><div><small>운영자 테스트</small><strong>무제한</strong></div><p>코인 차감 없이 플레이해요.<br />점수·골드 보상 없음</p></div> : <><div className="claw-wallet-heading"><Coin size={34} /><div><small>내 코인</small><strong>{state?.coins ?? "—"}<span>개</span></strong></div><div className="claw-wallet-detail"><span>무료 {state?.freeCoins ?? "—"}개 · 구매 {state?.purchasedCoins ?? "—"}개</span><RefillClock next={state?.nextGrantAt ?? null} now={serverNow} onDue={refillDue} /></div></div>
       <div className="claw-coin-purchases">{CLAW_RULES.purchaseQuantities.map(quantity => <button type="button" key={quantity} disabled={buyDisabled || user.gold < quantity * CLAW_RULES.coinPrice} onClick={() => void buy(quantity)}>코인 {quantity}개 사기 · {quantity * CLAW_RULES.coinPrice}G</button>)}</div>
       {game.pendingPurchase && <button className="text-button" disabled={game.busy || buying || !idle} onClick={() => void buy(game.pendingPurchase!.input.quantity)}>구매 결과 확인</button>}</>}
       {admin && <label className="claw-admin-force"><input type="checkbox" checked={game.pendingPlay?.input.forceStrong ?? game.forceStrong} onChange={event => game.setForceStrong(event.target.checked)} disabled={!state || !idle || game.busy || game.loading || Boolean(game.pendingPlay)} />이번 판 강집게로</label>}
@@ -145,7 +209,7 @@ export function Claw({ user, onBack, demo = false }: { user: User; onBack: () =>
       <div className="claw-console" data-notouchfx data-nopress>
         <div className="claw-directions" role="group" aria-label="집게 좌우 이동">{(["left", "right"] as const).map(direction => <button className={`claw-arrow ${view.held.includes(direction) ? "is-held" : ""}`} key={direction} type="button" aria-label={`집게 ${direction === "left" ? "왼쪽" : "오른쪽"}으로 이동`} disabled={view.mode !== "ready"} onPointerDown={event => hold(direction, event)} onPointerUp={() => controller.current?.release(direction)} onPointerCancel={() => controller.current?.release(direction)} onLostPointerCapture={() => controller.current?.release(direction)} data-notouchfx>{direction === "left" ? "◀" : "▶"}</button>)}</div>
         <div className="claw-timer" role="timer" aria-label="남은 시간(초)"><small>TIME</small><b className={view.mode === "ready" && view.timer <= 5 ? "is-urgent" : ""}>{view.mode === "idle" || view.mode === "ready" ? String(view.timer).padStart(2, "0") : "--"}</b></div>
-        <button className={`claw-drop ${["ready", "descending"].includes(view.mode) ? "is-armed" : ""}`} type="button" aria-label={primaryLabel} disabled={primaryDisabled} onClick={() => controller.current?.primary()} data-notouchfx><span>{primaryLabel}</span><small>{view.mode === "ready" ? "DROP" : view.mode === "descending" ? "STOP" : game.pendingPlay && idle ? "RETRY" : cooling > 0 && idle ? `${Math.ceil(cooling / 1000)}초 뒤 다시` : admin ? "TEST PLAY" : "1 COIN"}</small></button>
+        <PrimaryButton mode={view.mode} label={primaryLabel} disabled={primaryDisabled} pending={Boolean(game.pendingPlay)} admin={Boolean(admin)} nextPlayAt={state?.nextPlayAt ?? 0} now={serverNow} onActivate={activate} />
       </div>
       <div className="claw-base" aria-hidden="true"><span>✦</span><span className="claw-slot">{admin ? "TEST ▼" : "COIN ▼"}{view.insertion > 0 && <i key={view.insertion} />}</span><span>✦</span></div>
     </section>

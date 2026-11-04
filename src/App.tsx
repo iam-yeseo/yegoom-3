@@ -580,6 +580,16 @@ export default function App() {
     await refresh();
     return receipt;
   }
+  async function transactClaw<T>(action: () => Promise<T>): Promise<T> {
+    if (demo) return action();
+    let receipt!: T;
+    await mutate(async () => { receipt = await action(); return receipt; }, () => {});
+    // Start replay from the saved play receipt without waiting for a second
+    // network request. Coin purchases still refresh balances before completing.
+    if (receipt && typeof receipt === "object" && "result" in receipt) void refresh();
+    else await refresh();
+    return receipt;
+  }
   async function saveAdmin(action: (owner: string) => Promise<AdminState>) {
     const owner = adminOwner;
     if (!owner) throw new ApiFailure(403, "운영자만 설정을 바꿀 수 있어요.");
@@ -838,7 +848,7 @@ export default function App() {
     <ClawProvider key={demo ? adminDemo ? "preview-admin" : "preview-player" : data?.user.id ?? "anonymous"}
       preview={demo} adminPreview={adminDemo} previewConfig={adminDemo ? previewAdminState.claw : undefined}
       accountKey={demo ? adminDemo ? "preview-admin" : "preview-player" : data?.user.id ?? "anonymous"}
-      gold={me?.gold ?? 0} transact={transactCatchmind}
+      gold={me?.gold ?? 0} transact={transactClaw}
       onServerRead={claw => {
         setData(current => current ? { ...current, claw } : current);
         // Recover a failed post-play balance read on the next entry/visibility

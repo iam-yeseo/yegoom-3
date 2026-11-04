@@ -600,9 +600,6 @@
   font-size: 16px;
   font-weight: 800;
 }
-.preview-game.pg-claw {
-  --claw-machine-width: 400px;
-}
 .pg-claw {
   background: linear-gradient(180deg, #e3f1fc 0%, #fff9ee 55%);
 }
@@ -645,7 +642,6 @@
 .pg-machine,
 .pg-claw-controls {
   width: calc(100% - 32px);
-  max-width: var(--claw-machine-width);
   margin: 0 auto;
 }
 .pg-machine {

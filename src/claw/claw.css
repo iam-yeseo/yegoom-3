@@ -1,5 +1,5 @@
-.claw-page { --claw-machine-width: 400px; padding-bottom: 28px; }
-.claw-wallet, .claw-error, .claw-guide { width: calc(100% - 32px); max-width: var(--claw-machine-width); margin: 0 auto 16px; }
+.claw-page { padding-bottom: 28px; }
+.claw-wallet, .claw-error, .claw-guide { width: calc(100% - 32px); margin: 0 auto 16px; }
 .claw-wallet { padding: 16px; }
 .claw-wallet-heading { display: flex; align-items: center; gap: 9px; }
 .claw-wallet-heading > div:first-of-type { flex-shrink: 0; }
@@ -49,7 +49,7 @@
 .claw-base > span:not(.claw-slot) { font-size: 24px; line-height: 1; }
 .claw-slot { position: relative; padding: 5px 12px; border-radius: 6px; background: #ffe6df; color: #c9533e; font-size: 8px; letter-spacing: .12em; }
 .claw-slot i { position: absolute; width: 14px; height: 14px; top: -23px; left: calc(50% - 7px); border-radius: 50%; background: #ffd866; opacity: 0; animation: claw-insert 450ms ease-in forwards; }
-.claw-status { min-height: 42px; margin: 17px auto 5px; padding: 0 17px; max-width: 440px; font-size: 13px; font-weight: 800; line-height: 1.6; text-align: center; word-break: keep-all; }
+.claw-status { width: calc(100% - 32px); min-height: 42px; margin: 17px auto 5px; padding: 0 8px; font-size: 13px; font-weight: 800; line-height: 1.6; text-align: center; word-break: keep-all; }
 .claw-key-hint { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0 16px 18px; }
 .claw-key-hint p { margin: 0; font-size: 11px; line-height: 1.6; color: var(--muted); text-align: center; }
 .claw-key-hint kbd { padding: 1px 3px; border-radius: 4px; background: #f3eee8; font-family: inherit; }
@@ -76,6 +76,23 @@
 .claw-result-rewards { display: flex; justify-content: center; gap: 18px; margin: 18px 0; color: #c9533e; font-size: 26px; }
 .claw-result .claw-clear-bonus { font-size: 12px; color: #94700a; margin: -6px 0 16px; }
 .claw-result .primary-button { width: 100%; margin-top: 15px; }
+@media (max-height: 840px) {
+  /* Leave room for the wallet and controls before the first viewport ends.
+     A short, wide viewport letterboxes the 600:420 canvas inside the full-width
+     cabinet instead of stretching its physics coordinates. */
+  .claw-page .game-toolbar { height: 78px; padding-top: 16px; padding-bottom: 12px; }
+  .claw-wallet { padding: 12px; margin-bottom: 12px; }
+  .claw-wallet-heading strong { font-size: 25px; }
+  .claw-coin-purchases { margin-top: 10px; }
+  .claw-coin-purchases button { min-height: 36px; padding-top: 6px; padding-bottom: 6px; }
+  .claw-marquee { padding-bottom: 10px; }
+  .claw-sign { padding-top: 8px; padding-bottom: 8px; }
+  .claw-sign strong { font-size: 20px; }
+  .claw-glass canvas { width: min(100%, calc(max(120px, 100dvh - 430px - env(safe-area-inset-bottom)) * 10 / 7)); margin-inline: auto; }
+  .claw-console { padding-top: 12px; padding-bottom: 14px; }
+  .claw-drop { min-height: 62px; }
+  .claw-base { padding-top: 10px; padding-bottom: 10px; }
+}
 @keyframes claw-bulb { 50% { opacity: .3; } }
 @keyframes claw-insert { 0% { transform: translateY(0) scaleX(1); opacity: 1; } 80% { transform: translateY(22px) scaleX(.35); opacity: 1; } 100% { transform: translateY(25px) scaleX(.2); opacity: 0; } }
 @media (max-width: 359px) {
