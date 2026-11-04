@@ -22,7 +22,8 @@ import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
 import { maintainDatabase } from '../worker/maintenance';
 import { rankSummary, standings } from '../src/ranking';
-import type { CatchmindGalleryResponse, RankingResponse, SlotResponse } from '../shared/types';
+import type { CatchmindGalleryResponse, RankingResponse, SlotResponse, TagResponse } from '../shared/types';
+import { TAG_TEXTS } from '../shared/nickname-tags';
 import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
 // Tiny, real encoded fixtures: solid coral images generated with Pillow, quality 80.
@@ -170,6 +171,12 @@ async function applyMigration(db: Database, migration: string) {
   if (statement.trim()) throw new Error('Migration contains an incomplete SQL statement');
 }
 
+/** The current Worker needs the full schema. Tests that start from an older
+ * schema apply their migration under test first, then the later ones. */
+async function applyMigrationsAfter(db: Database, file: string) {
+  const later = (await readdir(new URL('../migrations/', import.meta.url))).filter(name => name.endsWith('.sql') && name > file).sort();
+  for (const name of later) await applyMigration(db, await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8'));
+}
 async function provision(db: Database, migration: string, passwordHash: string) {
   await applyMigration(db, migration);
   for (const username of USERS) {
@@ -1019,6 +1026,93 @@ describe('Worker and D1 integration', () => {
       }
       console.log(`Claw authenticated request metrics: ${JSON.stringify(measurements)}`);
     }, 30000);
+  });
+
+  describe('nickname tags', () => {
+    async function giveGold(database: Database, userId: string, amount: number) {
+      await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+        VALUES (?, ?, 'gold', ?, 'tag fixture gold', ?, ?)`).bind(`gold-${userId}-${amount}`, userId, amount, `fixture:tag-gold:${userId}:${amount}`, `${TODAY}T00:00:00.000Z`).run();
+    }
+    const draw = (cookie: string, requestId: string, instance?: Miniflare) =>
+      request('/api/shop/tag', { method: 'POST', body: { requestId }, cookie, instance });
+    const equip = (cookie: string, tagId: string | null) => request('/api/me/nickname-tag', { method: 'PUT', body: { tagId }, cookie });
+
+    it('draws a tag for 300 gold, replays the same request and caps five draws a day', async () => {
+      await giveGold(db, 'yeseo', 2000);
+      const { cookie } = await login('yeseo');
+      const first = await draw(cookie, 'tag-1');
+      expect(first.status).toBe(200);
+      const body = await first.json() as TagResponse;
+      expect(body.gold).toBe(1700);
+      expect(body.draw).toMatchObject({ equipped: false });
+      expect(['S', 'A', 'B', 'C']).toContain(body.draw!.grade);
+      expect(body.tags).toMatchObject({ drawsToday: 1, dailyLimit: 5, price: 300, equipped: null });
+      const replay = await (await draw(cookie, 'tag-1')).json() as TagResponse;
+      expect(replay.draw).toEqual(body.draw);
+      expect(replay.gold).toBe(1700);
+      for (const id of ['tag-2', 'tag-3', 'tag-4', 'tag-5']) expect((await draw(cookie, id)).status).toBe(200);
+      const sixth = await draw(cookie, 'tag-6');
+      expect(sixth.status).toBe(409);
+      expect((await sixth.json() as { error: { code: string } }).error.code).toBe('DAILY_LIMIT');
+      const debits = await db.prepare("SELECT COUNT(*) AS n, SUM(amount) AS total FROM ledger WHERE user_id = 'yeseo' AND reason = '별명 태그 뽑기'").first<{ n: number; total: number }>();
+      expect(debits).toEqual({ n: 5, total: -1500 });
+      const state = await (await request('/api/shop/tag', { cookie })).json() as TagResponse;
+      expect(state.tags.tags).toHaveLength(5);
+      expect(state.tags.drawsToday).toBe(5);
+    });
+    it('refuses without enough gold and for administrators, without charging', async () => {
+      await giveGold(db, 'min', 299);
+      const { cookie } = await login('min');
+      const poor = await draw(cookie, 'poor-1');
+      expect(poor.status).toBe(409);
+      expect((await poor.json() as { error: { code: string; message: string } }).error).toMatchObject({ code: 'INSUFFICIENT_GOLD', message: '골드가 부족해요' });
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM nickname_tags WHERE user_id = 'min'").first<number>('n')).toBe(0);
+      const admin = await login('admin');
+      expect((await draw(admin.cookie, 'admin-1')).status).toBe(403);
+      expect((await equip(admin.cookie, null)).status).toBe(403);
+      expect((await draw(cookie, 'bad id!')).status).toBe(400);
+    });
+    it('charges once when the same request races, and a forced S grade draws an S phrase', async () => {
+      const instance = runtime(await workerAt(`${TODAY}T00:00:00Z`, `${TODAY}T00:00:00Z`, 2)); // grade roll 2 → S
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        await giveGold(database, 'siwon', 1000);
+        const { cookie } = await login('siwon', instance);
+        const results = await Promise.all([draw(cookie, 'race', instance), draw(cookie, 'race', instance), draw(cookie, 'race', instance)]);
+        expect(results.map(result => result.status)).toEqual([200, 200, 200]);
+        const bodies = await Promise.all(results.map(result => result.json() as Promise<TagResponse>));
+        expect(new Set(bodies.map(body => body.draw!.id)).size).toBe(1);
+        expect(bodies[0]!.draw!.grade).toBe('S');
+        expect((TAG_TEXTS.S as readonly string[]).includes(bodies[0]!.draw!.text)).toBe(true);
+        expect(await database.prepare("SELECT SUM(amount) AS total FROM ledger WHERE user_id = 'siwon' AND reason = '별명 태그 뽑기'").first<number>('total')).toBe(-300);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+    it('wears one tag at a time, shows it in bootstrap for everyone and can take it off', async () => {
+      await giveGold(db, 'yeseo', 1000);
+      const { cookie } = await login('yeseo');
+      const a = (await (await draw(cookie, 'wear-a')).json() as TagResponse).draw!;
+      const b = (await (await draw(cookie, 'wear-b')).json() as TagResponse).draw!;
+      const worn = await (await equip(cookie, a.id)).json() as TagResponse;
+      expect(worn.tags.equipped).toMatchObject({ id: a.id, equipped: true });
+      expect(worn.tags.tags[0]!.id).toBe(a.id);
+      const switched = await (await equip(cookie, b.id)).json() as TagResponse;
+      expect(switched.tags.tags.filter(tag => tag.equipped).map(tag => tag.id)).toEqual([b.id]);
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM nickname_tags WHERE user_id = 'yeseo' AND equipped = 1").first<number>('n')).toBe(1);
+      const mine = await bootstrap(cookie);
+      expect(mine.user.tag).toEqual({ grade: b.grade, text: b.text });
+      const other = await login('min');
+      const theirs = await bootstrap(other.cookie);
+      expect(theirs.players.find(player => player.username === 'yeseo')!.tag).toEqual({ grade: b.grade, text: b.text });
+      expect(theirs.players.find(player => player.username === 'min')!.tag).toBeNull();
+      // Someone else's tag cannot be worn.
+      expect((await equip(other.cookie, b.id)).status).toBe(404);
+      expect((await equip(cookie, 42 as unknown as string)).status).toBe(400);
+      const off = await (await equip(cookie, null)).json() as TagResponse;
+      expect(off.tags.equipped).toBeNull();
+      expect((await bootstrap(cookie)).user.tag).toBeNull();
+      expect((await request('/api/me/nickname-tag', { method: 'POST', body: { tagId: null }, cookie })).status).toBe(405);
+    });
   });
 
   describe('ranking periods API', () => {
@@ -3102,6 +3196,7 @@ describe('Worker and D1 integration', () => {
           await applyMigration(database, await readFile(new URL('../migrations/0012_catchmind_used_words.sql', import.meta.url), 'utf8'));
           expect(await database.prepare('SELECT status, wrong_count, image, drawer_id FROM catchmind_rounds WHERE id = ?').bind('legacy-running').first())
             .toEqual({ status, wrong_count: wrongCount, image: status === 'open' ? DRAWING_PNG : null, drawer_id: 'min' });
+          await applyMigrationsAfter(database, '0012_catchmind_used_words.sql');
           const { cookie } = await login('siwon', isolated);
           const view = await getCatchmind(cookie, isolated);
           expect(view.catchmind.round!.hint !== null).toBe(wrongCount >= CATCHMIND_RULES.hintAfter);
@@ -4401,6 +4496,7 @@ describe('Worker and D1 integration', () => {
         expect(after.filter(table => table.name !== 'slot_spins')).toEqual(before);
         expect(after.filter(table => !before.some(prior => prior.name === table.name)).map(table => table.name)).toEqual(['slot_spins']);
         expect(await database.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'slot_spins_user_date_idx'").first('n')).toBe(1);
+        await applyMigrationsAfter(database, '0013_slot_machine.sql');
         // These existing requests exercise the unchanged old paths after only the additive migration.
         const { cookie } = await login('min', instance);
         expect((await request('/api/bootstrap', { cookie, instance })).status).toBe(200);

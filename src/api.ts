@@ -11,7 +11,7 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput,
-  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse,
+  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse,
 } from "../shared/types";
 import type { RankingPeriod } from "../shared/ranking-periods";
 import type { ArtKey } from "../shared/characters";
@@ -85,10 +85,13 @@ export const api = {
   lotto: () => request<LottoResponse>("/shop/lotto"),
   speetto: () => request<SpeettoResponse>("/shop/speetto"),
   slot: () => request<SlotResponse>("/shop/slot"),
+  tag: () => request<TagResponse>("/shop/tag"),
   buyKuji: (input: KujiPurchaseInput) => request<KujiResponse>("/shop/kuji", { method: "POST", body: JSON.stringify(input) }),
   buyLotto: (input: LottoPurchaseInput) => request<LottoResponse>("/shop/lotto", { method: "POST", body: JSON.stringify(input) }),
   buySpeetto: (input: SpeettoPurchaseInput) => request<SpeettoResponse>("/shop/speetto", { method: "POST", body: JSON.stringify(input) }),
   spinSlot: (input: SlotSpinInput) => request<SlotResponse>("/shop/slot", { method: "POST", body: JSON.stringify(input) }),
+  drawTag: (input: TagDrawInput) => request<TagResponse>("/shop/tag", { method: "POST", body: JSON.stringify(input) }),
+  equipTag: (tagId: string | null) => request<TagResponse>("/me/nickname-tag", { method: "PUT", body: JSON.stringify({ tagId }) }),
   history: (id: GameId) => request<HistoryResponse>(`/games/${id}/history`),
   wake: (roundDate: string) => request<GameResponse>("/games/wake/wake", {
     method: "POST",

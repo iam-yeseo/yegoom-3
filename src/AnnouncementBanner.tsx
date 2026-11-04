@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ANNOUNCEMENT_RULES } from '../shared/balance';
 import type { Announcement } from '../shared/types';
-import { honorific } from './components/UI';
+import { honorific, useDisplayNameByIdLookup } from './components/UI';
 import './announcements.css';
 
 interface Props {
@@ -28,6 +28,7 @@ export function AnnouncementBanner({ announcements, userId, preview, serverTime 
   return <AnnouncementQueue key={userId} announcements={announcements} userId={userId} serverTime={serverTime} />;
 }
 function AnnouncementQueue({ announcements, userId, serverTime }: Omit<Props, 'preview'> & { userId: string }) {
+  const nameOf = useDisplayNameByIdLookup();
   const [seen] = useState(() => readSeen(userId));
   const [queue, setQueue] = useState<Announcement[]>([]);
   const clock = useRef({ server: Date.parse(serverTime), received: performance.now() });
@@ -60,7 +61,7 @@ function AnnouncementQueue({ announcements, userId, serverTime }: Omit<Props, 'p
     const serverNow = clock.current.server + performance.now() - clock.current.received;
     setQueue(previous => previous.filter(item => item.id !== current?.id && recent(item, serverNow, userId)));
   }
-  const message = current ? `${honorific(current.displayName)}이 ${current.kind === 'lotto' ? `데일리 로또 ${current.rank}등` : '스피또'}에 당첨됐어요!` : '';
+  const message = current ? `${honorific(nameOf(current.userId, current.displayName))}이 ${current.kind === 'lotto' ? `데일리 로또 ${current.rank}등` : '스피또'}에 당첨됐어요!` : '';
   return <div className="announcement-region" role={current ? 'status' : undefined} aria-live="polite" aria-atomic="true">
     {current && <button className="announcement-banner" key={current.id} type="button" onClick={dismiss} aria-label={`${message} +${current.prize.toLocaleString('ko-KR')}G. 알림 닫기`}>
       <span className="announcement-celebration" aria-hidden="true">🎉</span>

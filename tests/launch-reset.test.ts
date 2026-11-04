@@ -17,7 +17,8 @@ const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventor
   'kuji_claims', 'kuji_boards', 'lotto_tickets', 'lotto_draws', 'catchmind_guesses', 'catchmind_requests', 'catchmind_used_words',
   'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts', 'announcements', 'luck_photos'];
 // The launch-era reset does not cover the later slot-machine receipts.
-const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins'];
+// Post-launch records (slot receipts, nickname tags) are outside the launch-era reset.
+const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins', 'nickname_tags'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -96,6 +97,7 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO claw_plays (id, user_id, request_id, generation, version, claw_x, caught, score, gold, clear_bonus, result_json, created_at) VALUES ('old-play', 'min', 'old-play-request', 3, 5, 0.5, 1, 1, 10, 0, '{}', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO claw_coin_purchases (id, user_id, request_id, quantity, cost, created_at) VALUES ('old-coins', 'min', 'old-coins-request', 5, 500, '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at) VALUES ('retained-slot', 'min', 'retained-slot-request', 500, '[\"banana\",\"apple\",\"seven\"]', 0, '2026-11-01', '2026-11-01T00:00:00Z')"),
+      db.prepare("INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at) VALUES ('retained-tag', 'min', 'retained-tag-request', 'A', '반짝이는', 1, '2026-11-01', '2026-11-01T00:00:00Z')"),
     ]);
   });
   afterAll(async () => { await worker?.dispose(); });

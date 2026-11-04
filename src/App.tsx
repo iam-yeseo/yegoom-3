@@ -10,7 +10,7 @@ import type {
   CatchmindSummary,
   ClawSummary,
   LottoNotice,
-  LaunchGiftResponse, AuthResponse, LuckPhotoResponse,
+  LaunchGiftResponse, AuthResponse, LuckPhotoResponse, TagResponse, NicknameTagView,
 } from "../shared/types";
 import { normalizeNickname } from "../shared/profile";
 import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/admin";
@@ -41,6 +41,7 @@ import { Profile } from "./screens/Profile";
 import { Ranking } from "./screens/Ranking";
 import { Lotto, ShopMain, Speetto } from "./screens/Shop";
 import { Slot } from "./screens/Slot";
+import { NicknameTagShop } from "./screens/NicknameTagShop";
 import { Kuji } from "./screens/Kuji";
 import { ShopProvider } from "./shop";
 import { CatchmindProvider } from "./catchmind";
@@ -78,6 +79,7 @@ const previewUser: User = {
   gold: previewGold,
   weeklyScore: previewScores.yeseo,
   character: null,
+  tag: null,
 };
 const gameIds: GameId[] = ["wake", "offwork", "luck"];
 const emptyCatchmind: CatchmindSummary = { roundId: null, status: "idle", drawer: null, turn: null, wrongCount: 0, winner: null, answer: null };
@@ -319,7 +321,7 @@ export default function App() {
   const adminGeneration = useRef(0);
   const [previewProfile, setPreviewProfile] = useState<{ displayName: string; photoVersion: number | null; photoUrl: string | null }>({ displayName: previewUser.displayName, photoVersion: null, photoUrl: null });
   const previewPhotoCounter = useRef(0);
-  const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[]; lottoNotice: LottoNotice | null }>({ gold: previewGold, score: 0, ledger: [], lottoNotice: null });
+  const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[]; lottoNotice: LottoNotice | null; tag: NicknameTagView | null }>({ gold: previewGold, score: 0, ledger: [], lottoNotice: null, tag: null });
   const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[]; wordsRemaining: number }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [], wordsRemaining: CATCHMIND_WORDS.length });
   const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
   const demo = route.startsWith("/preview");
@@ -334,7 +336,7 @@ export default function App() {
   useLayoutEffect(() => {
     if (demo) {
       setPreviewAdminState(createAdminPreview());
-      setPreviewShop({ gold: previewGold, score: 0, ledger: [], lottoNotice: null });
+      setPreviewShop({ gold: previewGold, score: 0, ledger: [], lottoNotice: null, tag: null });
       setPreviewClaw({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] });
     }
   }, [demo]);
@@ -574,8 +576,12 @@ export default function App() {
     if (demo) return action();
     let receipt!: T;
     await mutate(async () => { receipt = await action(); return receipt; }, (result) => {
-      const balances = result as T & ShopState & Partial<Pick<KujiResponse, "kuji">>;
-      setData(current => current ? { ...current, user: { ...current.user, gold: balances.gold }, inventory: balances.inventory,
+      const balances = result as T & ShopState & Partial<Pick<KujiResponse, "kuji">> & Partial<Pick<TagResponse, "tags">>;
+      // Wearing or removing a tag shows everywhere at once, before the follow-up read.
+      const tag = balances.tags ? balances.tags.equipped && { grade: balances.tags.equipped.grade, text: balances.tags.equipped.text } : undefined;
+      setData(current => current ? { ...current, user: { ...current.user, gold: balances.gold, ...(tag !== undefined ? { tag: tag || null } : {}) },
+        players: tag !== undefined ? current.players.map(player => player.id === current.user.id ? { ...player, tag: tag || null } : player) : current.players,
+        inventory: balances.inventory,
         // Keep the card current even if the follow-up bootstrap is unavailable.
         // A saved receipt can refer to an older board, so never move backwards.
         kuji: balances.kuji && balances.kuji.boardId >= (current.kuji.boardId ?? 0)
@@ -653,7 +659,8 @@ export default function App() {
     ? Object.keys(previewScores).map(username => ({ id: username === previewUser.username ? previewUser.id : username, username,
       displayName: username === previewUser.username ? previewProfile.displayName : username,
       photoVersion: username === previewUser.username ? previewProfile.photoVersion : null,
-      photoUrl: username === previewUser.username ? previewProfile.photoUrl : null }))
+      photoUrl: username === previewUser.username ? previewProfile.photoUrl : null,
+      tag: username === previewUser.username ? previewShop.tag : null }))
     : data ? [...data.players.filter(player => player.id !== data.user.id), data.user] : [];
   const tab = tabs.find((t) => t.path === path)?.path;
   let content: React.ReactNode;
@@ -793,6 +800,7 @@ export default function App() {
         weeklyScore={me.weeklyScore}
         ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
         others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
+        tagShopHref={demo ? "#/preview/shop/tag" : "#/shop/tag"}
         onBack={home}
         onDisplayNameChange={async displayName => {
           if (demo) {
@@ -849,11 +857,13 @@ export default function App() {
     content = <Speetto gold={me.gold} onBack={() => go("/shop")} />;
   else if (path === "/shop/slot")
     content = <Slot onBack={() => go("/shop")} />;
+  else if (path === "/shop/tag")
+    content = <NicknameTagShop onBack={() => go("/shop")} go={go} />;
   else content = <Home data={view} go={go} />;
   // Sub-pages have their own back button instead of the tab bar.
   const subPage =
     !!play || !!gameId || !!stockId ||
-    ["/attendance", "/stock", "/shop/lotto", "/shop/speetto", "/shop/slot"].includes(path);
+    ["/attendance", "/stock", "/shop/lotto", "/shop/speetto", "/shop/slot", "/shop/tag"].includes(path);
   const showTabs = !!view && !!me && !subPage;
   const screenRef = useScreenTransition(path);
   useStatusBarColor(screenRef, `${path}|${loading}|${!!data}`);
@@ -903,9 +913,9 @@ export default function App() {
         if (data && (state.gold !== data.user.gold || state.inventory.lottoTickets !== data.inventory.lottoTickets || state.inventory.speettoTickets !== data.inventory.speettoTickets
           || "kuji" in state && (state.kuji.boardId !== data.kuji.boardId || state.kuji.remaining !== data.kuji.remaining))) void refresh();
       }}
-      onPreviewChange={(state, ledger, score, lottoNotice) => {
+      onPreviewChange={(state, ledger, score, lottoNotice, tag) => {
         markViewedLottoDraw(adminDemo ? "preview-admin" : previewUser.id, path, "lotto" in state ? state.lotto.todayDraw : null, state.serverTime);
-        setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold, ledger: [...ledger], score, lottoNotice });
+        setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold, ledger: [...ledger], score, lottoNotice, tag });
       }}>
     <LaunchGiftProvider preview={demo} role={me?.role} state={data?.launchGift ?? { available: false, claimed: false }}
       serverTime={new Date(Date.now() + (demo ? 0 : serverClockOffset.current)).toISOString()}

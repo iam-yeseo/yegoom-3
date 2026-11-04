@@ -64,6 +64,8 @@ export const LOTTO_RULES = {
   prizes: { 5: 5000, 4: 3000, 3: 1000, 2: 500 },
 } as const;
 export const SHOP_HISTORY_DAYS = 7;
+/** Nickname tags: buying draws one tag immediately (grades and phrases in shared/nickname-tags.ts). */
+export const NICKNAME_TAG_RULES = { price: 300, dailyLimit: 5 } as const;
 export const SLOT_RULES = {
   price: 500, jackpotPercent: 7, jackpotPrize: 2000,
   symbols: ['banana', 'apple', 'strawberry', 'grape', 'watermelon', 'chamoe', 'seven'],

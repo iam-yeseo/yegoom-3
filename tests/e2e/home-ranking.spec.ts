@@ -55,7 +55,7 @@ function withPlayers(snapshot: BootstrapResponse, people: readonly Person[]): Bo
   const players = people.map(([username, displayName, weeklyScore]): Player => ({
     id: snapshot.players.find(player => player.username === username)?.id ?? `fixture-${username}`,
     username, displayName, weeklyScore,
-    character: snapshot.players.find(player => player.username === username)?.character ?? 'cat', photoVersion: null,
+    character: snapshot.players.find(player => player.username === username)?.character ?? 'cat', photoVersion: null, tag: null,
   }));
   const me = players.find(player => player.username === snapshot.user.username)!;
   return { ...snapshot, announcements: [], players, dailyScores: [me.weeklyScore, 0, 0, 0, 0, 0, 0],

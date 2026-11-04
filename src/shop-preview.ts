@@ -1,9 +1,11 @@
-import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, attendanceTickets, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, NICKNAME_TAG_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, attendanceTickets, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
 import type {
   Inventory, KujiCell, KujiGrade, KujiPurchase, KujiPurchaseInput, KujiResponse,
   LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoTicket, ShopKind, ShopPayment,
   ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotSpin, SlotSpinInput, SlotResponse,
+  NicknameTag, NicknameTagState, TagDrawInput, TagResponse,
 } from '../shared/types';
+import { drawNicknameTag } from '../shared/nickname-tags';
 import { slotResult } from '../shared/slot';
 
 const DAY = 86_400_000;
@@ -51,6 +53,10 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   const slotSpins: SlotSpin[] = [];
   // Slot receipts have their own table/request namespace on the server too.
   const slotReceipts = new Map<string, SlotSpin>();
+  // Nickname tags drawn in this preview visit only.
+  const tags: (NicknameTag & { date: string })[] = [];
+  const tagReceipts = new Map<string, NicknameTag & { date: string }>();
+  const GRADE_RANK = { S: 0, A: 1, B: 2, C: 3 } as const;
   const draws = new Map<string, number[]>();
   const receipts = new Map<string, {
     kind: ShopKind; payload: string; purchase: KujiPurchase | LottoTicket | SpeettoTicket;
@@ -140,6 +146,17 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
       .slice(0, SLOT_RULES.historyLimit);
     return structuredClone({ ...state(now), slot: { recent }, ...(spin ? { spin } : {}) });
   }
+  function tagState(now: Date): NicknameTagState {
+    const today = kstDate(now);
+    const list = [...tags].sort((left, right) => Number(right.equipped) - Number(left.equipped)
+      || GRADE_RANK[left.grade] - GRADE_RANK[right.grade] || right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id))
+      .map(({ date: _date, ...tag }) => tag);
+    return { tags: list, equipped: list.find(tag => tag.equipped) ?? null,
+      drawsToday: tags.filter(tag => tag.date === today).length, dailyLimit: NICKNAME_TAG_RULES.dailyLimit, price: NICKNAME_TAG_RULES.price };
+  }
+  function tagResponse(now: Date, draw?: NicknameTag): TagResponse {
+    return structuredClone({ ...state(now), tags: tagState(now), ...(draw ? { draw } : {}) });
+  }
   function lottoNotice(now = new Date()): LottoNotice | null {
     settle(now);
     const today = kstDate(now);
@@ -169,12 +186,14 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   function read(kind: 'lotto'): LottoResponse;
   function read(kind: 'speetto'): SpeettoResponse;
   function read(kind: 'slot'): SlotResponse;
-  function read(kind: ShopKind): KujiResponse | LottoResponse | SpeettoResponse | SlotResponse;
-  function read(kind?: ShopKind): ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse;
-  function read(kind?: ShopKind): ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse {
+  function read(kind: 'tag'): TagResponse;
+  function read(kind: ShopKind): KujiResponse | LottoResponse | SpeettoResponse | SlotResponse | TagResponse;
+  function read(kind?: ShopKind): ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse | TagResponse;
+  function read(kind?: ShopKind): ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse | TagResponse {
     const now = new Date();
     begin(now);
-    return kind === 'kuji' ? kuji(now) : kind === 'lotto' ? lotto(now) : kind === 'speetto' ? speetto(now) : kind === 'slot' ? slot(now) : state(now);
+    return kind === 'kuji' ? kuji(now) : kind === 'lotto' ? lotto(now) : kind === 'speetto' ? speetto(now) : kind === 'slot' ? slot(now)
+      : kind === 'tag' ? tagResponse(now) : state(now);
   }
   function buyKuji(input: KujiPurchaseInput): KujiResponse {
     const now = new Date();
@@ -266,7 +285,30 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     slotReceipts.set(input.requestId, spin);
     return slot(now, spin);
   }
-  return { read, buyKuji, buyLotto, buySpeetto, spinSlot, lottoNotice,
+  function drawTag(input: TagDrawInput): TagResponse {
+    const now = new Date();
+    begin(now);
+    if (typeof input.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.requestId)) throw new Error('구매 요청을 다시 시도해 주세요.');
+    const previous = tagReceipts.get(input.requestId);
+    if (previous) { const { date: _date, ...draw } = previous; return tagResponse(now, draw); }
+    const today = kstDate(now);
+    if (tags.filter(tag => tag.date === today).length >= NICKNAME_TAG_RULES.dailyLimit) throw new Error(`별명 태그는 하루 ${NICKNAME_TAG_RULES.dailyLimit}번까지 뽑을 수 있어요.`);
+    if (gold < NICKNAME_TAG_RULES.price) throw new Error('골드가 부족해요');
+    const tag = { id: crypto.randomUUID(), ...drawNicknameTag(max => Math.floor(Math.random() * max)), equipped: false, createdAt: now.toISOString(), date: today };
+    record('gold', -NICKNAME_TAG_RULES.price, '별명 태그 뽑기', now);
+    tags.push(tag);
+    tagReceipts.set(input.requestId, tag);
+    const { date: _date, ...draw } = tag;
+    return tagResponse(now, draw);
+  }
+  function equipTag(tagId: string | null): TagResponse {
+    const now = new Date();
+    if (tagId !== null && !tags.some(tag => tag.id === tagId)) throw new Error('내가 모은 별명 태그가 아니에요.');
+    for (const tag of tags) tag.equipped = tag.id === tagId;
+    return tagResponse(now);
+  }
+  return { read, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, lottoNotice,
+    get equippedTag() { const tag = tags.find(entry => entry.equipped); return tag ? { grade: tag.grade, text: tag.text } : null; },
     claimLaunchGift() {
       const now = new Date();
       if (kstDate(now) !== LAUNCH_GIFT.date) throw new Error('런칭 선물은 오픈 당일에만 받을 수 있어요.');
