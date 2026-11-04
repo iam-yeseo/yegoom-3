@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { CATCHMIND_RULES } from "../../shared/balance";
 import { clamp, hexToRgb, rememberColor, type PaintColor } from "../color";
 import { CANVAS_BACKGROUND, floodFill } from "../drawing";
@@ -6,8 +6,12 @@ import { ColorPicker } from "./ColorPicker";
 
 type Tool = "pen" | "eraser" | "fill";
 type Point = { x: number; y: number };
-interface Snapshot { image: ImageData; hasDrawing: boolean }
-interface Stroke { pointerId: number; points: Point[]; before: ImageData; tool: "pen" | "eraser"; color: PaintColor; width: number }
+type SnapshotImage = ImageBitmap | HTMLCanvasElement;
+interface Snapshot { image: Promise<SnapshotImage>; hasDrawing: boolean }
+interface Stroke {
+  pointerId: number; pending: Point[]; last: Point; cursor: Point; started: boolean;
+  tool: "pen" | "eraser"; color: PaintColor; width: number;
+}
 interface DrawingCanvasProps {
   disabled?: boolean;
   publishing?: boolean;
@@ -45,116 +49,202 @@ function exportImage(canvas: HTMLCanvasElement): string {
   throw new Error("그림 용량이 커서 올리지 못했어요. 조금 지운 뒤 다시 시도해 주세요.");
 }
 
-export function DrawingCanvas({ disabled = false, publishing = false, onPublish }: DrawingCanvasProps) {
+export const DrawingCanvas = memo(function DrawingCanvas({ disabled = false, publishing = false, onPublish }: DrawingCanvasProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const overlay = useRef<HTMLCanvasElement>(null);
+  const fillSurface = useRef<HTMLCanvasElement | null>(null);
+  const frame = useRef<number | null>(null);
   const history = useRef<Snapshot[]>([]);
   const stroke = useRef<Stroke | null>(null);
   const [historyLength, setHistoryLength] = useState(0);
   const [hasDrawing, setHasDrawing] = useState(false);
+  const drawingPresent = useRef(false);
   const [color, setColor] = useState<PaintColor>({ hex: "#5E6A8A", alpha: 1 });
   const [recentColors, setRecentColors] = useState<string[]>([]);
   const [size, setSize] = useState(1);
   const [tool, setTool] = useState<Tool>("pen");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const restoration = useRef(false);
   const inFlight = useRef(false);
   const [error, setError] = useState("");
-  const busy = disabled || publishing || sending;
+  const busy = disabled || publishing || sending || restoring;
 
   function remember(selected: PaintColor) { setRecentColors(previous => rememberColor(previous, selected.hex)); }
-  function stop() {
-    const current = stroke.current;
-    stroke.current = null;
-    if (current && canvas.current?.hasPointerCapture(current.pointerId)) canvas.current.releasePointerCapture(current.pointerId);
-  }
-  useEffect(() => {
-    const context = canvas.current!.getContext("2d")!;
-    context.fillStyle = CANVAS_BACKGROUND;
-    context.fillRect(0, 0, canvas.current!.width, canvas.current!.height);
-    return stop;
-  }, []);
-  useEffect(() => { if (busy) { stop(); setPickerOpen(false); } }, [busy]);
-
+  function drawingChanged(value: boolean) { drawingPresent.current = value; setHasDrawing(value); }
   function point(event: { clientX: number; clientY: number }): Point {
     const node = canvas.current!, rect = node.getBoundingClientRect();
     return { x: clamp((event.clientX - rect.left) / rect.width) * node.width, y: clamp((event.clientY - rect.top) / rect.height) * node.height };
   }
-  function save(image: ImageData) {
-    history.current = [...history.current.slice(-9), { image, hasDrawing }];
+  function snapshot(): Snapshot {
+    const node = canvas.current!;
+    let image: Promise<SnapshotImage>;
+    if (typeof createImageBitmap === "function") {
+      // Capture the current pixels before drawing, without synchronously copying
+      // a newly allocated canvas on the pointerdown task.
+      image = createImageBitmap(node);
+    } else {
+      const copy = document.createElement("canvas");
+      copy.width = node.width; copy.height = node.height;
+      copy.getContext("2d")!.drawImage(node, 0, 0);
+      image = Promise.resolve(copy);
+    }
+    // Keep a rejected allocation handled until its undo/eviction is processed.
+    void image.catch(() => {});
+    return { image, hasDrawing: drawingPresent.current };
+  }
+  function release(previous: Snapshot) {
+    void previous.image.then(image => {
+      if ("close" in image) image.close();
+      else image.width = image.height = 0;
+    }, () => {});
+  }
+  function save(previous: Snapshot) {
+    if (history.current.length === 10) release(history.current.shift()!);
+    history.current.push(previous);
     setHistoryLength(history.current.length);
   }
   function renderStroke() {
-    const current = stroke.current, context = canvas.current?.getContext("2d");
+    const current = stroke.current, context = overlay.current?.getContext("2d");
     if (!current || !context) return;
-    // Redraw from the snapshot so translucent segments do not darken at every pointermove.
-    context.putImageData(current.before, 0, 0);
-    context.save();
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    context.lineWidth = current.width;
-    context.globalAlpha = current.tool === "pen" ? current.color.alpha : 1;
-    context.strokeStyle = context.fillStyle = current.tool === "pen" ? current.color.hex : CANVAS_BACKGROUND;
-    const points = current.points;
-    context.beginPath();
-    if (points.length === 1) {
-      context.arc(points[0].x, points[0].y, current.width / 2, 0, Math.PI * 2);
+    if (!current.started) {
+      context.beginPath();
+      context.arc(current.last.x, current.last.y, current.width / 2, 0, Math.PI * 2);
       context.fill();
-    } else {
-      context.moveTo(points[0].x, points[0].y);
-      for (let index = 1; index < points.length; index++) {
-        const previous = points[index - 1], next = points[index];
-        context.quadraticCurveTo(previous.x, previous.y, (previous.x + next.x) / 2, (previous.y + next.y) / 2);
-      }
-      const last = points[points.length - 1];
-      context.lineTo(last.x, last.y);
-      context.stroke();
+      current.started = true;
     }
-    context.restore();
+    if (!current.pending.length) return;
+    context.beginPath();
+    context.moveTo(current.cursor.x, current.cursor.y);
+    // Consume only new samples. Earlier segments remain on the opaque overlay.
+    for (const next of current.pending) {
+      const previous = current.last;
+      const middle = { x: (previous.x + next.x) / 2, y: (previous.y + next.y) / 2 };
+      context.quadraticCurveTo(previous.x, previous.y, middle.x, middle.y);
+      current.last = next;
+      current.cursor = middle;
+    }
+    context.stroke();
+    current.pending.length = 0;
   }
+  function scheduleStroke() {
+    if (frame.current !== null) return;
+    frame.current = requestAnimationFrame(() => { frame.current = null; renderStroke(); });
+  }
+  function stop() {
+    if (frame.current !== null) { cancelAnimationFrame(frame.current); frame.current = null; }
+    const current = stroke.current, node = canvas.current, layer = overlay.current;
+    if (!current) return;
+    if (node && layer) {
+      // Include the final coalesced samples even if pointerup precedes this frame.
+      renderStroke();
+      const ink = layer.getContext("2d")!;
+      ink.beginPath();
+      ink.moveTo(current.cursor.x, current.cursor.y);
+      ink.lineTo(current.last.x, current.last.y);
+      ink.stroke();
+      const context = node.getContext("2d")!;
+      context.save();
+      // Alpha is applied once to the complete stroke, including intersections.
+      context.globalAlpha = current.tool === "pen" ? current.color.alpha : 1;
+      context.drawImage(layer, 0, 0);
+      context.restore();
+      ink.clearRect(0, 0, layer.width, layer.height);
+    }
+    stroke.current = null;
+    if (node?.hasPointerCapture(current.pointerId)) node.releasePointerCapture(current.pointerId);
+  }
+  useLayoutEffect(() => {
+    // Published drawings always have this opaque background. Avoid an extra
+    // alpha/compositor surface and paint it before the first visible frame.
+    const node = canvas.current!, context = node.getContext("2d", { alpha: false, desynchronized: true })!;
+    // The live stroke need not wait for the page's compositor queue. Create its
+    // low-latency context before pointerdown; unsupported browsers ignore it.
+    overlay.current!.getContext("2d", { desynchronized: true });
+    context.fillStyle = CANVAS_BACKGROUND;
+    context.fillRect(0, 0, node.width, node.height);
+    return () => {
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      stroke.current = null;
+      history.current.forEach(release);
+      history.current = [];
+      fillSurface.current = null;
+    };
+  }, []);
+  useEffect(() => { if (busy) { stop(); setPickerOpen(false); } }, [busy]);
+
   function down(event: PointerEvent<HTMLCanvasElement>) {
     if (busy || event.button !== 0 || stroke.current) return;
     const node = canvas.current!, context = node.getContext("2d")!;
-    const p = point(event), before = context.getImageData(0, 0, node.width, node.height);
+    const p = point(event);
     setError("");
     if (tool === "fill") {
-      const image = new ImageData(before.data.slice(), node.width, node.height);
+      // Only bucket fill reads pixels, using its own CPU-friendly surface.
+      const surface = fillSurface.current ??= document.createElement("canvas");
+      if (surface.width !== node.width || surface.height !== node.height) {
+        surface.width = node.width; surface.height = node.height;
+      }
+      const readable = surface.getContext("2d", { willReadFrequently: true })!;
+      readable.drawImage(node, 0, 0);
+      const image = readable.getImageData(0, 0, node.width, node.height);
       const { r, g, b } = hexToRgb(color.hex);
       if (floodFill(image, Math.min(node.width - 1, p.x), Math.min(node.height - 1, p.y), [r, g, b, 255])) {
-        save(before);
+        save(snapshot());
         context.putImageData(image, 0, 0);
-        setHasDrawing(true);
+        drawingChanged(true);
         remember(color);
       }
       return;
     }
-    save(before);
+    save(snapshot());
+    const layer = overlay.current!, ink = layer.getContext("2d")!;
+    ink.clearRect(0, 0, layer.width, layer.height);
+    ink.lineCap = "round";
+    ink.lineJoin = "round";
+    ink.lineWidth = [6, 12, 24][size] * (tool === "eraser" ? 2.5 : 1);
+    ink.strokeStyle = ink.fillStyle = tool === "pen" ? color.hex : CANVAS_BACKGROUND;
     event.currentTarget.setPointerCapture(event.pointerId);
-    stroke.current = { pointerId: event.pointerId, points: [p], before, tool, color, width: [6, 12, 24][size] * (tool === "eraser" ? 2.5 : 1) };
-    renderStroke();
-    setHasDrawing(true);
+    stroke.current = { pointerId: event.pointerId, pending: [], last: p, cursor: p, started: false, tool, color, width: ink.lineWidth };
+    scheduleStroke();
+    drawingChanged(true);
     if (tool === "pen") remember(color);
   }
   function move(event: PointerEvent<HTMLCanvasElement>) {
-    if (stroke.current?.pointerId !== event.pointerId) return;
+    const current = stroke.current;
+    if (current?.pointerId !== event.pointerId) return;
     const events = event.nativeEvent.getCoalescedEvents?.() ?? [];
-    for (const sample of events.length ? events : [event.nativeEvent]) stroke.current.points.push(point(sample));
-    renderStroke();
+    for (const sample of events.length ? events : [event.nativeEvent]) current.pending.push(point(sample));
+    scheduleStroke();
   }
-  function undo() {
+  async function undo() {
+    if (busy || restoration.current) return;
     stop();
     const previous = history.current.pop();
     if (!previous) return;
-    canvas.current!.getContext("2d")!.putImageData(previous.image, 0, 0);
+    restoration.current = true;
+    setRestoring(true);
     setHistoryLength(history.current.length);
-    setHasDrawing(previous.hasDrawing);
+    try {
+      const image = await previous.image;
+      if (!canvas.current) return;
+      canvas.current.getContext("2d")!.drawImage(image, 0, 0);
+      drawingChanged(previous.hasDrawing);
+    } catch {
+      if (canvas.current) setError("이전 그림을 되돌리지 못했어요. 현재 그림은 유지돼요.");
+    } finally {
+      release(previous);
+      restoration.current = false;
+      if (canvas.current) setRestoring(false);
+    }
   }
   function clear() {
     stop();
     const node = canvas.current!, context = node.getContext("2d")!;
-    save(context.getImageData(0, 0, node.width, node.height));
+    save(snapshot());
     context.fillStyle = CANVAS_BACKGROUND;
     context.fillRect(0, 0, node.width, node.height);
-    setHasDrawing(false);
+    drawingChanged(false);
   }
   async function publish() {
     if (busy || !hasDrawing || inFlight.current) return;
@@ -168,10 +258,12 @@ export function DrawingCanvas({ disabled = false, publishing = false, onPublish 
   }
 
   return <div className="drawing-workspace">
-    <div className="pg-card pg-canvas-card"><canvas width="680" height="680" ref={canvas} data-notouchfx
+    <div className="pg-card pg-canvas-card"><div style={{ position: "relative" }}><canvas width="680" height="680" ref={canvas} data-notouchfx
       aria-label="그림 그리는 캔버스" aria-disabled={busy} onPointerDown={down} onPointerMove={move}
       onPointerUp={event => { if (stroke.current?.pointerId === event.pointerId) { move(event); stop(); } }}
-      onPointerCancel={event => { if (stroke.current?.pointerId === event.pointerId) stop(); }} onLostPointerCapture={stop} /></div>
+      onPointerCancel={event => { if (stroke.current?.pointerId === event.pointerId) stop(); }} onLostPointerCapture={stop} />
+      <canvas width="680" height="680" ref={overlay} className="drawing-stroke-overlay" aria-hidden="true"
+        style={{ position: "absolute", inset: 0, background: "transparent", pointerEvents: "none", opacity: tool === "pen" ? color.alpha : 1 }} /></div></div>
     <div className="pg-card drawing-tools" data-notouchfx>
       <div className="drawing-tool-row" role="group" aria-label="그리기 도구">
         {([['pen', '펜'], ['eraser', '지우개'], ['fill', '채우기']] as const).map(([name, label]) => <button key={name} type="button"
@@ -185,7 +277,7 @@ export function DrawingCanvas({ disabled = false, publishing = false, onPublish 
       <div className="drawing-width-row" role="group" aria-label="펜 두께">
         {[8, 14, 22].map((diameter, index) => <button key={diameter} type="button" aria-label={`펜 두께 ${index + 1}`} aria-pressed={size === index}
           disabled={busy || tool === "fill"} onClick={() => setSize(index)}><span style={{ width: diameter, height: diameter }} /></button>)}
-        <button className="drawing-undo" type="button" aria-label="한 획 되돌리기" disabled={busy || !historyLength} onClick={undo}>되돌리기</button>
+        <button className="drawing-undo" type="button" aria-label="한 획 되돌리기" disabled={busy || !historyLength} onClick={() => void undo()}>되돌리기</button>
         <button type="button" disabled={busy || !hasDrawing} onClick={clear}>전체 지우기</button>
       </div>
     </div>
@@ -194,4 +286,4 @@ export function DrawingCanvas({ disabled = false, publishing = false, onPublish 
     {pickerOpen && <ColorPicker value={color} onChange={setColor} onCommit={remember} recentColors={recentColors}
       allowAlpha={tool !== "fill"} onClose={() => setPickerOpen(false)} />}
   </div>;
-}
+});

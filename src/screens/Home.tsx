@@ -158,8 +158,8 @@ function catchmindRow(game: CatchmindSummary, me: string, displayNameOf: Display
   return {
     ...row, chip: "done",
     sub: game.winner
-      ? `${answer} · ${game.winner.username === me ? "내가 맞힘" : `${honorific(displayNameOf(game.winner.username, game.winner.displayName))} 정답`} · 다음 출제`
-      : `${answer} · 다음 ${game.turn ? honorific(displayNameOf(game.turn.username, game.turn.displayName)) : drawer}`,
+      ? `${answer} · ${game.winner.username === me ? "내가 맞힘" : `${honorific(displayNameOf(game.winner.username, game.winner.displayName))} 정답`} · 다음 출제 ${game.turn ? honorific(displayNameOf(game.turn.username, game.turn.displayName)) : "대기"}`
+      : `${answer} · 다음 출제 ${game.turn ? honorific(displayNameOf(game.turn.username, game.turn.displayName)) : drawer}`,
     right: game.winner?.username === me ? `+${CATCHMIND_RULES.score}점` : "",
   };
 }

@@ -2,7 +2,7 @@ import { CATCHMIND_RULES } from '../shared/balance';
 import { CATCHMIND_WORDS } from '../shared/catchmind-words';
 import { defaultCharacter } from '../shared/characters';
 import type {
-  CatchmindAction, CatchmindInput, CatchmindPlayer, CatchmindResponse,
+  CatchmindAction, CatchmindInput, CatchmindPlayer, CatchmindResponse, CatchmindPollResponse,
   CatchmindRound, CatchmindGalleryRound, CatchmindGalleryResponse, CatchmindSummary, LedgerEntry,
 } from '../shared/types';
 
@@ -81,7 +81,10 @@ function imageInput(value: unknown): string {
 /** One offline visit owns the sample round and its subsequent turns. */
 export function createCatchmindPreview(viewer: CatchmindPlayer) {
   const player = structuredClone(viewer);
-  const drawer = person('siwon');
+  const players = ['min', 'siwon', 'yeseo'].map(username => username === player.username ? player : person(username));
+  const participates = players.some(member => member.id === player.id);
+  const successor = (drawer: CatchmindPlayer) => players.find(member => member.username > drawer.username) ?? players[0];
+  const drawer = players.find(member => member.username === 'siwon')!;
   const startedAt = Date.now();
   const drawing = sampleDrawing();
   const history: CatchmindGalleryRound[] = Array.from({ length: 12 }, (_, index) => ({
@@ -100,6 +103,9 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
   let gold = 0;
   let score = 0;
   let wordHistory = ['선인장'];
+  const usedWords = new Set(history.map(item => item.answer));
+  usedWords.add('선인장');
+  let version = 0;
   const ledger: LedgerEntry[] = [];
   const receipts = new Map<string, string>();
   const isDrawer = () => round?.drawer.id === player.id;
@@ -110,25 +116,40 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     return structuredClone({ rounds, nextBefore: rows.length > rounds.length ? rounds[rounds.length - 1].number : null });
   }
 
-  function read(): CatchmindResponse {
+  function read(): CatchmindResponse;
+  function read(since?: number): CatchmindPollResponse;
+  function read(since?: number): CatchmindPollResponse {
+    const serverTime = new Date().toISOString();
+    if (since === version) return { unchanged: true, version, viewerId: player.id, serverTime };
     const draft = round?.status === 'draft';
     const open = round?.status === 'open';
     const holder = turn?.id === player.id;
+    const skipAvailableAt = round?.status === 'ended' && round.endedAt
+      ? new Date(Date.parse(round.endedAt) + CATCHMIND_RULES.skipAfterMs).toISOString() : null;
     const shown = round && { ...round, word: isDrawer() || round.status === 'ended' ? round.word : null };
     return structuredClone({ catchmind: {
-      round: shown, turn, previousRound: gallery(round?.number).rounds[0] ?? null, canClaim: !turn && !draft && !open,
-      canReroll: Boolean(draft && holder && (round?.rerollsLeft ?? 0) > 0), canPublish: Boolean(draft && holder),
-      canGuess: Boolean(open && !isDrawer()), canEnd: Boolean(open && isDrawer()),
-      canNext: Boolean(round?.status === 'ended' && holder),
-    }, serverTime: new Date().toISOString() });
+      round: shown, turn, previousRound: gallery(round?.number).rounds[0] ?? null,
+      canClaim: participates && !turn && !draft && !open,
+      canReroll: Boolean(participates && draft && holder && (round?.rerollsLeft ?? 0) > 0), canPublish: Boolean(participates && draft && holder),
+      canGuess: Boolean(participates && open && !isDrawer()), canEnd: Boolean(participates && open && isDrawer()),
+      canNext: Boolean(participates && round?.status === 'ended' && holder),
+      nextDrawer: round ? round.status === 'ended' ? turn : successor(round.drawer) : null,
+      canSkip: Boolean(participates && skipAvailableAt && turn && !holder && Date.now() >= Date.parse(skipAvailableAt)), skipAvailableAt,
+    }, version, viewerId: player.id, serverTime });
   }
   function summary(): CatchmindSummary {
     return structuredClone({ roundId: round?.id ?? null, status: round?.status ?? 'idle', drawer: round?.drawer ?? null,
       turn, wrongCount: round?.wrongCount ?? 0, winner: round?.winner ?? null, answer: round?.status === 'ended' ? round.word : null });
   }
-  function nextWord(previous: readonly string[]) {
-    const words = CATCHMIND_WORDS.filter(word => !previous.includes(word));
-    return words[Math.floor(Math.random() * words.length)];
+  function nextWord(previous: readonly string[] = []) {
+    let words = CATCHMIND_WORDS.filter(word => !usedWords.has(word) && !previous.includes(word));
+    if (!words.length) {
+      usedWords.clear();
+      words = CATCHMIND_WORDS.filter(word => !previous.includes(word));
+    }
+    const word = words[Math.floor(Math.random() * words.length)]!;
+    usedWords.add(word);
+    return word;
   }
   function startDraft() {
     const word = nextWord([]);
@@ -144,7 +165,7 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     round.winner = won ? player : null;
     history.push({ id: round.id, number: round.number, drawer: round.drawer, answer: round.word!, image: round.image!,
       winner: round.winner, endReason: reason!, endedAt: now });
-    turn = won ? player : round.drawer;
+    turn = successor(round.drawer);
     if (!won) return;
     gold += CATCHMIND_RULES.gold; score += CATCHMIND_RULES.score;
     for (const [currency, amount] of [['gold', CATCHMIND_RULES.gold], ['score', CATCHMIND_RULES.score]] as const) {
@@ -152,6 +173,7 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     }
   }
   function mutate(action: CatchmindAction, input: CatchmindInput): CatchmindResponse {
+    if (!participates) throw new Error('플레이어만 캐치마인드에 참여할 수 있어요.');
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.requestId)) throw new Error('요청 번호를 확인해 주세요.');
     let answer = '';
     if (action === 'guess') {
@@ -162,7 +184,8 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     }
     const payload = JSON.stringify({ action, roundId: input.roundId,
       ...((action === 'reroll' || action === 'publish') && 'wordVersion' in input ? { wordVersion: input.wordVersion } : {}),
-      ...(action === 'publish' && 'image' in input ? { image: input.image } : {}), ...(action === 'guess' ? { answer: guessKey(answer) } : {}) });
+      ...(action === 'publish' && 'image' in input ? { image: input.image } : {}), ...(action === 'guess' ? { answer: guessKey(answer) } : {}),
+      ...(action === 'skip' && 'expectedTurnId' in input ? { expectedTurnId: input.expectedTurnId } : {}) });
     const previous = receipts.get(input.requestId);
     if (previous !== undefined) {
       if (previous !== payload) throw new Error('이미 다른 요청에 사용한 번호예요.');
@@ -176,6 +199,11 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     } else if (action === 'next') {
       if (!read().catchmind.canNext) throw new Error('다음 그림을 그릴 차례가 아니에요.');
       startDraft();
+    } else if (action === 'skip') {
+      if (!read().catchmind.canSkip || !turn || !('expectedTurnId' in input) || input.expectedTurnId !== turn.id) {
+        throw new Error('아직 차례를 넘길 수 없거나 다음 출제자가 바뀌었어요.');
+      }
+      turn = successor(turn);
     } else if (action === 'reroll' || action === 'publish') {
       if (!round || round.status !== 'draft' || !isDrawer()) throw new Error('그릴 차례인 사람만 할 수 있어요.');
       if (!('wordVersion' in input) || input.wordVersion !== round.wordVersion) throw new Error('제시어가 바뀌었어요. 다시 확인해 주세요.');
@@ -204,7 +232,9 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
       close('manual', now);
     } else throw new Error('알 수 없는 동작이에요.');
     receipts.set(input.requestId, payload);
+    version++;
     return read();
   }
-  return { read, mutate, summary, gallery, get gold() { return gold; }, get score() { return score; }, get ledger() { return structuredClone(ledger); } };
+  return { read, mutate, summary, gallery, get wordsRemaining() { return CATCHMIND_WORDS.length - usedWords.size; },
+    get gold() { return gold; }, get score() { return score; }, get ledger() { return structuredClone(ledger); } };
 }

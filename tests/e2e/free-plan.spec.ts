@@ -21,10 +21,10 @@ async function visibility(page: Page, value: 'visible' | 'hidden') {
 }
 async function authenticatedClock(page: Page) {
   const login = await page.request.post('/api/auth/login', {
-    headers: { Origin: 'http://localhost:8788' },
+    headers: { Origin: 'http://localhost:8788', 'CF-Connecting-IP': '192.0.2.24' },
     data: { username: 'siwon', password: 'e2e-only-password-2026' },
   });
-  expect(login.ok()).toBe(true);
+  expect(login.status(), 'isolated polling fixture login').toBe(200);
   await page.clock.install({ time: new Date(NOW) });
   await page.clock.pauseAt(new Date(NOW));
   let reads = 0, finished = 0;

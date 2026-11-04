@@ -1,0 +1,560 @@
+{
+  "measuredOn": "2026-11-04",
+  "baseCommit": "4ccc82d",
+  "scope": "Local Chromium actual DrawingCanvas UI at 4x CPU slowdown. Synthetic hardware samples enter the real React pointer handlers. No production Worker CPU claim or remote API calls.",
+  "reproduce": {
+    "build": "Build and serve the baseline/current checkout; use distinct local ports.",
+    "before": "CHROMIUM_PATH=/usr/bin/chromium node scripts/measure-catchmind-browser.mjs --url http://localhost:8794 --root /workspace/yegoom-3-pr4-baseline --output /tmp/catchmind-before.json",
+    "after": "CHROMIUM_PATH=/usr/bin/chromium node scripts/measure-catchmind-browser.mjs --url http://localhost:8795 --output /tmp/catchmind-after.json",
+    "extraStress": "Add --input burst to dispatch eight separate DOM events each frame. --trace /tmp/catchmind-trace.json optionally records a diagnostic Chrome trace (not used for final timing acceptance)."
+  },
+  "primaryProtocol": "180 animation frames, one DOM pointermove per frame with eight getCoalescedEvents coordinate samples (1440 samples plus endpoints), about three seconds. Both old and new handlers consume coalesced samples. Fonts/images/finite animations settled and startup GC collected before the measured stroke. No task filtering or garbage collection during the stroke.",
+  "primary": {
+    "before": {
+      "browser": "154.0.8037.57",
+      "cpuThrottle": 4,
+      "setup": "Fonts/images and finite animations settled; startup garbage collected before the measured stroke; no GC or task filtering during the stroke",
+      "viewport": {
+        "width": 390,
+        "height": 900
+      },
+      "contexts": {
+        "base": {
+          "alpha": true,
+          "colorSpace": "srgb",
+          "colorType": "unorm8",
+          "desynchronized": false,
+          "toneMapping": {
+            "mode": "standard"
+          },
+          "willReadFrequently": false
+        },
+        "overlay": null
+      },
+      "inputProtocol": "coalesced",
+      "stroke": {
+        "durationMs": 3067,
+        "startTime": 732.2999999988824,
+        "pointerDownComplete": 755,
+        "expensiveCanvasCalls": [],
+        "canvasCalls": {
+          "getImageData": 1,
+          "putImageData": 182,
+          "drawImage": 0,
+          "quadraticCurveTo": 131761,
+          "stroke": 181,
+          "createImageBitmap": 0
+        },
+        "longTasks": [],
+        "longTaskCount": 0,
+        "longestTaskMs": 0,
+        "sentPointerMoves": 180,
+        "sampledPoints": 1440,
+        "eventBatchMaximumMs": 5.200000001117587,
+        "eventBatchMedianMs": 1.299999998882413
+      },
+      "fill": {
+        "dimensions": [
+          640,
+          640
+        ],
+        "samplesMs": [
+          124.40000000037253,
+          109.5,
+          111,
+          99.59999999962747,
+          107.70000000111759
+        ],
+        "maximumMs": 124.40000000037253,
+        "medianMs": 109.5
+      },
+      "apiCalls": []
+    },
+    "afterTrials": [
+      {
+        "browser": "154.0.8037.57",
+        "cpuThrottle": 4,
+        "setup": "Fonts/images and finite animations settled; startup garbage collected before the measured stroke; no GC or task filtering during the stroke",
+        "viewport": {
+          "width": 390,
+          "height": 900
+        },
+        "contexts": {
+          "base": {
+            "alpha": false,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          },
+          "overlay": {
+            "alpha": true,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          }
+        },
+        "inputProtocol": "coalesced",
+        "stroke": {
+          "durationMs": 3084,
+          "startTime": 636.5,
+          "pointerDownComplete": 667.2999999988824,
+          "expensiveCanvasCalls": [],
+          "canvasCalls": {
+            "getImageData": 0,
+            "putImageData": 0,
+            "drawImage": 1,
+            "quadraticCurveTo": 1441,
+            "stroke": 181,
+            "createImageBitmap": 1
+          },
+          "longTasks": [],
+          "longTaskCount": 0,
+          "longestTaskMs": 0,
+          "sentPointerMoves": 180,
+          "sampledPoints": 1440,
+          "eventBatchMaximumMs": 5.300000000745058,
+          "eventBatchMedianMs": 0.599999999627471
+        },
+        "fill": {
+          "dimensions": [
+            640,
+            640
+          ],
+          "samplesMs": [
+            43.79999999888241,
+            29.5,
+            30.09999999962747,
+            24.800000000745058,
+            21.5
+          ],
+          "maximumMs": 43.79999999888241,
+          "medianMs": 29.5
+        },
+        "apiCalls": []
+      },
+      {
+        "browser": "154.0.8037.57",
+        "cpuThrottle": 4,
+        "setup": "Fonts/images and finite animations settled; startup garbage collected before the measured stroke; no GC or task filtering during the stroke",
+        "viewport": {
+          "width": 390,
+          "height": 900
+        },
+        "contexts": {
+          "base": {
+            "alpha": false,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          },
+          "overlay": {
+            "alpha": true,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          }
+        },
+        "inputProtocol": "coalesced",
+        "stroke": {
+          "durationMs": 3068.5,
+          "startTime": 616.1999999992549,
+          "pointerDownComplete": 644,
+          "expensiveCanvasCalls": [],
+          "canvasCalls": {
+            "getImageData": 0,
+            "putImageData": 0,
+            "drawImage": 1,
+            "quadraticCurveTo": 1441,
+            "stroke": 181,
+            "createImageBitmap": 1
+          },
+          "longTasks": [],
+          "longTaskCount": 0,
+          "longestTaskMs": 0,
+          "sentPointerMoves": 180,
+          "sampledPoints": 1440,
+          "eventBatchMaximumMs": 3.099999999627471,
+          "eventBatchMedianMs": 0.599999999627471
+        },
+        "fill": {
+          "dimensions": [
+            640,
+            640
+          ],
+          "samplesMs": [
+            41.90000000037253,
+            34.30000000074506,
+            39.30000000074506,
+            42.5,
+            27.100000001490116
+          ],
+          "maximumMs": 42.5,
+          "medianMs": 39.30000000074506
+        },
+        "apiCalls": []
+      },
+      {
+        "browser": "154.0.8037.57",
+        "cpuThrottle": 4,
+        "setup": "Fonts/images and finite animations settled; startup garbage collected before the measured stroke; no GC or task filtering during the stroke",
+        "viewport": {
+          "width": 390,
+          "height": 900
+        },
+        "contexts": {
+          "base": {
+            "alpha": false,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          },
+          "overlay": {
+            "alpha": true,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          }
+        },
+        "inputProtocol": "coalesced",
+        "stroke": {
+          "durationMs": 3084.300000000745,
+          "startTime": 708.1999999992549,
+          "pointerDownComplete": 739.1999999992549,
+          "expensiveCanvasCalls": [],
+          "canvasCalls": {
+            "getImageData": 0,
+            "putImageData": 0,
+            "drawImage": 1,
+            "quadraticCurveTo": 1441,
+            "stroke": 181,
+            "createImageBitmap": 1
+          },
+          "longTasks": [],
+          "longTaskCount": 0,
+          "longestTaskMs": 0,
+          "sentPointerMoves": 180,
+          "sampledPoints": 1440,
+          "eventBatchMaximumMs": 4.599999999627471,
+          "eventBatchMedianMs": 0.6000000014901161
+        },
+        "fill": {
+          "dimensions": [
+            640,
+            640
+          ],
+          "samplesMs": [
+            43.30000000074506,
+            35.09999999962747,
+            34.79999999888241,
+            35.90000000037253,
+            30.800000000745058
+          ],
+          "maximumMs": 43.30000000074506,
+          "medianMs": 35.09999999962747
+        },
+        "apiCalls": []
+      }
+    ]
+  },
+  "stressProtocol": "Additional overload: eight independent DOM pointermove events per frame (1440 DOM events and samples); same startup-GC protocol. This is separate from the browser-coalesced primary input.",
+  "stress": {
+    "before": {
+      "browser": "154.0.8037.57",
+      "cpuThrottle": 4,
+      "setup": "Fonts/images and finite animations settled; startup garbage collected before the measured stroke; no GC or task filtering during the stroke",
+      "viewport": {
+        "width": 390,
+        "height": 900
+      },
+      "inputProtocol": "burst",
+      "stroke": {
+        "durationMs": 3267.9000000003725,
+        "startTime": 659.4000000003725,
+        "pointerDownComplete": 683.0999999996275,
+        "expensiveCanvasCalls": [],
+        "canvasCalls": {
+          "getImageData": 1,
+          "putImageData": 1442,
+          "drawImage": 0,
+          "quadraticCurveTo": 1038961,
+          "stroke": 1441,
+          "createImageBitmap": 0
+        },
+        "longTasks": [
+          {
+            "startTime": 3375.2000000011176,
+            "duration": 107
+          }
+        ],
+        "longTaskCount": 1,
+        "longestTaskMs": 107,
+        "sentPointerMoves": 1440,
+        "eventBatchMaximumMs": 81.79999999888241,
+        "eventBatchMedianMs": 6.800000000745058
+      },
+      "fill": {
+        "dimensions": [
+          640,
+          640
+        ],
+        "samplesMs": [
+          129.19999999925494,
+          100.80000000074506,
+          102.89999999850988,
+          107.09999999962747,
+          95.20000000111759
+        ],
+        "maximumMs": 129.19999999925494,
+        "medianMs": 102.89999999850988
+      },
+      "apiCalls": []
+    },
+    "afterTrials": [
+      {
+        "browser": "154.0.8037.57",
+        "cpuThrottle": 4,
+        "setup": "Fonts/images and finite animations settled; startup garbage collected before the measured stroke; no GC or task filtering during the stroke",
+        "viewport": {
+          "width": 390,
+          "height": 900
+        },
+        "contexts": {
+          "base": {
+            "alpha": false,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          },
+          "overlay": {
+            "alpha": true,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          }
+        },
+        "inputProtocol": "burst",
+        "stroke": {
+          "durationMs": 3151.9000000003725,
+          "startTime": 598,
+          "pointerDownComplete": 627.7000000011176,
+          "expensiveCanvasCalls": [],
+          "canvasCalls": {
+            "getImageData": 0,
+            "putImageData": 0,
+            "drawImage": 1,
+            "quadraticCurveTo": 1441,
+            "stroke": 181,
+            "createImageBitmap": 1
+          },
+          "longTasks": [
+            {
+              "startTime": 1826.7000000011176,
+              "duration": 55
+            }
+          ],
+          "longTaskCount": 1,
+          "longestTaskMs": 55,
+          "sentPointerMoves": 1440,
+          "eventBatchMaximumMs": 13.399999998509884,
+          "eventBatchMedianMs": 1.099999999627471
+        },
+        "fill": {
+          "dimensions": [
+            640,
+            640
+          ],
+          "samplesMs": [
+            40.09999999962747,
+            68.70000000111759,
+            34.09999999962747,
+            39.5,
+            27.09999999962747
+          ],
+          "maximumMs": 68.70000000111759,
+          "medianMs": 39.5
+        },
+        "apiCalls": []
+      },
+      {
+        "browser": "154.0.8037.57",
+        "cpuThrottle": 4,
+        "setup": "Fonts/images and finite animations settled; startup garbage collected before the measured stroke; no GC or task filtering during the stroke",
+        "viewport": {
+          "width": 390,
+          "height": 900
+        },
+        "contexts": {
+          "base": {
+            "alpha": false,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          },
+          "overlay": {
+            "alpha": true,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          }
+        },
+        "inputProtocol": "burst",
+        "stroke": {
+          "durationMs": 3168.2000000011176,
+          "startTime": 603.5,
+          "pointerDownComplete": 635.7000000011176,
+          "expensiveCanvasCalls": [],
+          "canvasCalls": {
+            "getImageData": 0,
+            "putImageData": 0,
+            "drawImage": 1,
+            "quadraticCurveTo": 1441,
+            "stroke": 181,
+            "createImageBitmap": 1
+          },
+          "longTasks": [
+            {
+              "startTime": 1121.300000000745,
+              "duration": 94
+            }
+          ],
+          "longTaskCount": 1,
+          "longestTaskMs": 94,
+          "sentPointerMoves": 1440,
+          "eventBatchMaximumMs": 20.90000000037253,
+          "eventBatchMedianMs": 1.099999999627471
+        },
+        "fill": {
+          "dimensions": [
+            640,
+            640
+          ],
+          "samplesMs": [
+            40.29999999888241,
+            30.5,
+            29.700000001117587,
+            34.20000000111759,
+            21.5
+          ],
+          "maximumMs": 40.29999999888241,
+          "medianMs": 30.5
+        },
+        "apiCalls": []
+      },
+      {
+        "browser": "154.0.8037.57",
+        "cpuThrottle": 4,
+        "setup": "Fonts/images and finite animations settled; startup garbage collected before the measured stroke; no GC or task filtering during the stroke",
+        "viewport": {
+          "width": 390,
+          "height": 900
+        },
+        "contexts": {
+          "base": {
+            "alpha": false,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          },
+          "overlay": {
+            "alpha": true,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": true,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          }
+        },
+        "inputProtocol": "burst",
+        "stroke": {
+          "durationMs": 3150.9000000003725,
+          "startTime": 568.0999999996275,
+          "pointerDownComplete": 644.3999999985099,
+          "expensiveCanvasCalls": [],
+          "canvasCalls": {
+            "getImageData": 0,
+            "putImageData": 0,
+            "drawImage": 1,
+            "quadraticCurveTo": 1441,
+            "stroke": 181,
+            "createImageBitmap": 1
+          },
+          "longTasks": [],
+          "longTaskCount": 0,
+          "longestTaskMs": 0,
+          "sentPointerMoves": 1440,
+          "eventBatchMaximumMs": 8.300000000745058,
+          "eventBatchMedianMs": 1
+        },
+        "fill": {
+          "dimensions": [
+            640,
+            640
+          ],
+          "samplesMs": [
+            38.40000000037253,
+            30.40000000037253,
+            30.299999998882413,
+            32.40000000037253,
+            24.600000001490116
+          ],
+          "maximumMs": 38.40000000037253,
+          "medianMs": 30.40000000037253
+        },
+        "apiCalls": []
+      }
+    ]
+  },
+  "findings": {
+    "primaryLongTasksAbove50Ms": "0 in baseline and all three updated primary trials; the update meets the primary measured threshold without claiming elimination of baseline tasks that were absent.",
+    "primaryDrawingWork": "getImageData 1->0, putImageData182->0, quadraticCurveTo131761->1441, one ImageBitmap undo snapshot and one final layer composition.",
+    "fill": "640x640 baseline median109.5ms/max124.4ms; updated trial medians29.5/39.3/35.1ms, maximum43.8ms across15 samples.",
+    "stressLimitation": "The separate uncoalesced overload still recorded long tasks: baseline107ms; updated trials55ms,94ms,0ms. These are retained rather than discarded or represented as primary acceptance results.",
+    "initialPointerdownDiagnosis": "Diagnostic traces exposed synchronous snapshot copying and compositor commits in initial intermediate code. Final code uses asynchronous ImageBitmap snapshots, declarative overlay opacity, and opaque/low-latency base plus transparent low-latency overlay contexts. Diagnostic trace overhead is excluded from final before/after numbers."
+  }
+}

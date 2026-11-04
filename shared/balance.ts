@@ -33,8 +33,10 @@ export function attendanceReward(streak: number): number {
   return streak % ATTENDANCE_RULES.cycleLength === 0 ? ATTENDANCE_RULES.cycleGold : ATTENDANCE_RULES.dailyGold;
 }
 export const CATCHMIND_RULES = {
-  rerolls: 3, hintAfter: 3, endAfter: 6, score: 3, gold: 5,
-  pollIntervalMs: 5000, maxImageBytes: 300 * 1024, maxAnswerLength: 80, galleryPageSize: 9,
+  rerolls: 3, hintAfter: 5, endAfter: 10, score: 3, gold: 5,
+  pollIntervalMs: 5000, idlePollIntervalMs: 10000,
+  skipAfterMs: 10 * 60 * 1000, wordWarningThreshold: 30, wordReservationRetries: 2,
+  maxImageBytes: 300 * 1024, maxAnswerLength: 80, galleryPageSize: 9,
 } as const;
 /** Public claw economy only; grip settings and counters stay in the server DB. */
 export const CLAW_RULES = {

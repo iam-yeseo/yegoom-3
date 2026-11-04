@@ -36,5 +36,6 @@ export interface AdminState {
   games: AdminGameSettings[];
   claw: AdminClawConfig;
   changes: AdminChange[];
+  catchmindWordsRemaining: number;
   serverTime: string;
 }

@@ -9,6 +9,9 @@ import { Miniflare } from 'miniflare';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken, verifyPassword } from '../worker/crypto';
 import { PASSWORD_RULES } from '../shared/password';
+import { CATCHMIND_RULES } from '../shared/balance';
+import { CATCHMIND_WORDS } from '../shared/catchmind-words';
+import { catchmindRoute } from '../worker/catchmind';
 import type { AdminState, PredictionRules } from '../shared/admin';
 import { defaultPredictionRules } from '../shared/game-settings';
 import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
@@ -665,7 +668,7 @@ describe('Worker and D1 integration', () => {
             VALUES ('budget-open', 1, 'siwon', '사과', '사과', '["사과"]', 'open', ?, ?, ?, ?)`)
             .bind(DRAWING_PNG, TODAY, `${TODAY}T00:00:00.000Z`, `${TODAY}T00:00:00.000Z`).run();
           await database.prepare("UPDATE catchmind_turn SET drawer_id = 'siwon', round_id = 'budget-open' WHERE id = 1").run();
-          await measure('catchmind (open, no new guesses)', '/api/catchmind', 6, 12);
+          await measure('catchmind (open, no new guesses)', '/api/catchmind', 6, 15);
           await measure('bootstrap (home/ranking, open catchmind)', '/api/bootstrap', 30, 200);
         } finally { await instance.dispose(); }
       }
@@ -678,6 +681,52 @@ describe('Worker and D1 integration', () => {
         expect(large.rowsRead).toBeLessThanOrEqual(small.rowsRead + 10);
       }
     });
+  });
+
+  describe('catchmind request costs', () => {
+    it('records authenticated read and mutation costs across a complete drawing round', async () => {
+      const instance = runtime(workerWithD1Metrics(script));
+      const measurements: { label: string; prepares: number; queries: number; bindingCalls: number; rowsRead: number; rowsWritten: number }[] = [];
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const actors = Object.fromEntries(await Promise.all(['min', 'siwon', 'yeseo'].map(async username => [username, (await login(username, instance)).cookie])));
+        const measure = async (label: string, path: string, cookie: string, body?: unknown) => {
+          const response = await request(path, { cookie, instance, ...(body ? { method: 'POST', body } : {}) });
+          expect(response.status, label).toBe(200);
+          measurements.push({ label,
+            prepares: Number(response.headers.get('X-Test-D1-Prepares')),
+            queries: Number(response.headers.get('X-Test-D1-Queries')),
+            bindingCalls: Number(response.headers.get('X-Test-D1-Binding-Calls')),
+            rowsRead: Number(response.headers.get('X-Test-D1-Rows-Read')),
+            rowsWritten: Number(response.headers.get('X-Test-D1-Rows-Written')) });
+          return response.json() as Promise<CatchmindResponse>;
+        };
+        await measure('bootstrap idle', '/api/bootstrap', actors.min!);
+        await measure('GET idle', '/api/catchmind', actors.siwon!);
+        let state = await measure('POST claim', '/api/catchmind/claim', actors.min!, { requestId: 'budget-claim', roundId: null });
+        await measure('GET draft peer', '/api/catchmind', actors.siwon!);
+        state = await measure('POST reroll', '/api/catchmind/reroll', actors.min!, { requestId: 'budget-reroll', roundId: state.catchmind.round!.id, wordVersion: state.catchmind.round!.wordVersion });
+        state = await measure('POST publish', '/api/catchmind/publish', actors.min!, { requestId: 'budget-publish', roundId: state.catchmind.round!.id, wordVersion: state.catchmind.round!.wordVersion, image: DRAWING_PNG });
+        state = await measure('GET open peer', '/api/catchmind', actors.siwon!);
+        const version = (state as CatchmindResponse & { version?: number }).version ?? 0;
+        const unchanged = await measure('GET unchanged open peer', `/api/catchmind?since=${version}`, actors.siwon!);
+        if ('unchanged' in unchanged) {
+          const cost = measurements.at(-1)!;
+          expect(cost.queries).toBeLessThanOrEqual(2); expect(cost.rowsWritten).toBe(0);
+        }
+        await measure('bootstrap open', '/api/bootstrap', actors.min!);
+        const wrong = { requestId: 'budget-guess', roundId: state.catchmind.round!.id, answer: '분명한 오답' };
+        await measure('POST wrong guess', '/api/catchmind/guess', actors.siwon!, wrong);
+        await measure('POST saved guess retry', '/api/catchmind/guess', actors.siwon!, wrong);
+        state = await measure('POST manual end', '/api/catchmind/end', actors.min!, { requestId: 'budget-end', roundId: state.catchmind.round!.id });
+        await measure('GET ended peer', '/api/catchmind', actors.yeseo!);
+        state = await measure('POST next', '/api/catchmind/next', actors[state.catchmind.turn!.username]!, { requestId: 'budget-next', roundId: state.catchmind.round!.id });
+        await measure('GET next draft peer', '/api/catchmind', actors.yeseo!);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+      if (process.env.FREE_PLAN_CATCHMIND_MEASUREMENTS) writeFileSync(process.env.FREE_PLAN_CATCHMIND_MEASUREMENTS, `${JSON.stringify(measurements, null, 2)}\n`);
+      console.log(`Catchmind authenticated request metrics: ${JSON.stringify(measurements)}`);
+    }, 30000);
   });
 
   describe('self-service password changes', () => {
@@ -2426,6 +2475,272 @@ describe('Worker and D1 integration', () => {
     });
   });
 
+  describe('catchmind rotation, consumed words and version protocol', () => {
+    it.each(['correct', 'misses', 'manual'] as const)('cycles min, siwon, yeseo and wraps after a %s ending', async ending => {
+      const cookies = Object.fromEntries(await Promise.all(['min', 'siwon', 'yeseo'].map(async username => [username, (await login(username)).cookie])));
+      const order = ['min', 'siwon', 'yeseo'];
+      let round = (await catchmindAction('claim', cookies.min!, null)).catchmind.round!;
+      for (let index = 0; index < order.length; index++) {
+        const drawer = order[index]!; const next = order[(index + 1) % order.length]!;
+        const other = order[(index + 2) % order.length]!;
+        expect(round.drawer.username).toBe(drawer);
+        await catchmindAction('publish', cookies[drawer]!, round.id, { wordVersion: round.wordVersion, image: DRAWING_PNG });
+        let ended: CatchmindResponse;
+        if (ending === 'correct') ended = await catchmindAction('guess', cookies[other]!, round.id, { answer: round.word });
+        else if (ending === 'manual') ended = await catchmindAction('end', cookies[drawer]!, round.id);
+        else {
+          for (let wrong = 1; wrong <= CATCHMIND_RULES.endAfter; wrong++) {
+            ended = await catchmindAction('guess', cookies[other]!, round.id, { answer: `오답 ${wrong}` });
+          }
+        }
+        expect(ended!.catchmind).toMatchObject({ round: { status: 'ended', endReason: ending }, turn: { username: next } });
+        if (ending === 'correct') expect(ended!.catchmind.round!.winner!.username).toBe(other);
+        round = (await catchmindAction('next', cookies[next]!, round.id)).catchmind.round!;
+      }
+      expect(round).toMatchObject({ number: 4, drawer: { username: 'min' }, status: 'draft' });
+      if (ending !== 'correct') expect(await ledgerRows()).toEqual([]);
+    });
+
+    it('skips only after ten minutes and serializes concurrent stale turn skips and retries', async () => {
+      const min = await login('min'); const siwon = await login('siwon'); const yeseo = await login('yeseo');
+      const round = await openCatchmind(min.cookie);
+      const ended = await catchmindAction('end', min.cookie, round.id);
+      expect(ended.catchmind).toMatchObject({ turn: { id: 'siwon' }, canSkip: false });
+      const body = { requestId: 'skip-saved', roundId: round.id, expectedTurnId: 'siwon' };
+      const before = new Date(Date.parse(`${TODAY}T00:00:00Z`) - CATCHMIND_RULES.skipAfterMs + 1).toISOString();
+      await db.prepare('UPDATE catchmind_rounds SET ended_at = ? WHERE id = ?').bind(before, round.id).run();
+      expect((await request('/api/catchmind/skip', { method: 'POST', cookie: min.cookie, body })).status).toBe(409);
+      const boundary = new Date(Date.parse(`${TODAY}T00:00:00Z`) - CATCHMIND_RULES.skipAfterMs).toISOString();
+      await db.prepare('UPDATE catchmind_rounds SET ended_at = ? WHERE id = ?').bind(boundary, round.id).run();
+      expect((await getCatchmind(min.cookie)).catchmind.canSkip).toBe(true);
+      expect((await getCatchmind(siwon.cookie)).catchmind.canSkip).toBe(false);
+      const responses = await Promise.all([
+        request('/api/catchmind/skip', { method: 'POST', cookie: min.cookie, body }),
+        request('/api/catchmind/skip', { method: 'POST', cookie: yeseo.cookie, body: { ...body, requestId: 'skip-racer' } }),
+      ]);
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      const winner = responses[0]!.status === 200 ? min : yeseo;
+      const winningBody = responses[0]!.status === 200 ? body : { ...body, requestId: 'skip-racer' };
+      const state = await getCatchmind(min.cookie);
+      expect(state.catchmind.turn?.id).toBe('yeseo');
+      const version = state.version;
+      expect((await request('/api/catchmind/skip', { method: 'POST', cookie: winner.cookie, body: winningBody })).status).toBe(200);
+      expect((await getCatchmind(min.cookie)).version).toBe(version);
+      expect((await getCatchmind(min.cookie)).catchmind.turn?.id).toBe('yeseo');
+      expect(await ledgerRows()).toEqual([]);
+    });
+
+    it('repairs inactive ended turns and lets the successor replace an abandoned private draft', async () => {
+      const min = await login('min'); const yeseo = await login('yeseo');
+      const round = await openCatchmind(min.cookie);
+      const ended = await catchmindAction('end', min.cookie, round.id);
+      await db.prepare("UPDATE users SET active = 0 WHERE id = 'siwon'").run();
+      const response = await request(`/api/catchmind?since=${ended.version}`, { cookie: min.cookie });
+      expect(response.status).toBe(200);
+      const repaired = await response.json() as CatchmindResponse;
+      expect('unchanged' in repaired).toBe(false);
+      expect(repaired.catchmind.turn?.id).toBe('yeseo');
+      expect(repaired.version).toBeGreaterThan(ended.version);
+      const draft = (await catchmindAction('next', yeseo.cookie, round.id)).catchmind.round!;
+      await db.prepare("UPDATE users SET active = 0 WHERE id = 'yeseo'").run();
+      const abandoned = await getCatchmind(min.cookie);
+      expect(abandoned.catchmind).toMatchObject({ turn: { id: 'min' }, round: { id: draft.id, status: 'draft', word: null }, canNext: true });
+      const replacement = (await catchmindAction('next', min.cookie, draft.id)).catchmind.round!;
+      expect(replacement).toMatchObject({ status: 'draft', drawer: { id: 'min' }, number: draft.number + 1 });
+      expect(await db.prepare('SELECT status FROM catchmind_rounds WHERE id = ?').bind(draft.id).first('status')).toBe('draft');
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_guesses').first('n')).toBe(0);
+    });
+
+    it('returns unchanged with two authenticated queries and invalidates it for profile and game changes', async () => {
+      const instance = runtime(workerWithD1Metrics(script));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const min = await login('min', instance); const siwon = await login('siwon', instance);
+        const draft = await catchmindAction('claim', min.cookie, null, {}, instance);
+        const fullResponse = await request('/api/catchmind', { cookie: siwon.cookie, instance });
+        const full = await fullResponse.json() as CatchmindResponse;
+        expect(Number.isSafeInteger(full.version)).toBe(true);
+        const poll = await request(`/api/catchmind?since=${full.version}`, { cookie: siwon.cookie, instance });
+        expect(await poll.json()).toEqual({ unchanged: true, version: full.version, viewerId: 'siwon', serverTime: `${TODAY}T00:00:00.000Z` });
+        expect(Number(poll.headers.get('X-Test-D1-Queries'))).toBeLessThanOrEqual(2);
+        expect(Number(poll.headers.get('X-Test-D1-Rows-Read'))).toBeLessThanOrEqual(5);
+        expect(Number(poll.headers.get('X-Test-D1-Rows-Written'))).toBe(0);
+        const otherViewer = await request(`/api/catchmind?since=${full.version}`, { cookie: min.cookie, instance });
+        expect(await otherViewer.json()).toMatchObject({ unchanged: true, version: full.version, viewerId: 'min' });
+        await database.prepare("UPDATE users SET display_name = '새로운민' WHERE id = 'min'").run();
+        const renamed = await request(`/api/catchmind?since=${full.version}`, { cookie: siwon.cookie, instance });
+        const renamedState = await renamed.json() as CatchmindResponse;
+        expect(renamedState.version).toBeGreaterThan(full.version);
+        expect(renamedState.catchmind.round!.drawer.displayName).toBe('새로운민');
+        const body = { requestId: 'version-reroll', roundId: draft.catchmind.round!.id, wordVersion: draft.catchmind.round!.wordVersion };
+        const mutation = await catchmindAction('reroll', min.cookie, body.roundId, body, instance);
+        expect(mutation.version).toBeGreaterThan(renamedState.version);
+        const retry = await catchmindAction('reroll', min.cookie, body.roundId, body, instance);
+        expect(retry.version).toBe(mutation.version);
+        const wrongAccount = await request('/api/catchmind/reroll', { method: 'POST', cookie: siwon.cookie, instance,
+          body: { requestId: 'wrong-account', expectedUserId: 'min', roundId: mutation.catchmind.round!.id, wordVersion: mutation.catchmind.round!.wordVersion } });
+        expect(wrongAccount.status).toBe(409);
+        expect(Number(wrongAccount.headers.get('X-Test-D1-Rows-Written'))).toBe(0);
+        expect((await getCatchmind(min.cookie, instance)).version).toBe(mutation.version);
+        for (const value of ['-1', 'bad', '1.2', '9007199254740992']) {
+          expect((await request(`/api/catchmind?since=${value}`, { cookie: min.cookie, instance })).status).toBe(400);
+        }
+        expect((await request(`/api/catchmind?since=${mutation.version}`, { instance })).status).toBe(401);
+      } finally { await instance.dispose(); }
+    });
+
+    it('draws four hundred different round words and restarts the exhausted pool', async () => {
+      await db.prepare("UPDATE users SET active = 0 WHERE id IN ('siwon', 'yeseo')").run();
+      const now = new Date(`${TODAY}T00:00:00Z`);
+      const binding = measuredDatabase(db, now.getTime()).binding;
+      const actor = { id: 'min', role: 'player' as const };
+      const action = (name: string, roundId: string | null, extra: Record<string, unknown> = {}) =>
+        catchmindRoute(binding, actor, name, 'POST', { requestId: crypto.randomUUID(), roundId, ...extra }, now);
+      const seen = new Set<string>();
+      let state = await action('claim', null);
+      for (let index = 0; index < CATCHMIND_WORDS.length; index++) {
+        const round = state.catchmind.round!;
+        expect(seen.has(round.word!), `round ${index + 1}`).toBe(false);
+        seen.add(round.word!);
+        expect(CATCHMIND_WORDS).toContain(round.word);
+        // Ending rules are exercised above. Advance this fixture directly so
+        // the stress test isolates 400 real, atomic prompt allocations rather
+        // than repeating 800 unrelated full publish/end response reads.
+        await db.prepare(`UPDATE catchmind_rounds SET status = 'ended', end_reason = 'manual', ended_at = ? WHERE id = ?`)
+          .bind(now.toISOString(), round.id).run();
+        if (index < CATCHMIND_WORDS.length - 1) state = await action('next', round.id);
+      }
+      expect(seen.size).toBe(400);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_used_words').first('n')).toBe(400);
+      const reset = await action('next', state.catchmind.round!.id);
+      expect(CATCHMIND_WORDS).toContain(reset.catchmind.round!.word);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_used_words').first('n')).toBe(1);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_rounds').first('n')).toBe(401);
+      expect(await ledgerRows()).toEqual([]);
+    }, 120000);
+
+    it('resets an exhausted pool atomically when two next-round requests race', async () => {
+      const min = await login('min'); const siwon = await login('siwon');
+      const round = await openCatchmind(min.cookie);
+      await db.batch(CATCHMIND_WORDS.map(word => db.prepare('INSERT OR IGNORE INTO catchmind_used_words (word, round_id, used_at) VALUES (?, ?, ?)')
+        .bind(word, round.id, `${TODAY}T00:00:00.000Z`)));
+      await catchmindAction('end', min.cookie, round.id);
+      const responses = await Promise.all([1, 2].map(index => request('/api/catchmind/next', { method: 'POST', cookie: siwon.cookie,
+        body: { requestId: `exhausted-race-${index}`, roundId: round.id } })));
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      const next = await getCatchmind(siwon.cookie);
+      expect(next.catchmind.round).toMatchObject({ number: 2, status: 'draft', drawer: { id: 'siwon' } });
+      expect((await db.prepare('SELECT word, round_id FROM catchmind_used_words').all()).results)
+        .toEqual([{ word: next.catchmind.round!.word, round_id: next.catchmind.round!.id }]);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_rounds').first('n')).toBe(2);
+    });
+
+    it('consumes every rerolled prompt and rolls word and version changes back when a later write fails', async () => {
+      const min = await login('min');
+      let state = await catchmindAction('claim', min.cookie, null);
+      const shown = new Set([state.catchmind.round!.word!]);
+      for (let index = 0; index < CATCHMIND_RULES.rerolls; index++) {
+        state = await catchmindAction('reroll', min.cookie, state.catchmind.round!.id, { wordVersion: state.catchmind.round!.wordVersion });
+        expect(shown.has(state.catchmind.round!.word!)).toBe(false); shown.add(state.catchmind.round!.word!);
+      }
+      const used = (await db.prepare('SELECT word FROM catchmind_used_words').all<{ word: string }>()).results.map(row => row.word);
+      expect(new Set(used)).toEqual(shown);
+      await catchmindAction('publish', min.cookie, state.catchmind.round!.id, { wordVersion: state.catchmind.round!.wordVersion, image: DRAWING_PNG });
+      await catchmindAction('end', min.cookie, state.catchmind.round!.id);
+      const siwon = await login('siwon');
+      const draft = await catchmindAction('next', siwon.cookie, state.catchmind.round!.id);
+      expect(shown.has(draft.catchmind.round!.word!)).toBe(false);
+      const wordsBefore = (await db.prepare('SELECT * FROM catchmind_used_words ORDER BY word').all()).results;
+      await db.prepare(`CREATE TRIGGER fail_word_change BEFORE UPDATE OF word ON catchmind_rounds
+        BEGIN SELECT RAISE(ABORT, 'test word rollback'); END;`).run();
+      expect((await request('/api/catchmind/reroll', { method: 'POST', cookie: siwon.cookie,
+        body: { requestId: 'failed-reroll', roundId: draft.catchmind.round!.id, wordVersion: draft.catchmind.round!.wordVersion } })).status).toBe(500);
+      expect((await db.prepare('SELECT * FROM catchmind_used_words ORDER BY word').all()).results).toEqual(wordsBefore);
+      const after = await getCatchmind(siwon.cookie);
+      expect(after.version).toBe(draft.version);
+      expect(after.catchmind.round!.word).toBe(draft.catchmind.round!.word);
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM catchmind_requests WHERE request_id = 'failed-reroll'").first('n')).toBe(0);
+    });
+
+    it('backfills all previously shown prompts, repairs legacy winner turns and preserves running rounds during migration', async () => {
+      const instance = runtime(script);
+      try {
+        const database = await instance.getD1Database('DB');
+        const oldMigration = (await Promise.all((await readdir(new URL('../migrations/', import.meta.url)))
+          .filter(name => name.endsWith('.sql') && name < '0012').sort()
+          .map(name => readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8')))).join('\n');
+        await provision(database, oldMigration, passwordHash);
+        const oldWord = CATCHMIND_WORDS[0]!, rerolledWord = CATCHMIND_WORDS[1]!;
+        await database.prepare(`INSERT INTO catchmind_rounds
+          (id, number, drawer_id, word, normalized_word, word_history, status, wrong_count, winner_id, end_reason, ended_at, created_at)
+          VALUES ('legacy-ended', 1, 'min', ?, ?, ?, 'ended', 2, 'yeseo', 'correct', ?, ?)`)
+          .bind(rerolledWord, rerolledWord, JSON.stringify([oldWord, rerolledWord]), `${TODAY}T00:00:00.000Z`, `${TODAY}T00:00:00.000Z`).run();
+        await database.prepare("UPDATE catchmind_turn SET round_id = 'legacy-ended', drawer_id = 'yeseo' WHERE id = 1").run();
+        const migrationSql = await readFile(new URL('../migrations/0012_catchmind_used_words.sql', import.meta.url), 'utf8');
+        await applyMigration(database, migrationSql);
+        expect((await database.prepare('SELECT word FROM catchmind_used_words ORDER BY word').all()).results.map(row => row.word))
+          .toEqual([oldWord, rerolledWord].sort());
+        expect(await database.prepare('SELECT drawer_id FROM catchmind_turn WHERE id = 1').first('drawer_id')).toBe('siwon');
+        expect(await database.prepare('SELECT winner_id FROM catchmind_rounds WHERE id = ?').bind('legacy-ended').first('winner_id')).toBe('yeseo');
+        const versionBefore = await database.prepare('SELECT version FROM catchmind_turn WHERE id = 1').first<number>('version');
+        // The deployed old Worker inserts the receipt before a final guess,
+        // then overwrites the next turn with its winner after ending the round.
+        await database.batch([
+          database.prepare(`INSERT INTO catchmind_requests
+            (id, user_id, request_id, action, round_id, result_round_id, payload_hash, created_at)
+            VALUES ('legacy-receipt', 'yeseo', 'legacy-receipt', 'guess', 'legacy-ended', 'legacy-ended', 'old-worker', ?)`)
+            .bind(`${TODAY}T00:00:00.000Z`),
+          database.prepare("UPDATE catchmind_turn SET drawer_id = 'yeseo' WHERE id = 1"),
+        ]);
+        expect(await database.prepare('SELECT drawer_id FROM catchmind_turn WHERE id = 1').first('drawer_id')).toBe('siwon');
+        expect(await database.prepare('SELECT version FROM catchmind_turn WHERE id = 1').first<number>('version')).toBeGreaterThan(versionBefore!);
+        const introduced = CATCHMIND_WORDS[2]!, changed = CATCHMIND_WORDS[3]!;
+        await database.prepare(`INSERT INTO catchmind_rounds
+          (id, number, drawer_id, word, normalized_word, word_history, status, created_at)
+          VALUES ('legacy-post-migration', 2, 'siwon', ?, ?, ?, 'draft', ?)`)
+          .bind(introduced, introduced, JSON.stringify([introduced]), `${TODAY}T00:00:00.000Z`).run();
+        await database.prepare('UPDATE catchmind_rounds SET word = ?, normalized_word = ?, word_history = ? WHERE id = ?')
+          .bind(changed, changed, JSON.stringify([introduced, changed]), 'legacy-post-migration').run();
+        expect((await database.prepare('SELECT word FROM catchmind_used_words ORDER BY word').all()).results.map(row => row.word))
+          .toEqual([oldWord, rerolledWord, introduced, changed].sort());
+      } finally { await instance.dispose(); }
+      for (const [status, wrongCount] of [['draft', 0], ['open', 3], ['open', 4], ['open', 5]] as const) {
+        const isolated = runtime(script);
+        try {
+          const database = await isolated.getD1Database('DB');
+          const oldMigration = (await Promise.all((await readdir(new URL('../migrations/', import.meta.url)))
+            .filter(name => name.endsWith('.sql') && name < '0012').sort()
+            .map(name => readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8')))).join('\n');
+          await provision(database, oldMigration, passwordHash);
+          const word = CATCHMIND_WORDS[3]!;
+          await database.prepare(`INSERT INTO catchmind_rounds
+            (id, number, drawer_id, word, normalized_word, word_history, status, wrong_count, image, created_at)
+            VALUES ('legacy-running', 1, 'min', ?, ?, ?, ?, ?, ?, ?)`)
+            .bind(word, word, JSON.stringify([word]), status, wrongCount, status === 'open' ? DRAWING_PNG : null, `${TODAY}T00:00:00.000Z`).run();
+          await database.prepare("UPDATE catchmind_turn SET round_id = 'legacy-running', drawer_id = 'min' WHERE id = 1").run();
+          await applyMigration(database, await readFile(new URL('../migrations/0012_catchmind_used_words.sql', import.meta.url), 'utf8'));
+          expect(await database.prepare('SELECT status, wrong_count, image, drawer_id FROM catchmind_rounds WHERE id = ?').bind('legacy-running').first())
+            .toEqual({ status, wrong_count: wrongCount, image: status === 'open' ? DRAWING_PNG : null, drawer_id: 'min' });
+          const { cookie } = await login('siwon', isolated);
+          const view = await getCatchmind(cookie, isolated);
+          expect(view.catchmind.round!.hint !== null).toBe(wrongCount >= CATCHMIND_RULES.hintAfter);
+          expect(view.catchmind.round!.word).toBeNull();
+        } finally { await isolated.dispose(); }
+      }
+    }, 30000);
+
+    it('exposes remaining-word counts only in the administrator state including the low-pool threshold', async () => {
+      const admin = await login('admin'); const min = await login('min');
+      const entries = CATCHMIND_WORDS.slice(0, CATCHMIND_WORDS.length - 30);
+      await db.batch(entries.map((word, index) => db.prepare('INSERT INTO catchmind_used_words (word, round_id, used_at) VALUES (?, ?, ?)')
+        .bind(word, `old-${index}`, `${TODAY}T00:00:00.000Z`)));
+      const response = await request('/api/admin', { cookie: admin.cookie }); expect(response.status).toBe(200);
+      expect((await response.json() as AdminState).catchmindWordsRemaining).toBe(30);
+      expect((await request('/api/admin', { cookie: min.cookie })).status).toBe(403);
+      expect(JSON.stringify(await getCatchmind(min.cookie))).not.toContain('catchmindWordsRemaining');
+    });
+  });
+
   describe('server catchmind rounds', () => {
     it('lets only one concurrent claimant take the shared drawing turn', async () => {
       const min = await login('min');
@@ -2439,6 +2754,7 @@ describe('Worker and D1 integration', () => {
       expect(views[0]!.catchmind.round?.id).toBe(views[1]!.catchmind.round?.id);
       expect(views[0]!.catchmind.turn?.id).toBe(views[0]!.catchmind.round?.drawer.id);
       expect(views.every(view => !view.catchmind.canClaim)).toBe(true);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_used_words').first('n')).toBe(1);
       expect(await ledgerRows()).toEqual([]);
     });
 
@@ -2495,6 +2811,7 @@ describe('Worker and D1 integration', () => {
         body: { requestId: crypto.randomUUID(), roundId: round.id, wordVersion: round.wordVersion } })));
       expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
       expect((await getCatchmind(cookie)).catchmind.round).toMatchObject({ wordVersion: 1, rerollsLeft: 2 });
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_used_words').first('n')).toBe(2);
     });
 
     it('allows only the drawer to publish and freezes the published drawing and word', async () => {
@@ -2532,26 +2849,26 @@ describe('Worker and D1 integration', () => {
       expect((await getCatchmind(min.cookie)).catchmind.round!.wrongCount).toBe(1);
     });
 
-    it('shares all wrong guesses, opens the hint at three, and ends at six while retaining the drawer', async () => {
+    it('shares all wrong guesses, opens the hint at five, and ends at ten without paying while advancing the turn', async () => {
       const min = await login('min');
       const siwon = await login('siwon');
       const yeseo = await login('yeseo');
       const round = await openCatchmind(min.cookie);
       const normalized = Array.from(round.word!.replace(/\s/g, ''));
-      for (let index = 1; index <= 6; index++) {
+      for (let index = 1; index <= CATCHMIND_RULES.endAfter; index++) {
         const cookie = index % 2 ? siwon.cookie : yeseo.cookie;
         const state = (await catchmindAction('guess', cookie, round.id, { answer: `오답${index}-${round.word}` })).catchmind;
         expect(state.round!.wrongCount).toBe(index);
         expect(state.round!.guesses).toHaveLength(index);
-        expect(state.round!.hint).toEqual(index < 3 ? null : { firstCharacter: normalized[0], length: normalized.length });
-        expect(state.round!.status).toBe(index < 6 ? 'open' : 'ended');
-        if (index === 6) expect(state).toMatchObject({ round: { endReason: 'misses', word: round.word, winner: null }, turn: { id: 'min' } });
+        expect(state.round!.hint).toEqual(index < CATCHMIND_RULES.hintAfter ? null : { firstCharacter: normalized[0], length: normalized.length });
+        expect(state.round!.status).toBe(index < CATCHMIND_RULES.endAfter ? 'open' : 'ended');
+        if (index === CATCHMIND_RULES.endAfter) expect(state).toMatchObject({ round: { endReason: 'misses', word: round.word, winner: null }, turn: { id: 'siwon' } });
       }
       expect(await ledgerRows()).toEqual([]);
-      expect((await request('/api/catchmind/next', { method: 'POST', cookie: siwon.cookie,
+      expect((await request('/api/catchmind/next', { method: 'POST', cookie: min.cookie,
         body: { requestId: crypto.randomUUID(), roundId: round.id } })).status).toBe(403);
-      const next = (await catchmindAction('next', min.cookie, round.id)).catchmind.round!;
-      expect(next).toMatchObject({ number: round.number + 1, status: 'draft', drawer: { id: 'min' }, wrongCount: 0 });
+      const next = (await catchmindAction('next', siwon.cookie, round.id)).catchmind.round!;
+      expect(next).toMatchObject({ number: round.number + 1, status: 'draft', drawer: { id: 'siwon' }, wrongCount: 0 });
       expect(next.id).not.toBe(round.id);
     });
 
@@ -2560,17 +2877,17 @@ describe('Worker and D1 integration', () => {
       const siwon = await login('siwon');
       const yeseo = await login('yeseo');
       const round = await openCatchmind(min.cookie);
-      for (let index = 0; index < 5; index++) await catchmindAction('guess', siwon.cookie, round.id, { answer: `오답${index}-${round.word}` });
+      for (let index = 0; index < CATCHMIND_RULES.endAfter - 1; index++) await catchmindAction('guess', siwon.cookie, round.id, { answer: `오답${index}-${round.word}` });
       const responses = await Promise.all([siwon.cookie, yeseo.cookie].map(cookie => request('/api/catchmind/guess', { method: 'POST', cookie,
         body: { requestId: crypto.randomUUID(), roundId: round.id, answer: `마지막오답-${round.word}` } })));
       expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
       const ended = (await getCatchmind(min.cookie)).catchmind.round!;
-      expect(ended).toMatchObject({ status: 'ended', endReason: 'misses', wrongCount: 6 });
-      expect(ended.guesses).toHaveLength(6);
+      expect(ended).toMatchObject({ status: 'ended', endReason: 'misses', wrongCount: CATCHMIND_RULES.endAfter });
+      expect(ended.guesses).toHaveLength(CATCHMIND_RULES.endAfter);
       expect(await ledgerRows()).toEqual([]);
     });
 
-    it.each([0, 3])('ignores whitespace in a correct answer and pays 3 points plus 5G after %i wrong guesses', async wrongBefore => {
+    it.each([0, CATCHMIND_RULES.hintAfter])('ignores whitespace in a correct answer and pays 3 points plus 5G after %i wrong guesses', async wrongBefore => {
       const min = await login('min');
       const siwon = await login('siwon');
       const round = await openCatchmind(min.cookie);
@@ -2590,7 +2907,7 @@ describe('Worker and D1 integration', () => {
       expect(next.drawer.id).toBe('siwon');
     });
 
-    it('pays only the first concurrent correct guess and transfers the turn to that winner', async () => {
+    it('pays only the first concurrent correct guess and advances from the drawer', async () => {
       const min = await login('min');
       const siwon = await login('siwon');
       const yeseo = await login('yeseo');
@@ -2600,26 +2917,26 @@ describe('Worker and D1 integration', () => {
       expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
       const state = (await getCatchmind(min.cookie)).catchmind;
       expect(state.round!.guesses.filter(guess => guess.correct)).toHaveLength(1);
-      expect(state.turn?.id).toBe(state.round!.winner?.id);
+      expect(state.turn?.id).toBe('siwon');
       const payouts = await ledgerRows();
       expect(payouts.map(row => [row.currency, row.amount]).sort()).toEqual([['gold', 5], ['score', 3]]);
       expect(new Set(payouts.map(row => row.user_id))).toEqual(new Set([state.round!.winner!.id]));
     });
 
-    it('lets the drawer end a published round without a reward and start only one next round', async () => {
+    it('lets the drawer end without a reward and the next player start only one new round', async () => {
       const min = await login('min');
       const siwon = await login('siwon');
       const round = await openCatchmind(min.cookie);
       expect((await request('/api/catchmind/end', { method: 'POST', cookie: siwon.cookie,
         body: { requestId: crypto.randomUUID(), roundId: round.id } })).status).toBe(403);
       const ended = await catchmindAction('end', min.cookie, round.id);
-      expect(ended.catchmind).toMatchObject({ round: { status: 'ended', endReason: 'manual', winner: null }, turn: { id: 'min' }, canNext: true });
+      expect(ended.catchmind).toMatchObject({ round: { status: 'ended', endReason: 'manual', winner: null }, turn: { id: 'siwon' }, canNext: false });
       expect(await ledgerRows()).toEqual([]);
-      const responses = await Promise.all([1, 2].map(() => request('/api/catchmind/next', { method: 'POST', cookie: min.cookie,
+      const responses = await Promise.all([1, 2].map(() => request('/api/catchmind/next', { method: 'POST', cookie: siwon.cookie,
         body: { requestId: crypto.randomUUID(), roundId: round.id } })));
       expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
       const next = (await getCatchmind(min.cookie)).catchmind.round!;
-      expect(next).toMatchObject({ number: round.number + 1, status: 'draft', drawer: { id: 'min' } });
+      expect(next).toMatchObject({ number: round.number + 1, status: 'draft', drawer: { id: 'siwon' } });
     });
 
     it('rejects stale round mutations after the next drawing turn begins', async () => {
@@ -2627,7 +2944,7 @@ describe('Worker and D1 integration', () => {
       const siwon = await login('siwon');
       const previous = await openCatchmind(min.cookie);
       await catchmindAction('end', min.cookie, previous.id);
-      const next = (await catchmindAction('next', min.cookie, previous.id)).catchmind.round!;
+      const next = (await catchmindAction('next', siwon.cookie, previous.id)).catchmind.round!;
       for (const [action, cookie, extra] of [
         ['guess', siwon.cookie, { answer: previous.word }],
         ['publish', min.cookie, { wordVersion: next.wordVersion, image: DRAWING_PNG }],
@@ -2751,7 +3068,7 @@ describe('Worker and D1 integration', () => {
       const min = await login('min');
       const admin = await login('admin');
       const round = await openCatchmind(min.cookie);
-      for (const action of ['claim', 'reroll', 'publish', 'guess', 'end', 'next']) {
+      for (const action of ['claim', 'reroll', 'publish', 'guess', 'end', 'next', 'skip']) {
         const body = { requestId: crypto.randomUUID(), roundId: action === 'claim' ? null : round.id,
           wordVersion: round.wordVersion, image: DRAWING_PNG, answer: round.word };
         expect((await request(`/api/catchmind/${action}`, { method: 'POST', body })).status).toBe(401);
@@ -2834,19 +3151,21 @@ describe('Worker and D1 integration', () => {
     });
 
     it('retains the previous result across new drafts and excludes the current ended round', async () => {
-      const { cookie } = await login('min');
+      const cookies = Object.fromEntries(await Promise.all(['min', 'siwon', 'yeseo'].map(async username => [username, (await login(username)).cookie])));
+      let cookie = cookies.min!;
       let round = (await catchmindAction('claim', cookie, null)).catchmind.round!;
       expect((await getCatchmind(cookie)).catchmind.previousRound).toBeNull();
       await catchmindAction('publish', cookie, round.id, { wordVersion: round.wordVersion, image: DRAWING_PNG });
       const first = await catchmindAction('end', cookie, round.id);
       expect(first.catchmind.previousRound).toBeNull();
       const firstId = round.id;
+      cookie = cookies.siwon!;
       round = (await catchmindAction('next', cookie, round.id)).catchmind.round!;
       expect((await getCatchmind(cookie)).catchmind.previousRound).toMatchObject({ id: firstId, number: 1, answer: first.catchmind.round!.word });
       await catchmindAction('publish', cookie, round.id, { wordVersion: round.wordVersion, image: DRAWING_WEBP });
       expect((await getCatchmind(cookie)).catchmind.previousRound?.id).toBe(firstId);
       expect((await catchmindAction('end', cookie, round.id)).catchmind.previousRound?.id).toBe(firstId);
-      expect((await catchmindAction('next', cookie, round.id)).catchmind.previousRound?.id).toBe(round.id);
+      expect((await catchmindAction('next', cookies.yeseo!, round.id)).catchmind.previousRound?.id).toBe(round.id);
     });
 
     it('reports full authenticated gallery rows_read without growth from 5000 older rounds', async () => {
@@ -2943,9 +3262,9 @@ describe('Worker and D1 integration', () => {
       const originalPath = first.image!;
       expect(originalPath).toBe(catchmindImagePath(first.id));
       expect((await catchmindAction('end', min.cookie, first.id)).catchmind.round?.image).toBe(originalPath);
-      const draft = (await catchmindAction('next', min.cookie, first.id)).catchmind.round!;
+      const draft = (await catchmindAction('next', siwon.cookie, first.id)).catchmind.round!;
       expect(draft.image).toBeNull();
-      const second = (await catchmindAction('publish', min.cookie, draft.id,
+      const second = (await catchmindAction('publish', siwon.cookie, draft.id,
         { wordVersion: draft.wordVersion, image: DRAWING_WEBP })).catchmind.round!;
       expect(second.image).toBe(catchmindImagePath(second.id));
       expect(second.image).not.toBe(originalPath);

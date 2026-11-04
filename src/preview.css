@@ -1061,6 +1061,10 @@
 .pg-catchmind .pg-author strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pg-catchmind .pg-author .pg-muted { white-space: nowrap; }
 .pg-catchmind .pg-hint { flex-wrap: wrap; }
+.pg-catchmind .pg-fail-nodes { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; }
+.pg-catchmind .pg-fail-nodes > span { width: 100%; max-width: 30px; justify-self: center; }
+.cm-help summary { cursor: pointer; font-weight: 800; }
+.cm-help ul { padding-left: 20px; margin: 14px 0 0; display: grid; gap: 8px; color: var(--muted); font-size: 13px; line-height: 1.65; }
 .pg-catchmind .pg-wrong-words { margin: 0; list-style: none; }
 .pg-catchmind .pg-wrong-words li { display: flex; min-width: 0; }
 .pg-catchmind .pg-wrong-words .correct { text-decoration: none; color: #2e8c6e; background: #e3f6ee; }

@@ -16,6 +16,7 @@ import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/adm
 import { createAdminPreview, savePreviewGame, savePreviewClaw } from "./admin-preview";
 import { AnnouncementBanner } from "./AnnouncementBanner";
 import { FEATURES } from "../shared/balance";
+import { CATCHMIND_WORDS } from "../shared/catchmind-words";
 import { ApiFailure, api } from "./api";
 import { anim } from "./motion";
 import { ProfileDirectoryProvider, CharacterProvider, CharacterSprite, TabBar, tabs, readLegacyCharacter, clearLegacyCharacter, choosePreviewCharacter } from "./components/UI";
@@ -311,7 +312,7 @@ export default function App() {
   const [previewProfile, setPreviewProfile] = useState<{ displayName: string; photoVersion: number | null; photoUrl: string | null }>({ displayName: previewUser.displayName, photoVersion: null, photoUrl: null });
   const previewPhotoCounter = useRef(0);
   const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[] }>({ gold: previewGold, score: 0, ledger: [] });
-  const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[] }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [] });
+  const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[]; wordsRemaining: number }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [], wordsRemaining: CATCHMIND_WORDS.length });
   const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
   const demo = route.startsWith("/preview");
   const adminDemo = demo && (previewAdmin || route.startsWith("/preview/admin"));
@@ -336,6 +337,13 @@ export default function App() {
   const mutationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const serverClockOffset = useRef(0);
   const activeUserId = useRef<string | null>(null);
+  const catchmindReauthPending = useRef(false);
+  const [catchmindEpoch, setCatchmindEpoch] = useState(0);
+  const completeCatchmindReauth = useCallback(() => {
+    if (!catchmindReauthPending.current) return;
+    catchmindReauthPending.current = false;
+    setCatchmindEpoch(value => value + 1);
+  }, []);
   const characterImports = useRef(new Set<string>());
   const lastBootstrapSuccessAt = useRef(-Infinity);
   // Only the current generation can pause polling. An invalidated request may
@@ -353,6 +361,7 @@ export default function App() {
       serverClockOffset.current = Date.parse(next.serverTime) - Date.now();
       activeUserId.current = next.user.id;
       clearLegacyAttendance(next.user.username);
+      completeCatchmindReauth();
       setData(next);
       setBootError("");
       return next;
@@ -370,7 +379,7 @@ export default function App() {
       if (pendingBootstrap.current === generation) pendingBootstrap.current = null;
       if (current()) setLoading(false);
     }
-  }, []);
+  }, [completeCatchmindReauth]);
   useEffect(() => {
     if (demo) { setLoading(false); return; }
     void refresh();
@@ -486,6 +495,7 @@ export default function App() {
     serverClockOffset.current = Date.parse(next.serverTime) - Date.now();
     activeUserId.current = next.user.id;
     clearLegacyAttendance(next.user.username);
+    completeCatchmindReauth();
     setData(next);
   };
   useEffect(() => {
@@ -655,7 +665,7 @@ export default function App() {
     );
   else if (!view || !me) content = null;
   else if (path === "/admin" && adminAllowed) content = <Admin key={adminDemo ? "preview-admin" : me.id}
-    state={adminDemo ? previewAdminState : adminData?.owner === me.id ? adminData.state : null}
+    state={adminDemo ? { ...previewAdminState, catchmindWordsRemaining: previewCatchmind.wordsRemaining } : adminData?.owner === me.id ? adminData.state : null}
     loading={adminLoading} error={adminError} onReload={() => void reloadAdmin()}
     onSaveGame={saveAdminGame} onSaveClaw={saveAdminClaw} onPlayClaw={() => go("/play/claw")} preview={adminDemo} />;
   else if (play === "kuji") content = <Kuji onBack={home} />;
@@ -836,15 +846,24 @@ export default function App() {
         if (bootError) void refresh();
       }}
       onPreviewChange={(summary, gold, score, ledger) => setPreviewClaw({ summary, gold, score, ledger })}>
-    <CatchmindProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
+    <CatchmindProvider key={demo ? "preview" : `${data?.user.id ?? "anonymous"}:${catchmindEpoch}`}
       preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
       viewer={{ id: me?.id ?? "anonymous", username: me?.username ?? "", displayName: me?.displayName ?? "", photoVersion: me?.photoVersion ?? null, character: me?.character ?? defaultCharacter(me?.username ?? "") }}
       transact={transactCatchmind}
+      onAccountChanged={() => {
+        catchmindReadKey.current = "";
+        if (!demo) {
+          // Keep recovery pending if this read fails or a write defers it. Any
+          // later authoritative bootstrap may renew the same account safely.
+          catchmindReauthPending.current = true;
+          void refresh();
+        }
+      }}
       onServerRead={state => {
-        const key = `${data?.user.id}:${state.round?.id}:${state.round?.status}:${state.round?.wrongCount}:${state.round?.wordVersion}`;
+        const key = `${data?.user.id}:${state.round?.id}:${state.round?.status}:${state.round?.wrongCount}:${state.round?.wordVersion}:${state.turn?.id}`;
         if (key !== catchmindReadKey.current) { catchmindReadKey.current = key; void refresh(); }
       }}
-      onPreviewChange={(summary, gold, score, ledger) => setPreviewCatchmind({ summary, gold, score, ledger: [...ledger] })}>
+      onPreviewChange={(summary, gold, score, ledger, wordsRemaining) => setPreviewCatchmind({ summary, gold, score, ledger: [...ledger], wordsRemaining })}>
     <ShopProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
       preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
       previewGoldBonus={previewAttendance.goldBonus}
