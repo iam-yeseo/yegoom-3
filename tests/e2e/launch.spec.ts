@@ -231,7 +231,7 @@ test('preview launch gifts stay local and the new tickets can be spent at both w
       await expect(page.locator('.inventory-card p').filter({ hasText: '스피또 이용권' }).locator('strong')).toHaveText('7장');
       await navigate(page, '/preview/shop/lotto');
       for (const number of [1, 2, 3, 4, 5]) await page.getByRole('button', { name: `번호 ${number}`, exact: true }).click();
-      await page.getByRole('button', { name: '이용권으로 1장 사기', exact: true }).click();
+      await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
       await expect(page.locator('.inventory-card p').filter({ hasText: '데일리 로또 이용권' }).locator('strong')).toHaveText('6장');
       await navigate(page, '/preview');
       await expect(gift(page)).toHaveCount(0);

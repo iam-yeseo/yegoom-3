@@ -569,7 +569,7 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await expect(page.getByRole('heading', { name: '데일리 로또', exact: true })).toBeVisible();
   await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
   const beforeGold = await displayedGold(page, '.game-toolbar .gold');
-  await page.getByRole('button', { name: '골드로 1장 사기 · 500G', exact: true }).click();
+  await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
   await expect(page.locator('.lotto-tickets .ticket').first()).toContainText('추첨 대기');
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold - 500).toLocaleString('ko-KR'));
   await page.goto('/#/preview');
@@ -582,7 +582,7 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await page.goto('/#/preview/shop/lotto');
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold - 500 + reward).toLocaleString('ko-KR'));
   await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
-  await page.getByRole('button', { name: '골드로 1장 사기 · 500G', exact: true }).click();
+  await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
   const finalGold = beforeGold - 1000 + reward;
   await expect(page.locator('.game-toolbar .gold')).toContainText(finalGold.toLocaleString('ko-KR'));
   await captureWidths(page, 'preview-lotto', info, 3);
@@ -594,9 +594,9 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await expect(attendanceLedger).toHaveCount(1);
   await expect(attendanceLedger).toContainText(`+${reward}G`);
   await page.goto('/#/preview/shop/speetto');
-  await page.getByRole('button', { name: '골드로 1장 사기 · 300G', exact: true }).click();
+  await page.getByRole('button', { name: '골드로 사기 · 300G', exact: true }).click();
   await expect(page.locator('.scratch-card')).toBeVisible();
-  await page.getByRole('button', { name: '한 번에 열기', exact: true }).click();
+  await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
   await expect(page.locator('.scratch-result')).not.toHaveText('?');
   expect(await page.locator('.scratch-symbols').evaluate(element => element.getAnimations({ subtree: true }).some(animation => animation.effect?.getTiming().iterations === Infinity))).toBe(false);
   await captureWidths(page, 'preview-speetto', info, 3);
@@ -670,7 +670,8 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   await page.goto('/#/shop/lotto');
   await expect(page.getByRole('heading', { name: '데일리 로또', exact: true })).toBeVisible();
   const history = page.locator(`.ticket[data-ticket-id="${SAVED_LOTTO_ID}"]`);
-  await expect(history).toContainText('1등 · 5개 일치');
+  await expect(history.locator('.ticket-result')).toContainText('1등');
+  await expect(history.locator('.ticket-balls i[style]')).toHaveCount(5);
   await expect(history).toContainText('+5,000G');
   await expect(page.locator('.lotto-target')).toContainText('2026년 10월 30일');
   const before = await shopSnapshot<LottoResponse>(page, 'lotto');
@@ -689,7 +690,7 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
   await page.getByRole('button', { name: '번호 6', exact: true }).click();
   await expect(page.getByRole('button', { name: '번호 6', exact: true })).toHaveAttribute('aria-pressed', 'false');
-  await page.getByRole('button', { name: '이용권으로 1장 사기', exact: true }).click();
+  await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeDisabled();
   const committed = await shopSnapshot<LottoResponse>(page, 'lotto');
@@ -701,7 +702,7 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   await page.reload();
   await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeDisabled();
   const retried = purchaseResponse(page, 'lotto');
-  await page.getByRole('button', { name: '이용권으로 1장 사기', exact: true }).click();
+  await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
   expect((await retried).status()).toBe(200);
   await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeEnabled();
   expect(attempts).toHaveLength(2);
@@ -711,7 +712,7 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   expect(afterRetry.lotto.tickets).toHaveLength(before.lotto.tickets.length + 1);
   await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
   const paid = purchaseResponse(page, 'lotto');
-  await page.getByRole('button', { name: '골드로 1장 사기 · 500G', exact: true }).click();
+  await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
   const paidResponse = await paid;
   expect(paidResponse.status()).toBe(200);
   const paidData = await paidResponse.json() as LottoResponse;
@@ -735,12 +736,12 @@ test('speetto pays at purchase, restores owned tickets after leaving and scratch
   await page.goto('/#/shop');
   await page.goto('/#/shop/speetto');
   await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', SAVED_SPEETTO_ID);
-  await page.getByRole('button', { name: '한 번에 열기', exact: true }).click();
+  await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
   await expect(page.locator('.scratch-result')).toHaveText('당첨! +1,500G');
   expect((await snapshot(page)).user.gold).toBe(restored.gold);
   await captureWidths(page, 'authenticated-speetto', info, 3);
   const paid = purchaseResponse(page, 'speetto');
-  await page.getByRole('button', { name: '골드로 1장 사기 · 300G', exact: true }).click();
+  await page.getByRole('button', { name: '골드로 사기 · 300G', exact: true }).click();
   const response = await paid;
   expect(response.status()).toBe(200);
   const data = await response.json() as SpeettoResponse;
@@ -757,11 +758,11 @@ test('speetto pays at purchase, restores owned tickets after leaving and scratch
   await page.reload();
   await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', ticket.id);
   const afterPurchase = (await snapshot(page)).user.gold;
-  await page.getByRole('button', { name: '한 번에 열기', exact: true }).click();
+  await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
   await expect(page.locator('.scratch-result')).toHaveText(ticket.won ? '당첨! +1,500G' : '아쉽지만 낙첨이에요');
   expect((await snapshot(page)).user.gold).toBe(afterPurchase);
   const coupon = purchaseResponse(page, 'speetto');
-  await page.getByRole('button', { name: '이용권으로 1장 사기', exact: true }).click();
+  await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
   const couponData = await (await coupon).json() as SpeettoResponse;
   expect(couponData.purchase).toMatchObject({ payment: 'ticket', cost: 0 });
   expect(couponData.inventory.speettoTickets).toBe(restored.inventory.speettoTickets - 1);
@@ -820,7 +821,7 @@ for (const outcome of ['success', 'conflict'] as const) {
       await expect.poll(() => held).toBe(true);
       await page.goto('/#/shop/speetto');
       await expect(page.getByRole('heading', { name: '스피또', exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: '골드로 1장 사기 · 300G', exact: true })).toBeDisabled();
+      await expect(page.getByRole('button', { name: '골드로 사기 · 300G', exact: true })).toBeDisabled();
       if (outcome === 'conflict') {
         // A second HTTP client takes the selected cell while the browser's
         // original purchase is in flight. Its later response is a real 409.
@@ -834,7 +835,7 @@ for (const outcome of ['success', 'conflict'] as const) {
       release();
       expect((await completed).status()).toBe(outcome === 'success' ? 200 : 409);
       expect((await loaded).status()).toBe(200);
-      await expect(page.getByRole('button', { name: '골드로 1장 사기 · 300G', exact: true })).toBeEnabled();
+      await expect(page.getByRole('button', { name: '골드로 사기 · 300G', exact: true })).toBeEnabled();
       await expect(page.locator('.inventory-card')).toContainText('스피또 이용권');
     } finally { release(); }
   });
@@ -963,7 +964,7 @@ test('catchmind preview keeps hints, rewards, drawing tools and color selection 
   await page.goto('/#/preview/shop/lotto');
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5).toLocaleString('ko-KR'));
   await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
-  await page.getByRole('button', { name: '골드로 1장 사기 · 500G', exact: true }).click();
+  await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5 - 500).toLocaleString('ko-KR'));
   await page.goto('/#/preview');
   await expect(page.locator('.room-top .gold')).toContainText((beforeGold + 5 - 500).toLocaleString('ko-KR'));

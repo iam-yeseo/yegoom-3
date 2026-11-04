@@ -83,6 +83,7 @@ export interface BootstrapResponse {
   attendance: AttendanceState;
   inventory: Inventory;
   kuji: KujiSummary;
+  lottoNotice: LottoNotice | null;
   catchmind: CatchmindSummary;
   claw: ClawSummary;
   launchGift: LaunchGiftState;
@@ -145,9 +146,10 @@ export interface KujiPurchase {
 export interface KujiResponse extends ShopState { kuji: KujiState; purchase?: KujiPurchase }
 export interface LottoPurchaseInput { requestId: string; numbers: number[]; payment: ShopPayment }
 export interface LottoTicket {
-  id: string; requestId: string; drawDate: string; numbers: number[]; payment: ShopPayment; cost: number;
+  id: string; requestId: string; purchaseDate: string; createdAt: string; drawDate: string; numbers: number[]; payment: ShopPayment; cost: number;
   winningNumbers: number[] | null; matches: number | null; rank: number | null; prize: number | null;
 }
+export interface LottoNotice { drawDate: string; tickets: number; winners: number; prize: number }
 export interface LottoState {
   targetDrawDate: string;
   todayDraw: { date: string; numbers: number[] | null };
@@ -158,7 +160,7 @@ export type SpeettoSymbol = typeof SPEETTO_RULES.characters[number];
 export interface SpeettoPurchaseInput { requestId: string; payment: ShopPayment }
 export interface SpeettoTicket {
   id: string; requestId: string; cells: SpeettoSymbol[]; won: boolean; prize: number;
-  payment: ShopPayment; cost: number; createdAt: string;
+  payment: ShopPayment; cost: number; purchaseDate: string; createdAt: string;
 }
 export interface SpeettoState { tickets: SpeettoTicket[] }
 export interface SpeettoResponse extends ShopState { speetto: SpeettoState; purchase?: SpeettoTicket }

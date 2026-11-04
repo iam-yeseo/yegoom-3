@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import type { Inventory, KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState } from "../shared/types";
+import type { Inventory, KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState } from "../shared/types";
+import { LOTTO_RULES } from "../shared/balance";
+import { noticeDate } from "./lotto-notice";
 import { api, ApiFailure } from "./api";
 import { createShopPreview } from "./shop-preview";
 
@@ -48,7 +50,7 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   previewGameGold: number;
   previewAttendanceDate: string;
   transact: <T>(action: () => Promise<T>) => Promise<T>;
-  onPreviewChange: (state: ShopState, ledger: LedgerEntry[], score: number) => void;
+  onPreviewChange: (state: ShopResponse, ledger: LedgerEntry[], score: number, lottoNotice: LottoNotice | null) => void;
   onServerRead: (state: ShopResponse) => void;
 }) {
   const storageKey = `yegoom3:shop:pending:${accountKey}`;
@@ -94,12 +96,23 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     if ("kuji" in next) setKuji(next.kuji);
     if ("lotto" in next) setLotto(next.lotto);
     if ("speetto" in next) setSpeetto(next.speetto);
-    if (previewEngine.current) callbacks.current.onPreviewChange(next, previewEngine.current.ledger, previewEngine.current.score);
+    if (previewEngine.current) callbacks.current.onPreviewChange(next, previewEngine.current.ledger, previewEngine.current.score, previewEngine.current.lottoNotice(new Date(next.serverTime)));
   }, []);
   useEffect(() => {
     const engine = syncPreview();
     if (engine) apply(engine.read());
   }, [previewGoldBonus, previewGameGold, previewAttendanceDate, syncPreview, apply]);
+  useEffect(() => {
+    if (!preview) return;
+    const now = Date.now();
+    const todayDraw = Date.parse(`${noticeDate(now)}T${LOTTO_RULES.drawTime}+09:00`);
+    const nextDraw = todayDraw > now ? todayDraw : todayDraw + 86_400_000;
+    const timer = window.setTimeout(() => {
+      const engine = syncPreview();
+      if (engine) apply(engine.read());
+    }, nextDraw - now);
+    return () => clearTimeout(timer);
+  }, [preview, state.serverTime, syncPreview, apply]);
   const refresh = useCallback(async (kind?: ShopKind) => {
     if (writeInFlight.current) { deferredRead.current = kind ?? "shop"; return; }
     const current = ++generation.current;

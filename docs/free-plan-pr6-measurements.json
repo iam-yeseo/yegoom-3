@@ -1,0 +1,568 @@
+{
+  "measuredOn": "2026-11-04",
+  "baseCommit": "f8ca8c1",
+  "source": "tests/integration.test.ts: shop recent history request budgets / records authenticated recent lottery and scratch histories before and after large past histories",
+  "environment": {
+    "node": "v24.19.0",
+    "miniflare": "4.20260730.0",
+    "database": "isolated local D1/workerd per checkout; no remote production access"
+  },
+  "commands": {
+    "baseline": "Detached worktree at f8ca8c1 with the same test-only fixture: FREE_PLAN_SHOP_BASELINE=1 FREE_PLAN_SHOP_MEASUREMENTS=/tmp/yegoom-pr6-before.json XDG_CONFIG_HOME=/tmp/yegoom-config npm test -- tests/integration.test.ts -t \"records authenticated recent lottery and scratch histories\"",
+    "after": "FREE_PLAN_SHOP_MEASUREMENTS=/tmp/yegoom-pr6-after.json XDG_CONFIG_HOME=/tmp/yegoom-config npm test -- tests/integration.test.ts -t \"records authenticated recent lottery and scratch histories\"",
+    "regression": "Without measurement variables, the same test requires exactly the three recent tickets, bounded historical growth and no prepares/queries/bindingCalls/rowsRead/rowsWritten increase over the recorded after fixture.",
+    "historicalBootstrap": "Run the existing \"bounds authenticated polling queries\" test in both checkouts with FREE_PLAN_MEASUREMENTS=/tmp/yegoom-pr6-bootstrap-{before,after}.json. Its PR 2 cost guard permits only the one notice query after 17:30; morning cost cannot increase."
+  },
+  "fixture": {
+    "kstDate": "2026-10-30",
+    "clockKst": [
+      "09:00",
+      "18:00"
+    ],
+    "activePlayers": 3,
+    "administrators": 1,
+    "recentTicketsPerKind": 3,
+    "historicalTicketsPerKind": [
+      0,
+      5000
+    ],
+    "recentPurchaseDates": [
+      "2026-10-24",
+      "2026-10-29",
+      "2026-10-30"
+    ],
+    "historicalPurchaseDate": "2026-01-01",
+    "draws": "Known persisted draws exist for all fixture dates; tickets are already settled with zero prizes. This isolates retained-history and notice reads from payout/creation work.",
+    "purchases": "Direct read-only SQL snapshots use ticket payment/cost0; balances and ledgers remain empty. Actual debit, payout, concurrency and idempotent purchase paths are separate integration tests.",
+    "returnedTickets": "Before returns 3 or 5003 per product; after always returns the three purchases from today through today-6. Lottery cutoff shifts17:00 to17:30, but both09:00 and18:00 fixtures are on the same side of both cutoffs.",
+    "notice": "18:00 has one ticket in the current draw, zero winners/prize. 09:00 returns null without its aggregate query.",
+    "historyScanFix": "The older settlement probe could choose the full(draw_date,settled_at) index and read every old settled ticket. PR6 explicitly selects the already existing0011 partial lotto_tickets_due_idx for that unchanged unsettled condition. The notice uses the full index because it must count settled current-draw tickets."
+  },
+  "counting": {
+    "prepares": "DB.prepare calls",
+    "queries": "Executed SQL statements including each statement inside DB.batch",
+    "bindingCalls": "Each all/first/run call or one DB.batch call",
+    "rowsRead": "Sum of actual D1 result.meta.rows_read; authentication included",
+    "rowsWritten": "Sum of actual D1 result.meta.rows_written; includes trigger/index effects"
+  },
+  "before": [
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 0,
+      "route": "bootstrap",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 25,
+      "rowsWritten": 0,
+      "returnedTickets": null
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 0,
+      "route": "lotto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 22,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 0,
+      "route": "speetto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 16,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "bootstrap",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 5025,
+      "rowsWritten": 0,
+      "returnedTickets": null
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "lotto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 30022,
+      "rowsWritten": 0,
+      "returnedTickets": 5003
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "speetto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 20016,
+      "rowsWritten": 0,
+      "returnedTickets": 5003
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 0,
+      "route": "bootstrap",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 26,
+      "rowsWritten": 0,
+      "returnedTickets": null
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 0,
+      "route": "lotto",
+      "prepares": 5,
+      "queries": 5,
+      "bindingCalls": 5,
+      "rowsRead": 24,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 0,
+      "route": "speetto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 17,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "bootstrap",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 5026,
+      "rowsWritten": 0,
+      "returnedTickets": null
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "lotto",
+      "prepares": 5,
+      "queries": 5,
+      "bindingCalls": 5,
+      "rowsRead": 30024,
+      "rowsWritten": 0,
+      "returnedTickets": 5003
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "speetto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 20017,
+      "rowsWritten": 0,
+      "returnedTickets": 5003
+    }
+  ],
+  "after": [
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 0,
+      "route": "bootstrap",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 23,
+      "rowsWritten": 0,
+      "returnedTickets": null
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 0,
+      "route": "lotto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 20,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 0,
+      "route": "speetto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 14,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "bootstrap",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 23,
+      "rowsWritten": 0,
+      "returnedTickets": null
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "lotto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 20,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "09:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "speetto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 14,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 0,
+      "route": "bootstrap",
+      "prepares": 16,
+      "queries": 16,
+      "bindingCalls": 16,
+      "rowsRead": 26,
+      "rowsWritten": 0,
+      "returnedTickets": null
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 0,
+      "route": "lotto",
+      "prepares": 5,
+      "queries": 5,
+      "bindingCalls": 5,
+      "rowsRead": 22,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 0,
+      "route": "speetto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 15,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "bootstrap",
+      "prepares": 16,
+      "queries": 16,
+      "bindingCalls": 16,
+      "rowsRead": 26,
+      "rowsWritten": 0,
+      "returnedTickets": null
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "lotto",
+      "prepares": 5,
+      "queries": 5,
+      "bindingCalls": 5,
+      "rowsRead": 22,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    },
+    {
+      "clockKst": "18:00",
+      "historicalTicketsPerKind": 5000,
+      "route": "speetto",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 15,
+      "rowsWritten": 0,
+      "returnedTickets": 3
+    }
+  ],
+  "historicalBootstrap": {
+    "fixture": "Existing PR2 current-week45scores/three active players/three current games with100 or10000 gold and inventory ledger rows. These fixtures have no lottery purchases; notice is an empty aggregate after the draw.",
+    "before": [
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 159,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 159,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 161,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 161,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 164,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 160,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 160,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 163,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 165,
+        "rowsWritten": 0
+      }
+    ],
+    "after": [
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 159,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 159,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 161,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 161,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 164,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 16,
+        "queries": 16,
+        "bindingCalls": 16,
+        "rowsRead": 160,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 16,
+        "queries": 16,
+        "bindingCalls": 16,
+        "rowsRead": 160,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 18,
+        "queries": 18,
+        "bindingCalls": 18,
+        "rowsRead": 163,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 16,
+        "queries": 16,
+        "bindingCalls": 16,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 16,
+        "queries": 16,
+        "bindingCalls": 16,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 18,
+        "queries": 18,
+        "bindingCalls": 18,
+        "rowsRead": 165,
+        "rowsWritten": 0
+      }
+    ]
+  },
+  "limits": [
+    "These are local deterministic D1 fixtures, not production measurements or upper bounds for arbitrary unsettled work, current-week scores or current-day ticket counts.",
+    "Only settled historical rows are excluded from the probe; old unpaid lottery tickets still settle and pay exactly once.",
+    "Listing is limited to seven purchase dates; an explicitly retried old requestId still returns its own saved purchase receipt without putting it back in the list or charging again."
+  ]
+}

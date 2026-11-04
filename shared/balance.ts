@@ -60,9 +60,10 @@ export const KUJI_RULES = {
   ],
 } as const;
 export const LOTTO_RULES = {
-  price: 500, maxNumber: 25, pickCount: 5, drawTime: '17:00:00',
+  price: 500, maxNumber: 25, pickCount: 5, drawTime: '17:30:00',
   prizes: { 5: 5000, 4: 3000, 3: 1000, 2: 500 },
 } as const;
+export const SHOP_HISTORY_DAYS = 7;
 export const SPEETTO_RULES = {
   price: 300, winPercent: 10, prize: 1500,
   characters: ['axolotl', 'drop', 'cat', 'bunny', 'bread', 'manta', 'moon', 'monkey'],

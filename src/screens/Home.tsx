@@ -2,7 +2,9 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, KUJI_RULES, LOTTO_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
-import type { CatchmindSummary, ClawSummary, GameState, KujiSummary } from "../../shared/types";
+import type { CatchmindSummary, ClawSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
+import { advanceNoticeOffset, hasSeenLotto, lottoSeenKey, markLottoSeen, nextKstMidnight, noticeDate } from "../lotto-notice";
+import "../home-shop.css";
 import { useAttendance } from "../attendance";
 import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import {
@@ -38,6 +40,7 @@ import { rankSummary, standings, type RankingPlayer } from "../ranking";
 
 export type HomePlayer = RankingPlayer;
 export interface HomeData {
+  userId: string;
   username: string;
   displayName: string;
   /** Legacy identity key; attendance itself is provided by the session context. */
@@ -49,6 +52,8 @@ export interface HomeData {
   kuji: KujiSummary | null;
   catchmind: CatchmindSummary;
   claw: ClawSummary;
+  lottoNotice: LottoNotice | null;
+  serverTime: string;
 }
 type Go = (path: string) => void;
 
@@ -262,34 +267,54 @@ export function SoloGames({ go, claw }: { go: Go; claw: ClawSummary }) {
 
 export function ShopCards({ go }: { go: Go }) {
   const { inventory } = useShop();
+  const tiles = [
+    { path: "/shop/lotto", title: "데일리 로또", schedule: `${formatTime(LOTTO_RULES.drawTime)} 추첨`, tickets: inventory.lottoTickets, icon: "lotto" },
+    { path: "/shop/speetto", title: "스피또", schedule: "바로 긁기", tickets: inventory.speettoTickets, icon: "speetto" },
+  ] as const;
   return (
-    <div className="tile-grid">
-      <button className="card shop-tile" onClick={() => go("/shop/lotto")}>
-        <span className="lotto-icon" aria-hidden="true">
-          <i>7</i>
-          <i>12</i>
-          <i>21</i>
-        </span>
+    <div className="tile-grid shop-tile-grid">
+      {tiles.map(tile => <button key={tile.path} className="card shop-tile" onClick={() => go(tile.path)}>
+        {tile.icon === "lotto" ? <span className="lotto-icon" aria-hidden="true"><i>7</i><i>12</i><i>21</i></span>
+          : <span className="speetto-icon" aria-hidden="true"><i><b /></i></span>}
         <span className="solo-text">
-          <strong>데일리 로또</strong>
-          <small className="home-schedule">{formatTime(LOTTO_RULES.drawTime)} 추첨</small>
-          <small>이용권 {inventory.lottoTickets}장</small>
+          <strong>{tile.title}</strong>
+          <small className={tile.icon === "lotto" ? "home-schedule" : undefined}>{tile.schedule}</small>
+          <small>이용권 {tile.tickets}장</small>
         </span>
-      </button>
-      <button className="card shop-tile" onClick={() => go("/shop/speetto")}>
-        <span className="speetto-icon" aria-hidden="true">
-          <i>
-            <b />
-          </i>
-        </span>
-        <span className="solo-text">
-          <strong>스피또</strong>
-          <small>바로 긁기</small>
-          <small>이용권 {inventory.speettoTickets}장</small>
-        </span>
-      </button>
+      </button>)}
     </div>
   );
+}
+
+function LottoNoticeCard({ data, go }: { data: HomeData; go: Go }) {
+  const notice = data.lottoNotice;
+  const [closedKey, setClosedKey] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const clock = useRef({ sample: "", offset: 0 });
+  if (clock.current.sample !== data.serverTime) clock.current = { sample: data.serverTime,
+    offset: advanceNoticeOffset(clock.current.sample ? clock.current.offset : null, data.serverTime, Date.now()) };
+  const now = Date.now() + clock.current.offset;
+  const current = notice?.drawDate === noticeDate(now);
+  const key = notice ? lottoSeenKey(data.userId, notice.drawDate) : null;
+  useEffect(() => {
+    if (!current) return;
+    const timer = window.setTimeout(() => setRevision(value => value + 1), Math.max(1, nextKstMidnight(now) - now));
+    return () => clearTimeout(timer);
+  }, [current, data.serverTime, notice?.drawDate, revision]);
+  useEffect(() => {
+    const changed = (event: StorageEvent) => { if (event.key === key || event.key === null) setRevision(value => value + 1); };
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [key]);
+  if (!notice || !current || key === closedKey || hasSeenLotto(data.userId, notice.drawDate)) return null;
+  const close = () => { markLottoSeen(data.userId, notice.drawDate); setClosedKey(key); };
+  return <section className="card lotto-notice" aria-label="데일리 로또 결과 안내" data-draw-date={notice.drawDate}>
+    <button type="button" className="lotto-notice-open" onClick={() => { close(); go("/shop/lotto"); }}>
+      <span className="lotto-notice-copy"><strong>오늘 산 데일리 로또 {notice.tickets}장의 추첨이 끝났어요.</strong>
+        <span>결과를 확인해 보세요 <Chevron direction="right" size={14} /></span></span>
+    </button>
+    <button type="button" className="lotto-notice-close" aria-label="데일리 로또 안내 닫기" onClick={close}>×</button>
+  </section>;
 }
 
 const rankColors = [
@@ -534,6 +559,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
           go={go}
           onClaimed={celebrateClaim}
         />
+        <LottoNoticeCard data={data} go={go} />
         <TodayGames data={data} go={go} />
         <SoloGames go={go} claw={data.claw} />
         <SectionTitle title="상점" right="전체" onClick={() => go("/shop")} />
