@@ -2,6 +2,27 @@
   "measuredOn": "2026-11-04",
   "baseMain": "f8ca8c17cb974bb10ff9f516e5f27bf43704b0bd",
   "buildPrecache": "yegoom3-f0aed1c279ab",
+  "historyHeadingRevision": {
+    "check": {
+      "command": "XDG_CONFIG_HOME=/tmp/yegoom-config npm run check",
+      "result": "passed",
+      "testFiles": 17,
+      "tests": 734,
+      "buildPrecache": "yegoom3-1b94784a6f61"
+    },
+    "e2e": {
+      "command": "CHROMIUM_PATH=/usr/bin/chromium XDG_CONFIG_HOME=/tmp/yegoom-config npm run test:e2e -- tests/e2e/shop-pr6.spec.ts",
+      "passed": 7,
+      "failed": 0,
+      "duration": "22.6s",
+      "wholeSuiteRerun": false,
+      "coverage": "Unrevealed Speetto winners excluded; revealed losses and zero/pending Lotto groups omit totals; revealed wins accumulate once and survive row reselection."
+    },
+    "updatedScreenshots": [
+      "docs/screenshots/update-pr6-speetto-history-390.png",
+      "docs/screenshots/update-pr6-speetto-history-560.png"
+    ]
+  },
   "scope": "Local D1/workerd and Chromium only. No remote migration, deployment, secret changes or Claude API calls.",
   "check": {
     "command": "npm run check",

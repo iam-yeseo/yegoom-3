@@ -84,18 +84,18 @@ function DrawNumbers({ date, numbers }: { date: string; numbers: number[] }) {
   </div></section>;
 }
 /** Keep the server's order within each purchase day, newest days first. */
-function purchaseGroups<T extends { purchaseDate: string; prize: number | null }>(tickets: T[]) {
+function purchaseGroups<T extends { purchaseDate: string; prize: number | null }>(tickets: T[], visiblePrize = (ticket: T) => ticket.prize ?? 0) {
   const groups = new Map<string, { date: string; tickets: T[]; prize: number }>();
   for (const ticket of tickets) {
     let group = groups.get(ticket.purchaseDate);
     if (!group) { group = { date: ticket.purchaseDate, tickets: [], prize: 0 }; groups.set(ticket.purchaseDate, group); }
     group.tickets.push(ticket);
-    group.prize += ticket.prize ?? 0;
+    group.prize += visiblePrize(ticket);
   }
   return [...groups.values()].sort((left, right) => right.date.localeCompare(left.date));
 }
 function HistoryHeading({ date, tickets, prize }: { date: string; tickets: number; prize: number }) {
-  return <div className="shop-history-heading"><h3>{formatDate(date)} <span>· {tickets}장</span></h3><strong>당첨 +{prize.toLocaleString("ko-KR")}G</strong></div>;
+  return <div className="shop-history-heading"><h3>{formatDate(date)} <span>· {tickets}장</span></h3>{prize > 0 && <strong>당첨 +{prize.toLocaleString("ko-KR")}G</strong>}</div>;
 }
 const LottoTicketRow = memo(function LottoTicketRow({ ticket, number }: { ticket: LottoTicket; number: number }) {
   const settled = ticket.matches !== null;
@@ -225,7 +225,7 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
   const [error, setError] = useState("");
   const pendingClick = useRef(false);
   const tickets = shop.speetto?.tickets ?? [];
-  const groups = useMemo(() => purchaseGroups(tickets), [tickets]);
+  const groups = useMemo(() => purchaseGroups(tickets, entry => revealedIds.has(entry.id) ? entry.prize : 0), [tickets, revealedIds]);
   const ticket = tickets.find(entry => entry.id === selectedId) ?? tickets[0];
   const pending = shop.pending?.kind === "speetto" ? shop.pending.input as SpeettoPurchaseInput : null;
   function reveal(id: string) { setRevealedIds(previous => previous.has(id) ? previous : new Set(previous).add(id)); }

@@ -42,7 +42,7 @@ const speettoTickets = () => [
   speetto('00000000-0000-4000-8000-000000000101', TODAY, 16, true), speetto('00000000-0000-4000-8000-000000000102', TODAY, 12, false),
   speetto('00000000-0000-4000-8000-000000000103', '2026-11-03', 14, true), speetto('00000000-0000-4000-8000-000000000104', '2026-11-02', 9, false),
 ];
-async function fixture(page: Page) {
+async function fixture(page: Page, tickets: { lotto?: LottoTicket[]; speetto?: SpeettoTicket[] } = {}) {
   const initial = await signIn(page);
   let snapshot: BootstrapResponse = { ...initial, announcements: [], serverTime: NOW,
     user: { ...initial.user, gold: 12000 }, inventory: { lottoTickets: 3, speettoTickets: 3 },
@@ -53,13 +53,13 @@ async function fixture(page: Page) {
     if (route.request().method() !== 'GET') { writes.push(route.request().url()); return route.abort(); }
     const response: LottoResponse = { gold: snapshot.user.gold, inventory: snapshot.inventory, canPurchase: true, serverTime: snapshot.serverTime,
       lotto: { targetDrawDate: Date.parse(snapshot.serverTime) < Date.parse(`${TODAY}T17:30:00+09:00`) ? TODAY : '2026-11-05',
-        todayDraw: { date: TODAY, numbers: Date.parse(snapshot.serverTime) >= Date.parse(`${TODAY}T17:30:00+09:00`) ? WINNING : null }, tickets: lottoTickets() } };
+        todayDraw: { date: TODAY, numbers: Date.parse(snapshot.serverTime) >= Date.parse(`${TODAY}T17:30:00+09:00`) ? WINNING : null }, tickets: tickets.lotto ?? lottoTickets() } };
     return route.fulfill({ json: response });
   });
   await page.route('**/api/shop/speetto', route => {
     if (route.request().method() !== 'GET') { writes.push(route.request().url()); return route.abort(); }
     const response: SpeettoResponse = { gold: snapshot.user.gold, inventory: snapshot.inventory, canPurchase: true, serverTime: snapshot.serverTime,
-      speetto: { tickets: speettoTickets() } };
+      speetto: { tickets: tickets.speetto ?? speettoTickets() } };
     return route.fulfill({ json: response });
   });
   return {
@@ -141,8 +141,8 @@ for (const width of [390, 560]) test(`home notice, two-column purchases and comp
   await expect(lottoHistory.locator('.ticket')).toHaveCount(5);
   await expect(lottoHistory.locator('.ticket.card')).toHaveCount(0);
   await expect(lottoHistory.locator('[data-purchase-date="2026-11-04"]')).toContainText('3장');
-  await expect(lottoHistory.locator('[data-purchase-date="2026-11-04"]')).toContainText('5,000G');
-  await expect(lottoHistory.locator('[data-purchase-date="2026-11-03"]')).toContainText('5,000G');
+  await expect(lottoHistory.locator('[data-purchase-date="2026-11-04"] .shop-history-heading strong')).toHaveText('당첨 +5,000G');
+  await expect(lottoHistory.locator('[data-purchase-date="2026-11-03"] .shop-history-heading strong')).toHaveText('당첨 +5,000G');
   await expect(lottoHistory.locator('[data-ticket-id="lotto-tomorrow"] .ticket-date')).toContainText('11월 05일 추첨');
   await expect(lottoHistory.locator('[data-ticket-id="lotto-yesterday-late"] .ticket-result')).toContainText('1등 · +5,000G');
   await expect(lottoHistory.locator('[data-ticket-id="lotto-yesterday-late"] .ticket-date')).toContainText('11월 04일 추첨');
@@ -156,6 +156,7 @@ for (const width of [390, 560]) test(`home notice, two-column purchases and comp
   await expect(history.locator('.shop-history-group')).toHaveCount(3);
   await expect(history.locator('.speetto-ticket-row')).toHaveCount(4);
   await expect(history.getByText('긁기 전', { exact: true })).toHaveCount(4);
+  await expect(history.locator('.shop-history-heading strong')).toHaveCount(0);
   await capture(page, 'scratch-before', width, info);
   await scratchLine(page, [.15, .48], [.55, .48]);
   await expect(page.locator('.scratch-result')).toHaveText('?');
@@ -163,6 +164,8 @@ for (const width of [390, 560]) test(`home notice, two-column purchases and comp
   await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
   await expect(page.locator('.scratch-result')).toHaveText('당첨! +1,500G');
   await expect(history.locator('[data-ticket-id="00000000-0000-4000-8000-000000000101"]')).toContainText('1,500G');
+  await expect(history.locator('[data-purchase-date="2026-11-04"] .shop-history-heading strong')).toHaveText('당첨 +1,500G');
+  await expect(history.locator('[data-purchase-date="2026-11-03"] .shop-history-heading strong')).toHaveCount(0);
   await history.locator('[data-ticket-id="00000000-0000-4000-8000-000000000102"]').click();
   await readyCover(page);
   await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', '00000000-0000-4000-8000-000000000102');
@@ -170,10 +173,70 @@ for (const width of [390, 560]) test(`home notice, two-column purchases and comp
   await expect(page.locator('.scratch-result')).toHaveText('아쉽지만 낙첨이에요');
   await history.locator('[data-ticket-id="00000000-0000-4000-8000-000000000101"]').click();
   await expect(page.locator('.scratch-result')).toHaveText('당첨! +1,500G');
-  await expect(history.locator('[data-purchase-date="2026-11-04"]')).toContainText('1,500G');
+  await expect(history.locator('[data-purchase-date="2026-11-04"] .shop-history-heading strong')).toHaveText('당첨 +1,500G');
+  await expect(history.locator('[data-purchase-date="2026-11-03"] .speetto-ticket-row')).toContainText('긁기 전');
+  await expect(history.locator('[data-purchase-date="2026-11-03"] .shop-history-heading strong')).toHaveCount(0);
+  await expect(history.locator('[data-purchase-date="2026-11-02"] .shop-history-heading strong')).toHaveCount(0);
   await expect(history).toContainText('최근 7일 기록만 보여요');
   await capture(page, 'speetto-history', width, info);
   await expect(page.locator('.game-toolbar .gold')).toContainText(data.snapshot.user.gold.toLocaleString('ko-KR'));
+  expect(data.writes).toEqual([]);
+});
+
+test('history headings hide zero totals and count only revealed speetto wins', async ({ page }) => {
+  const firstWin = '00000000-0000-4000-8000-000000000101';
+  const loss = '00000000-0000-4000-8000-000000000102';
+  const secondWin = '00000000-0000-4000-8000-000000000105';
+  const olderLoss = '00000000-0000-4000-8000-000000000104';
+  const data = await fixture(page, {
+    lotto: [
+      lotto('lotto-pending', TODAY, '2026-11-05', 18, [21, 22, 23, 24, 25], null, null, null),
+      lotto('lotto-lost', '2026-11-03', '2026-11-03', 15, [11, 12, 13, 14, 15], 0, null, 0),
+    ],
+    speetto: [speetto(firstWin, TODAY, 16, true), speetto(loss, TODAY, 12, false), speetto(secondWin, TODAY, 10, true),
+      speetto(olderLoss, '2026-11-03', 9, false)],
+  });
+  await page.goto('/#/shop/lotto');
+  const lottoHistory = page.locator('.lotto-tickets.shop-ticket-history');
+  await expect(lottoHistory.locator('.shop-history-group')).toHaveCount(2);
+  await expect(lottoHistory.locator('.shop-history-heading strong')).toHaveCount(0);
+  await expect(lottoHistory.locator('[data-ticket-id="lotto-pending"] .ticket-result')).toHaveText('추첨 대기');
+  await expect(lottoHistory.locator('[data-ticket-id="lotto-lost"] .ticket-result')).toHaveText('낙첨');
+
+  await go(page, '/shop/speetto');
+  await readyCover(page);
+  const history = page.locator('.speetto-history.shop-ticket-history');
+  const todayTotal = history.locator(`[data-purchase-date="${TODAY}"] .shop-history-heading strong`);
+  const row = (id: string) => history.locator(`[data-ticket-id="${id}"]`);
+  const reveal = async (id: string) => {
+    await row(id).click();
+    await readyCover(page);
+    await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
+  };
+  await expect(history.getByText('긁기 전', { exact: true })).toHaveCount(4);
+  await expect(history.locator('.shop-history-heading strong')).toHaveCount(0);
+  await reveal(loss);
+  await expect(row(loss)).toContainText('낙첨');
+  await expect(todayTotal).toHaveCount(0);
+  await expect(row(firstWin)).toContainText('긁기 전');
+  await expect(row(secondWin)).toContainText('긁기 전');
+
+  await reveal(firstWin);
+  await expect(todayTotal).toHaveText('당첨 +1,500G');
+  await expect(row(secondWin)).toContainText('긁기 전');
+  await row(secondWin).click();
+  await readyCover(page);
+  await expect(page.locator('.scratch-result')).toHaveText('?');
+  await expect(todayTotal).toHaveText('당첨 +1,500G');
+  await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
+  await expect(todayTotal).toHaveText('당첨 +3,000G');
+  await row(firstWin).click();
+  await expect(page.locator('.scratch-result')).toHaveText('당첨! +1,500G');
+  await expect(todayTotal).toHaveText('당첨 +3,000G');
+
+  await reveal(olderLoss);
+  await expect(row(olderLoss)).toContainText('낙첨');
+  await expect(history.locator('[data-purchase-date="2026-11-03"] .shop-history-heading strong')).toHaveCount(0);
   expect(data.writes).toEqual([]);
 });
 
