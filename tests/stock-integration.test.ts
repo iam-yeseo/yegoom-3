@@ -246,14 +246,66 @@ describe('stock market API', () => {
       if (key === 'prepare') return (sql: string) => { statements++; return target.prepare(sql.replaceAll("unixepoch('now') * 1000", String(now))); };
       return typeof value === 'function' ? value.bind(target) : value;
     } }) as unknown as D1Database;
-    await readStockMarket(counted, SECRET, { id: 'min', role: 'player' }, now);
-    expect(statements).toBeLessThanOrEqual(9);
+    await readStockMarket(counted, SECRET, { id: 'min', role: 'player', username: 'min' }, now);
+    expect(statements).toBeLessThanOrEqual(12);
     statements = 0;
-    const view = await readStockMarket(counted, SECRET, { id: 'min', role: 'player' }, now) as StockMarketView;
-    expect(statements).toBe(5); // state + holidays, then holdings + news + gold
+    const view = await readStockMarket(counted, SECRET, { id: 'min', role: 'player', username: 'min' }, now) as StockMarketView;
+    expect(statements).toBe(7); // state + holidays + new game results + pending events, then holdings + news + gold
     statements = 0;
-    expect(await readStockMarket(counted, SECRET, { id: 'min', role: 'player' }, now, view.version)).toMatchObject({ unchanged: true });
-    expect(statements).toBe(2);
+    expect(await readStockMarket(counted, SECRET, { id: 'min', role: 'player', username: 'min' }, now, view.version)).toMatchObject({ unchanged: true });
+    expect(statements).toBe(4);
+  });
+
+  it('turns a result published in market hours into an immediate move with a news item, once', async () => {
+    const market = await Market.create(yesterdayClose);
+    for (const [date, answer] of [['2026-11-02', '08:00:00'], ['2026-11-03', '08:10:00'], ['2026-11-04', '07:50:00']]) {
+      await market.db.prepare('INSERT INTO game_rounds (game_id, round_date, answer, revealed_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .bind('wake', date, answer, kst(date, '08:00'), kst(date, '08:00')).run();
+    }
+    const tenAm = await market.request<StockMarketView>(kst('2026-11-05', '10:00') + 1000, 'siwon', '/api/stock');
+    const before = tenAm.data.stocks.find(stock => stock.ticker === 'MINJ')!;
+    const revealed = kst('2026-11-05', '10:04') + 30_000;
+    await market.db.prepare('INSERT INTO game_rounds (game_id, round_date, answer, revealed_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .bind('wake', '2026-11-05', '07:30:00', revealed, revealed).run();
+    const now = kst('2026-11-05', '10:05');
+    const view = await market.request<StockMarketView>(now, 'siwon', '/api/stock');
+    const after = view.data.stocks.find(stock => stock.ticker === 'MINJ')!;
+    expect(after.price).toBe(Math.max(Math.ceil(before.prevClose * 0.85), Math.min(Math.floor(before.prevClose * 1.15), Math.round(before.price * 1.04))));
+    expect(after.version).toBe(before.version + 1);
+    expect(view.data.news[0]).toMatchObject({ kind: 'game', ticker: 'MINJ', effectBp: 400, publishAt: new Date(revealed).toISOString(),
+      headline: '[속보] min님 07시 30분 기상, MJ일렉트로닉스 들썩' });
+    expect(await market.db.prepare("SELECT applied_at FROM stock_events WHERE id = 'game:wake:2026-11-05'").first('applied_at')).toBe(revealed);
+    // The three history rounds (within the 4-day lookback) were applied at the 10:00 read.
+    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_events WHERE applied_at IS NOT NULL').first('n')).toBe(4);
+    await market.request(now + 1000, 'siwon', '/api/stock');
+    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_events').first('n')).toBe(4);
+    expect(await market.db.prepare("SELECT COUNT(*) AS n FROM stock_news WHERE kind = 'game'").first('n')).toBe(4);
+  });
+
+  it('applies results published after the close at the next open, and locks the author until then', async () => {
+    const market = await Market.create(kst('2026-11-05', '17:50'));
+    const published = kst('2026-11-05', '18:40');
+    await market.db.prepare("INSERT INTO game_rounds (game_id, round_date, answer, revealed_at, updated_at) VALUES ('offwork', '2026-11-05', '17:00:00', ?, ?)")
+      .bind(published, published).run();
+    await market.request(kst('2026-11-05', '19:00'), 'siwon', '/api/stock');
+    expect(await market.db.prepare("SELECT apply_at, applied_at, effect_bp FROM stock_events WHERE id = 'game:offwork:2026-11-05'").first())
+      .toEqual({ apply_at: published, applied_at: null, effect_bp: 800 });
+    const blocked = await market.request<StockDetailView>(kst('2026-11-06', '08:59'), 'siwon', '/api/stock/SIWN');
+    expect(blocked.data.tradeBlock).toBe('오늘은 출제자라서 거래할 수 없어요 · 결과 반영 후 거래 가능');
+    expect((await market.request<StockDetailView>(kst('2026-11-06', '08:59'), 'min', '/api/stock/SIWN')).data.tradeBlock).toBeNull();
+    const open = await market.request<StockDetailView>(kst('2026-11-06', '09:00') + 1000, 'siwon', '/api/stock/SIWN');
+    expect(open.data.news[0]).toMatchObject({ kind: 'game', publishAt: new Date(kst('2026-11-06', '09:00')).toISOString() });
+    expect(open.data.stock.dayOpen).toBe(Math.min(Math.floor(open.data.stock.prevClose * 1.15), Math.round(open.data.stock.prevClose * 1.08)));
+    // Friday's own round is not answered yet: siwon stays locked; the game OFF unlocks.
+    expect(open.data.tradeBlock).not.toBeNull();
+    const trade = await market.request<{ error: { code: string } }>(kst('2026-11-06', '09:00') + 1000, 'siwon', '/api/stock/trade', 'POST',
+      { requestId: 'author', ticker: 'SIWN', side: 'buy', quantity: 1, expectedVersion: open.data.stock.version });
+    expect(trade.data.error.code).toBe('AUTHOR_LOCKED');
+    await market.db.prepare("INSERT INTO game_settings (game_id, effective_from, settings_json, created_at, created_by) VALUES ('offwork', '2026-11-06', ?, 'x', 'admin')")
+      .bind(JSON.stringify({ enabled: false, scoreTable: [{ maxDifference: 0, points: 1 }], participationGold: 0, firstGold: 0, deadline: '17:00:00', revealTime: null })).run();
+    const off = await market.request<StockDetailView>(kst('2026-11-06', '09:00') + 1000, 'siwon', '/api/stock/SIWN');
+    expect(off.data.tradeBlock).toBeNull();
+    await market.expectBalanced();
   });
 
   it('returns 503 until the seed secret is configured', async () => {

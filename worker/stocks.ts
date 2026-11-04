@@ -1,9 +1,13 @@
 import { STOCK_RULES, isTicker, stockInfo, type Ticker } from '../shared/stocks';
 import { isTradingDay, isWeekend, kstDateOf, kstTimestamp, marketStatus, tradesOn } from '../shared/market-calendar';
-import { advanceMarket, advanceStart, latestTickAt, marketVersion, nextTickAt, pendingTicks, type StockRow, type StockStatus } from '../shared/stock-market';
+import { advanceMarket, advanceStart, latestTickAt, marketSteps, marketVersion, nextTickAt, type PendingEvent, type StockRow, type StockStatus } from '../shared/stock-market';
+import { GAME_STOCK, STOCK_GAME_RULES, gameArticle, gameEffectBp, gameForTicker, isAuthorOf, usualTime } from '../shared/stock-games';
+import { GAME_RULES } from '../shared/balance';
+import type { GameId } from '../shared/types';
+import { readGameRules } from './game-settings';
 import type { Candle, MarketClock, MarketHoliday, StockDetailView, StockHomeSummary, StockMarketView, StockNewsItem, StockNewsKind, StockNewsPage, StockQuote, StockTradeResponse, StockTradeView, StockUnchanged } from '../shared/stock-types';
 
-export interface StockUser { id: string; role: 'player' | 'admin' }
+export interface StockUser { id: string; role: 'player' | 'admin'; username: string }
 export class StockError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
 }
@@ -52,25 +56,67 @@ export async function readHolidays(db: D1Database, from: string): Promise<Map<st
 }
 
 interface Market { rows: StockRow[]; holidays: Map<string, string> }
+interface EventRow { id: string; ticker: Ticker; kind: string; effectBp: number; applyAt: number; context_json: string }
+interface PublishedRound { game_id: GameId; round_date: string; answer: string; published_at: number }
+const eventOf = (row: EventRow): PendingEvent => {
+  const context = JSON.parse(row.context_json || '{}') as { headline?: string; body?: string };
+  return { id: row.id, ticker: row.ticker, kind: row.kind, effectBp: row.effectBp, applyAt: row.applyAt, headline: context.headline, body: context.body };
+};
+/** Turn newly published game results into price events (§7). The event time is
+ * the publication time: during market hours the stock moves at that instant,
+ * otherwise at the next open. Runs on any stock read, the Cron and right after
+ * a game write, so a failed run is simply retried. */
+async function createGameEvents(db: D1Database, rounds: readonly PublishedRound[], now: number): Promise<void> {
+  const inserts: D1PreparedStatement[] = [];
+  for (const round of rounds) {
+    const author = GAME_RULES[round.game_id].author;
+    const [history, person] = await db.batch([
+      db.prepare(`SELECT answer FROM game_rounds WHERE game_id = ? AND round_date < ? AND answer IS NOT NULL
+        AND (revealed_at IS NOT NULL OR reveal_at <= ?) ORDER BY round_date DESC LIMIT ?`)
+        .bind(round.game_id, round.round_date, now, STOCK_GAME_RULES.baselineRounds),
+      db.prepare('SELECT display_name FROM users WHERE username = ? COLLATE NOCASE').bind(author),
+    ]);
+    const usual = round.game_id === 'luck' ? null : usualTime((history!.results as { answer: string }[]).map(row => row.answer), round.game_id);
+    const effectBp = gameEffectBp(round.game_id, round.answer, usual ?? undefined);
+    const name = (person!.results[0] as { display_name: string } | undefined)?.display_name ?? author;
+    const article = gameArticle(round.game_id, round.answer, name, usual, effectBp);
+    inserts.push(db.prepare(`INSERT OR IGNORE INTO stock_events (id, ticker, kind, effect_bp, apply_at, context_json, created_at)
+      VALUES (?, ?, 'game', ?, ?, ?, ?)`).bind(`game:${round.game_id}:${round.round_date}`, GAME_STOCK[round.game_id], effectBp, round.published_at,
+      JSON.stringify({ game: round.game_id, date: round.round_date, answer: round.answer, usual, ...article }), new Date(now).toISOString()));
+  }
+  await db.batch(inserts);
+}
 /** Bring prices up to `now`: replays every missing tick (at most 60 per call) in
  * one batch. Every dependent write is guarded by this run's writer token, so a
  * concurrent run that lost the race changes nothing. */
 export async function advanceStocks(db: D1Database, secret: string, now: number): Promise<Market> {
   const holidayFrom = kstDateOf(now - 40 * 86_400_000);
-  const [stateResult, holidayResult] = await db.batch([
+  const pendingEvents = db.prepare(`SELECT id, ticker, kind, effect_bp AS effectBp, apply_at AS applyAt, context_json FROM stock_events
+    WHERE applied_at IS NULL AND apply_at <= ? ORDER BY apply_at, id`).bind(now);
+  const [stateResult, holidayResult, roundResult, eventResult] = await db.batch([
     db.prepare('SELECT * FROM stock_state ORDER BY rowid'),
     db.prepare('SELECT date, reason FROM market_holidays WHERE date >= ? ORDER BY date').bind(holidayFrom),
+    // Published game results that have no stock event yet (idempotent by id).
+    db.prepare(`SELECT r.game_id, r.round_date, r.answer, COALESCE(r.revealed_at, r.reveal_at) AS published_at FROM game_rounds r
+      WHERE r.answer IS NOT NULL AND (r.revealed_at IS NOT NULL OR r.reveal_at <= ?) AND r.round_date >= ?
+        AND NOT EXISTS (SELECT 1 FROM stock_events e WHERE e.id = 'game:' || r.game_id || ':' || r.round_date)`)
+      .bind(now, kstDateOf(now - STOCK_GAME_RULES.lookbackDays * 86_400_000)),
+    pendingEvents,
   ]);
   const rows = (stateResult!.results as StateRow[]).map(fromState);
   const holidays = new Map((holidayResult!.results as MarketHoliday[]).map(row => [row.date, row.reason]));
   if (!rows.length) throw new StockError(503, 'STOCK_UNAVAILABLE', '주식 시장을 준비하고 있어요. 잠시 뒤 다시 와 주세요.');
+  let eventRows = eventResult!.results as EventRow[];
+  if (roundResult!.results.length) {
+    await createGameEvents(db, roundResult!.results as PublishedRound[], now);
+    eventRows = (await pendingEvents.all<EventRow>()).results;
+  }
+  const events = eventRows.map(eventOf);
   const lastTickAt = Math.min(...rows.map(row => row.lastTickAt));
-  const ticks = pendingTicks(advanceStart(lastTickAt, now), now, holidays);
+  const ticks = marketSteps(advanceStart(lastTickAt, now), now, holidays, events);
   if (!ticks.length) return { rows, holidays };
-  const events = await db.prepare('SELECT id, ticker, effect_bp AS effectBp, apply_at AS applyAt FROM stock_events WHERE applied_at IS NULL AND apply_at <= ? ORDER BY apply_at, id')
-    .bind(ticks[ticks.length - 1]!.at).all<{ id: string; ticker: Ticker; effectBp: number; applyAt: number }>();
   const seeds = await daySeeds(secret, [...new Set(ticks.map(tick => tick.date))]);
-  const result = advanceMarket(rows, ticks, date => seeds.get(date)!, events.results, holidays);
+  const result = advanceMarket(rows, ticks, date => seeds.get(date)!, events, holidays);
   const token = crypto.randomUUID();
   const createdAt = new Date(now).toISOString();
   const won = 'EXISTS (SELECT 1 FROM stock_state WHERE writer = ?)';
@@ -90,8 +136,9 @@ export async function advanceStocks(db: D1Database, secret: string, now: number)
   if (result.daily.length) statements.push(db.prepare(`INSERT OR REPLACE INTO stock_daily (ticker, date, open, high, low, close)
     SELECT ${['ticker', 'date', 'open', 'high', 'low', 'close'].map(field).join(', ')} FROM json_each(?) WHERE ${won}`)
     .bind(JSON.stringify(result.daily), token));
-  if (result.news.length) statements.push(db.prepare(`INSERT OR IGNORE INTO stock_news (id, ticker, kind, publish_at, headline, body, effect_bp, source, created_at)
-    SELECT ${['id', 'ticker', 'kind', 'publishAt', 'headline', 'body', 'effectBp'].map(field).join(', ')}, 'template', ? FROM json_each(?) WHERE ${won}`)
+  if (result.news.length) statements.push(db.prepare(`INSERT OR IGNORE INTO stock_news (id, event_id, ticker, kind, publish_at, headline, body, effect_bp, source, created_at)
+    SELECT ${field('id')}, CASE WHEN ${field('id')} LIKE 'event:%' THEN substr(${field('id')}, 7) END,
+      ${['ticker', 'kind', 'publishAt', 'headline', 'body', 'effectBp'].map(field).join(', ')}, 'template', ? FROM json_each(?) WHERE ${won}`)
     .bind(createdAt, JSON.stringify(result.news), token));
   if (result.appliedEvents.length) statements.push(db.prepare(`UPDATE stock_events SET applied_at = j.at
     FROM (SELECT ${field('id')} AS id, ${field('at')} AS at FROM json_each(?)) AS j
@@ -116,6 +163,23 @@ export async function advanceStocks(db: D1Database, secret: string, now: number)
   // Another run advanced first; its result is identical for the same ticks.
   const current = await db.prepare('SELECT * FROM stock_state ORDER BY rowid').all<StateRow>();
   return { rows: current.results.map(fromState), holidays };
+}
+
+export const AUTHOR_LOCK_MESSAGE = '오늘은 출제자라서 거래할 수 없어요 · 결과 반영 후 거래 가능';
+/** §7-3: a game's author cannot trade its stock from 00:00 of a game day until
+ * that day's result has moved the price (often the next trading day's open). */
+async function authorLocked(db: D1Database, user: StockUser, ticker: Ticker, now: number): Promise<boolean> {
+  const game = gameForTicker(ticker);
+  if (!game || user.role !== 'player' || !isAuthorOf(user.username, game)) return false;
+  const today = kstDateOf(now);
+  const row = (await db.prepare(`SELECT
+      EXISTS (SELECT 1 FROM stock_events WHERE ticker = ? AND kind = 'game' AND applied_at IS NULL) AS pending,
+      EXISTS (SELECT 1 FROM stock_events WHERE id = ? AND applied_at IS NOT NULL) AS applied,
+      (SELECT settings_json FROM game_rounds WHERE game_id = ? AND round_date = ?) AS snapshot`)
+    .bind(ticker, `game:${game}:${today}`, game, today).first<{ pending: number; applied: number; snapshot: string | null }>())!;
+  if (row.pending) return true;
+  if (row.applied) return false;
+  return (await readGameRules(db, game, today, row.snapshot)).enabled;
 }
 
 function clock(now: number, holidays: ReadonlyMap<string, string>): MarketClock {
@@ -167,7 +231,8 @@ export async function readStockDetail(db: D1Database, secret: string, user: Stoc
     market, version: marketVersion(rows), stock: quote(row, market.date, holding!.results[0] as HoldingRow | undefined),
     ticks: ticks!.results as { at: number; price: number }[], daily: (daily!.results as Candle[]).reverse(),
     news: (news!.results as NewsRow[]).map(newsView), trades: (trades!.results as TradeRow[]).map(tradeView),
-    gold: (gold!.results[0] as { gold: number } | undefined)?.gold ?? 0, canTrade: user.role === 'player', tradeBlock: null,
+    gold: (gold!.results[0] as { gold: number } | undefined)?.gold ?? 0, canTrade: user.role === 'player',
+    tradeBlock: await authorLocked(db, user, ticker, now) ? AUTHOR_LOCK_MESSAGE : null,
     serverTime: new Date(now).toISOString(),
   };
 }
@@ -228,6 +293,7 @@ export async function tradeStock(db: D1Database, secret: string, user: StockUser
   if (!status.open) throw new StockError(409, 'MARKET_CLOSED', status.holiday ? `오늘은 ${status.holiday} 휴장이에요.` : '지금은 장이 닫혀 있어요.');
   if (!tradesOn(order.ticker, date)) throw new StockError(409, 'TRADING_HALTED', '겨울 근무 중이라 오늘은 거래할 수 없어요.');
   if (row.status === 'delisted') throw new StockError(409, 'DELISTED', '상장폐지된 종목은 거래할 수 없어요.');
+  if (await authorLocked(db, user, order.ticker, now)) throw new StockError(409, 'AUTHOR_LOCKED', AUTHOR_LOCK_MESSAGE);
   if (row.version !== order.expectedVersion) {
     throw new StockError(409, 'PRICE_CHANGED', `가격이 ${row.price.toLocaleString('ko-KR')}G로 바뀌었어요. 확인하고 다시 주문해 주세요.`);
   }

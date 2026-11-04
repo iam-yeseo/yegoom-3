@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { STOCKS, STOCK_RULES, tradeFee } from '../shared/stocks';
 import { addTradingDays, holidayName, isTradingDay, kstTimestamp, marketStatus, tickTimes, tradesOn, TICKS_PER_DAY } from '../shared/market-calendar';
 import { clampToLimit, stepPrice } from '../shared/stock-engine';
-import { advanceMarket, advanceStart, initialRows, nextTickAt, pendingTicks, scheduledNews, type StockRow } from '../shared/stock-market';
+import { advanceMarket, advanceStart, initialRows, marketSteps, nextTickAt, pendingTicks, scheduledMosquito, scheduledNews, type StockRow } from '../shared/stock-market';
+import { gameArticle, gameEffectBp, usualTime } from '../shared/stock-games';
+import { applyEffect } from '../shared/stock-engine';
 import { newsArticle, NEWS_TEMPLATES, subjectParticle } from '../shared/stock-news-templates';
 import { stockCronDue } from '../worker/stocks';
 
@@ -189,5 +191,59 @@ describe('template news', () => {
     expect(newsArticle('YEGM', true, 7).headline).toContain('예굼');
     expect(subjectParticle('예굼')).toBe('이');
     expect(subjectParticle('에바참치')).toBe('가');
+  });
+});
+
+describe('game linkage (PR 11)', () => {
+  it('compares a result with the usual time: 30 minutes earlier is +4%, capped at ±8%; luck maps 0–100 to ∓8%', () => {
+    expect(usualTime(['08:10:00', '07:50:00'], 'wake')).toBe('08:00:00'); // fewer than 3 → default
+    expect(usualTime(['07:00:00', '07:30:00', '09:00:00', '07:20:00'], 'wake')).toBe('07:25:00');
+    expect(usualTime(['18:00:00', '19:00:00', '18:30:00'], 'offwork')).toBe('18:30:00');
+    expect(gameEffectBp('wake', '07:30:00', '08:00:00')).toBe(400);
+    expect(gameEffectBp('wake', '08:15:00', '08:00:00')).toBe(-200);
+    expect(gameEffectBp('offwork', '15:00:00', '18:00:00')).toBe(800);
+    expect(gameEffectBp('offwork', '23:00:00', '18:00:00')).toBe(-800);
+    expect(gameEffectBp('luck', '100')).toBe(800);
+    expect(gameEffectBp('luck', '50')).toBe(0);
+    expect(gameEffectBp('luck', '0')).toBe(-800);
+    const article = gameArticle('wake', '07:42:10', '민', '08:20:00', 507);
+    expect(article.headline).toBe('[속보] 민님 07시 42분 기상, MJ일렉트로닉스 들썩');
+    expect(article.body).toContain('평소(08시 20분)보다 38분 일찍');
+  });
+  it('moves a stock the instant an event is published in market hours, and at the next open otherwise', () => {
+    const start = at('2026-11-05', '10:00');
+    const rows = advanceMarket(initialRows(at('2026-11-04', '18:00')), pendingTicks(at('2026-11-04', '18:00'), start, none), seedOf, [], none).rows;
+    const event = { id: 'game:wake:2026-11-05', ticker: 'MINJ' as const, effectBp: 400, applyAt: at('2026-11-05', '10:04') + 17_000, kind: 'game', headline: '기상', body: '본문' };
+    const steps = marketSteps(start, at('2026-11-05', '10:05'), none, [event]);
+    expect(steps).toEqual([{ at: event.applyAt, date: '2026-11-05', index: -1, ticker: 'MINJ' }]);
+    const before = rows.find(row => row.ticker === 'MINJ')!;
+    const moved = advanceMarket(rows, steps, seedOf, [event], none);
+    const after = moved.rows.find(row => row.ticker === 'MINJ')!;
+    expect(after.price).toBe(applyEffect(before.price, before.prevClose, 0.04));
+    expect(after.version).toBe(before.version + 1);
+    expect(moved.rows.find(row => row.ticker === 'YKHX')!.version).toBe(rows.find(row => row.ticker === 'YKHX')!.version);
+    expect(moved.news).toEqual([{ id: `event:${event.id}`, ticker: 'MINJ', kind: 'game', publishAt: event.applyAt, headline: '기상', body: '본문', effectBp: 400 }]);
+    expect(moved.appliedEvents).toEqual([{ id: event.id, at: event.applyAt }]);
+    // Published after the close: no step; the next open applies it.
+    const evening = { ...event, applyAt: at('2026-11-05', '18:30') };
+    expect(marketSteps(at('2026-11-05', '18:00'), at('2026-11-05', '23:00'), none, [evening])).toEqual([]);
+    const open = advanceMarket(rows, pendingTicks(at('2026-11-05', '18:00'), at('2026-11-06', '09:00'), none), seedOf, [evening], none);
+    expect(open.appliedEvents).toEqual([{ id: event.id, at: at('2026-11-06', '09:00') }]);
+  });
+  it('hunts mosquitoes 0–2 times on YEGM trading days, succeeding about 55% of the time', () => {
+    let hunts = 0, wins = 0;
+    for (let day = 0; day < 2000; day++) {
+      const items = scheduledMosquito(`m${day}`, '2026-11-05');
+      expect(items.length).toBeLessThanOrEqual(2);
+      for (const item of items) {
+        hunts++; if (item.success) wins++;
+        expect(Math.abs(item.effectBp)).toBeGreaterThanOrEqual(500);
+        expect(Math.abs(item.effectBp)).toBeLessThanOrEqual(1200);
+        expect(item.success).toBe(item.effectBp > 0);
+      }
+    }
+    expect(wins / hunts).toBeGreaterThan(0.5);
+    expect(wins / hunts).toBeLessThan(0.6);
+    expect(scheduledMosquito('x', '2026-12-03')).toEqual([]); // winter Thursday: YEGM is halted
   });
 });
