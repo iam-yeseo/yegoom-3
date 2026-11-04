@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { CatchmindGalleryResponse, CatchmindGalleryRound, CatchmindPlayer } from "../../shared/types";
 import { useCatchmind } from "../catchmind";
-import { honorific, Avatar, Chevron, Toolbar, useDisplayNameLookup } from "../components/UI";
+import { honorific, Avatar, PersonName, Chevron, Toolbar, useDisplayNameLookup } from "../components/UI";
 import { formatDateTime } from "../format";
 import { openSheet } from "../motion";
 import "../preview.css";
@@ -11,7 +11,7 @@ const emptyMessage = "아직 완성된 그림이 없어요. 첫 그림의 주인
 function Person({ player, demo }: { player: CatchmindPlayer; demo: boolean }) {
   const displayNameOf = useDisplayNameLookup();
   return <span className="cm-history-person"><Avatar username={player.username} userId={player.id} photoVersion={player.photoVersion}
-    artKey={demo ? undefined : player.character} size={28} /><span>{honorific(displayNameOf(player.username, player.displayName))}</span></span>;
+    artKey={demo ? undefined : player.character} size={28} /><PersonName username={player.username} fallback={player.displayName} /></span>;
 }
 function Details({ round, demo }: { round: CatchmindGalleryRound; demo: boolean }) {
   return <dl className="cm-history-details">

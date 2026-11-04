@@ -1,4 +1,4 @@
-import type { AttendanceState, BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, LedgerEntry } from '../shared/types';
+import type { AttendanceState, BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, LedgerEntry, NicknameTagView } from '../shared/types';
 import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, attendanceTickets, CATCHMIND_RULES } from '../shared/balance';
 import { defaultPredictionRules, predictionPointsForRules } from '../shared/game-settings';
 import type { AdminState, PredictionRules } from '../shared/admin';
@@ -9,6 +9,8 @@ import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readKujiSummary, readLottoNotice, settleDueLotto, ShopError, shopRoute } from './shop';
 import { RankingError, readRanking } from './ranking';
+import { equipTag, tagShopRoute } from './nickname-tags';
+import type { NicknameTagGrade } from '../shared/nickname-tags';
 import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary, readRemainingWords } from './catchmind';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
@@ -24,7 +26,7 @@ interface UserRow { id: string; username: string; display_name: string; password
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null; settings_json: string | null }
 interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null; photo_version: number | null }
 interface ProfileRow { id: string; username: string; display_name: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
-interface BootstrapProfile extends ProfileRow { gold: number; weeklyScore: number; lottoTickets: number; speettoTickets: number }
+interface BootstrapProfile extends ProfileRow { gold: number; weeklyScore: number; lottoTickets: number; speettoTickets: number; tag_grade: NicknameTagGrade | null; tag_text: string | null }
 interface UnsettledRound extends RoundRow { game_id: GameId; round_date: string }
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
@@ -84,17 +86,22 @@ async function requireUser(request: Request, env: Env, now: number): Promise<Use
   if (!user) throw new HttpError(401, 'UNAUTHENTICATED', '다시 로그인해 주세요.');
   return user;
 }
-function userView(user: UserRow, balance: { gold: number; weeklyScore: number; photo_version: number | null } | null | undefined): User {
+/** The equipped tag joined on the same row; no extra query. */
+const tagOf = (row: { tag_grade: NicknameTagGrade | null; tag_text: string | null } | null | undefined): NicknameTagView | null =>
+  row?.tag_grade && row.tag_text ? { grade: row.tag_grade, text: row.tag_text } : null;
+const EQUIPPED_TAG_JOIN = 'LEFT JOIN nickname_tags t ON t.user_id = u.id AND t.equipped = 1';
+function userView(user: UserRow, balance: { gold: number; weeklyScore: number; photo_version: number | null; tag_grade: NicknameTagGrade | null; tag_text: string | null } | null | undefined): User {
   return { id: user.id, username: user.username, displayName: user.display_name, role: user.role,
     gold: balance?.gold ?? 0, weeklyScore: balance?.weeklyScore ?? 0, character: user.character,
-    photoVersion: balance?.photo_version ?? null };
+    photoVersion: balance?.photo_version ?? null, tag: tagOf(balance) };
 }
 async function publicUser(db: D1Database, user: UserRow, now: Date): Promise<User> {
   const balance = await db.prepare(`SELECT COALESCE(b.gold, 0) AS gold,
       COALESCE((SELECT SUM(amount) FROM ledger WHERE currency = 'score' AND week_start = ? AND user_id = u.id), 0) AS weeklyScore,
-      CASE WHEN p.user_id IS NOT NULL THEN u.photo_version ELSE NULL END AS photo_version
-    FROM users u LEFT JOIN user_balances b ON b.user_id = u.id LEFT JOIN user_photos p ON p.user_id = u.id
-    WHERE u.id = ?`).bind(weekStart(now), user.id).first<Pick<BootstrapProfile, 'gold' | 'weeklyScore' | 'photo_version'>>();
+      CASE WHEN p.user_id IS NOT NULL THEN u.photo_version ELSE NULL END AS photo_version,
+      t.grade AS tag_grade, t.text AS tag_text
+    FROM users u LEFT JOIN user_balances b ON b.user_id = u.id LEFT JOIN user_photos p ON p.user_id = u.id ${EQUIPPED_TAG_JOIN}
+    WHERE u.id = ?`).bind(weekStart(now), user.id).first<Pick<BootstrapProfile, 'gold' | 'weeklyScore' | 'photo_version' | 'tag_grade' | 'tag_text'>>();
   return userView(user, balance);
 }
 async function consumeLoginLimit(db: D1Database, username: string, ip: string, now: number): Promise<void> {
@@ -445,8 +452,9 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   const profiles = env.DB.prepare(`SELECT u.id, u.username, u.display_name, u.role, u.active, u.character,
       CASE WHEN p.user_id IS NOT NULL THEN u.photo_version ELSE NULL END AS photo_version,
       COALESCE(b.gold, 0) AS gold, COALESCE(b.lotto_tickets, 0) AS lottoTickets, COALESCE(b.speetto_tickets, 0) AS speettoTickets,
-      COALESCE((SELECT SUM(amount) FROM ledger WHERE currency = 'score' AND week_start = ? AND user_id = u.id), 0) AS weeklyScore
-    FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id
+      COALESCE((SELECT SUM(amount) FROM ledger WHERE currency = 'score' AND week_start = ? AND user_id = u.id), 0) AS weeklyScore,
+      t.grade AS tag_grade, t.text AS tag_text
+    FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id ${EQUIPPED_TAG_JOIN}
     WHERE (u.role = 'player' AND u.active = 1) OR u.id = ? OR u.username IN (?, ?, ?) ORDER BY u.username`)
     .bind(weekStart(now), user.id, ...GAME_IDS.map(id => GAME_RULES[id].author)).all<BootstrapProfile>().then(result => result.results);
   const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, launchGift, announcements, lottoNotice] = await Promise.all([
@@ -466,7 +474,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   const players = roster.filter(player => player.role === 'player' && player.active === 1)
     .sort((left, right) => right.weeklyScore - left.weeklyScore)
     .map(player => ({ id: player.id, username: player.username, displayName: player.display_name,
-      character: player.character ?? defaultCharacter(player.username), photoVersion: player.photo_version, weeklyScore: player.weeklyScore }));
+      character: player.character ?? defaultCharacter(player.username), photoVersion: player.photo_version, weeklyScore: player.weeklyScore, tag: tagOf(player) }));
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
     inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0 },
@@ -702,6 +710,14 @@ async function api(request: Request, env: Env): Promise<Response> {
       throw new HttpError(400, 'INVALID_VERSION', '판 버전을 확인해 주세요.');
     }
     return json(await catchmindRoute(env.DB, user, catchmindMatch[1], request.method, input, new Date(), rawSince === null ? undefined : Number(rawSince)));
+  }
+  if (url.pathname === '/api/shop/tag') {
+    const input = request.method === 'POST' ? await body(request) : undefined;
+    return json(await tagShopRoute(env.DB, user, request.method, input, new Date()));
+  }
+  if (url.pathname === '/api/me/nickname-tag') {
+    if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return json(await equipTag(env.DB, user, await body(request), new Date()));
   }
   if (url.pathname === '/api/shop' || url.pathname.startsWith('/api/shop/')) {
     if (request.method === 'POST' && user.role !== 'player') throw new HttpError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');

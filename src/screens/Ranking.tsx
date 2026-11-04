@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { plainName, Avatar, CharacterSprite, Segmented, Toolbar, preloadSprites, useCharacter, useDisplayNameLookup } from "../components/UI";
+import { plainName, Avatar, PersonName, CharacterSprite, Segmented, Toolbar, preloadSprites, useCharacter, useDisplayNameLookup } from "../components/UI";
 import { HistoryRow } from "../components/HistoryRow";
 import { api } from "../api";
 import { formatDateTime } from "../format";
@@ -160,7 +160,7 @@ function ScoreHistory({ entries, nextBefore, loading, onMore }: {
     <div className="card-head"><h2>점수 획득 기록</h2></div>
     {entries.length ? entries.map(entry => <HistoryRow key={entry.id}
       leading={<Avatar userId={entry.userId} username={entry.username} size={32} nameFormat="plain" />}
-      title={<>{plainName(displayNameOf(entry.username, entry.displayName))}<span className="ranking-history-game"> · {entry.label}</span></>}
+      title={<><PersonName username={entry.username} fallback={entry.displayName} honorific={false} /><span className="ranking-history-game"> · {entry.label}</span></>}
       detail={formatDateTime(entry.createdAt)} amount={entry.amount} unit="점" />)
       : <p className="history-empty">아직 이 기간에 얻은 점수가 없어요</p>}
     {nextBefore && <button type="button" className="text-button ranking-more" disabled={loading} onClick={onMore}>{loading ? "불러오는 중…" : "더 보기"}</button>}
@@ -248,7 +248,7 @@ export function Ranking({
                   </span>
                   <span className="podium-name">
                     <Avatar username={player.username} size={24} nameFormat="plain" />
-                    <span>{plainName(player.displayName)}</span>
+                    <PersonName username={player.username} fallback={player.displayName} honorific={false} />
                   </span>
                   <strong>
                     <CountFrom value={player.weeklyScore} delay={(3 - Math.min(player.rank, 3)) * 160 + 500} />
@@ -267,7 +267,7 @@ export function Ranking({
             <div className="list-row" key={row.username}>
               <span className="rank-dot" style={{ background: badge[Math.min(row.rank, 3) - 1][0], color: badge[Math.min(row.rank, 3) - 1][1] }}>{row.rank}</span>
               <Avatar username={row.username} size={40} nameFormat="plain" />
-              <strong>{plainName(row.displayName)}</strong>
+              <strong><PersonName username={row.username} fallback={row.displayName} honorific={false} /></strong>
               <b>{row.weeklyScore.toLocaleString("ko-KR")}점</b>
             </div>
           )) : <p className="history-empty">{loaded || ranking.error ? "아직 참여한 플레이어가 없어요" : "순위를 불러오는 중…"}</p>}
@@ -306,7 +306,7 @@ export function Ranking({
                   {row.rank}
                 </span>
                 <Avatar username={row.username} size={40} nameFormat="plain" />
-                <strong>{plainName(row.displayName)}</strong>
+                <strong><PersonName username={row.username} fallback={row.displayName} honorific={false} /></strong>
                 <b>{row.score}점</b>
               </div>
             ))}

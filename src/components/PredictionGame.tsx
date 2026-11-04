@@ -24,6 +24,7 @@ import {
   Coin,
   Toolbar,
   honorific,
+  PersonName,
   playerColor,
   preloadSprites,
   useCharacter,
@@ -239,7 +240,7 @@ function SubmissionRow({
     <div className="submission-card">
       <Avatar username={player.username} userId={player.playerId} photoVersion={player.photoVersion} />
       <strong>
-        {honorific(displayName(player.username, player.displayName))}
+        <PersonName username={player.username} fallback={player.displayName} />
         {me ? " (나)" : ""}
       </strong>
       <span ref={chip} className={`pill ${player.submitted ? "mint" : "muted"}`}>
@@ -261,7 +262,7 @@ function ResultCards({ id, results, username, demo }: { id: GameId; results: Gam
         <span className={`rank-badge ${result.isFirst ? "first" : ""}`}>{rank}</span>
         <Avatar username={result.username} userId={result.playerId} photoVersion={result.photoVersion} artKey={demo ? undefined : result.character} size={46} />
         <div className="result-name">
-          <strong>{honorific(displayName(result.username, result.displayName))}{result.username === username ? " (나)" : ""}</strong>
+          <strong><PersonName username={result.username} fallback={result.displayName} />{result.username === username ? " (나)" : ""}</strong>
           <span>{differenceText(id, result.difference)}</span>
         </div>
         <strong className="result-guess">{predictionLabel(id, result.value)}</strong>

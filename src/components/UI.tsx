@@ -2,7 +2,10 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, us
 import { ART_KEYS, defaultCharacter, isArtKey, type ArtKey } from "../../shared/characters";
 import { anim, useOnChange } from "../motion";
 import "../profile-photo.css";
+import "../nickname-tags.css";
 import { honorific, plainName } from '../names';
+import { gradeLabel } from "../../shared/nickname-tags";
+import type { NicknameTagView } from "../../shared/types";
 
 export { honorific, plainName } from '../names';
 
@@ -13,6 +16,8 @@ export interface ProfileDirectoryEntry {
   photoVersion: number | null;
   /** Only preview stores local data URLs; signed-in photos use versioned URLs. */
   photoUrl?: string | null;
+  /** The equipped nickname tag, shown before the nickname everywhere. */
+  tag?: NicknameTagView | null;
 }
 const ProfileDirectory = createContext<{ profiles: ProfileDirectoryEntry[]; preview: boolean }>({ profiles: [], preview: false });
 export function ProfileDirectoryProvider({ profiles, preview, children }: { profiles: ProfileDirectoryEntry[]; preview: boolean; children: ReactNode }) {
@@ -21,9 +26,42 @@ export function ProfileDirectoryProvider({ profiles, preview, children }: { prof
 export function useProfile(username: string) {
   return useContext(ProfileDirectory).profiles.find(profile => profile.username === username);
 }
+/** Text form of a player's name: the equipped tag phrase, a space, then the nickname
+ * ("반짝이는 시원"). Tags are adjectives, so sentences read naturally with "님" appended.
+ * Labels that can render markup use <PersonName> for the styled tag instead. */
 export function useDisplayNameLookup() {
   const { profiles } = useContext(ProfileDirectory);
-  return useCallback((username: string, fallback?: string) => profiles.find(profile => profile.username === username)?.displayName ?? fallback ?? username, [profiles]);
+  return useCallback((username: string, fallback?: string) => {
+    const profile = profiles.find(entry => entry.username === username);
+    const name = profile?.displayName ?? fallback ?? username;
+    return profile?.tag?.text ? `${profile.tag.text} ${name}` : name;
+  }, [profiles]);
+}
+/** Same text form, looked up by account id (server notices carry ids). */
+export function useDisplayNameByIdLookup() {
+  const { profiles } = useContext(ProfileDirectory);
+  return useCallback((id: string, fallback: string) => {
+    const profile = profiles.find(entry => entry.id === id);
+    const name = profile?.displayName ?? fallback;
+    return profile?.tag?.text ? `${profile.tag.text} ${name}` : name;
+  }, [profiles]);
+}
+/** The nickname and tag separately, for styled labels. */
+export function useNameParts(username: string, fallback?: string): { name: string; tag: NicknameTagView | null } {
+  const profile = useContext(ProfileDirectory).profiles.find(entry => entry.username === username);
+  return { name: profile?.displayName ?? fallback ?? username, tag: profile?.tag ?? null };
+}
+/** A tag chip: S hologram, A gold, B silver, C outline. */
+export function NickTag({ tag }: { tag: NicknameTagView }) {
+  return <span className={`nick-tag nick-tag--${tag.grade.toLowerCase()}`} title={gradeLabel(tag.grade)}>{tag.text}</span>;
+}
+/** Tag chip + nickname (+ "님" unless it is a ranking label). On a narrow row the
+ * tag shrinks with an ellipsis first so the nickname stays whole. */
+export function PersonName({ username, fallback, honorific: polite = true }: { username: string; fallback?: string; honorific?: boolean }) {
+  const { name, tag } = useNameParts(username, fallback);
+  const text = polite ? honorific(name) : plainName(name);
+  if (!tag) return <span className="person-name">{text}</span>;
+  return <span className="person-name tagged-name"><NickTag tag={tag} /><span className="tagged-name__text">{text}</span></span>;
 }
 export function useDisplayName(username: string, fallback?: string) {
   return useDisplayNameLookup()(username, fallback);

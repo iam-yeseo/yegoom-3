@@ -123,13 +123,13 @@ for (const width of [390, 560]) test(`slot tiles, motion states and purchase-day
   const homeTile = page.locator('.shop-tile').filter({ hasText: '슬롯머신' });
   await expect(homeTile).toContainText('1회 500G');
   await expect(homeTile).not.toContainText('이용권');
-  await expect(page.locator('.shop-tile')).toHaveCount(3);
+  await expect(page.locator('.shop-tile')).toHaveCount(4); // + 별명 태그 뽑기 (PR 9)
   expect(await homeTile.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
   await capture(page, 'home-slot-tile', width, info);
   await go(page, '/shop');
   const shopTile = page.locator('.shop-tile').filter({ hasText: '슬롯머신' });
   await expect(shopTile).toContainText('1회 500G');
-  await expect(page.locator('.shop-tile')).toHaveCount(3);
+  await expect(page.locator('.shop-tile')).toHaveCount(4); // + 별명 태그 뽑기 (PR 9)
   await capture(page, 'shop-slot-tile', width, info);
   await shopTile.click();
   await expect(page).toHaveURL(/#\/shop\/slot$/);

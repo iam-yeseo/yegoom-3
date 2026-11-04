@@ -14,6 +14,7 @@ import {
   useDisplayNameLookup,
   useProfile,
   honorific,
+  PersonName,
   type ArtKey,
 } from "../components/UI";
 import { KST, weekdayNames } from "../sample";
@@ -22,6 +23,7 @@ import { formatTime } from "../format";
 import { PhotoPicker } from "../components/PhotoPicker";
 import { PasswordSheet } from "../components/PasswordSheet";
 import { HistoryRow, reasonIcon } from "../components/HistoryRow";
+import { TagCollection } from "../components/TagCollection";
 
 function dateLabel(iso: string) {
   const parts = Object.fromEntries(
@@ -54,6 +56,7 @@ export function Profile({
   onPhotoChange,
   onPhotoDelete,
   onPasswordChange,
+  tagShopHref = "#/shop/tag",
 }: {
   username: string;
   displayName: string;
@@ -71,6 +74,8 @@ export function Profile({
   onPhotoChange: (photo: string) => Promise<void>;
   onPhotoDelete: () => Promise<void>;
   onPasswordChange?: (currentPassword: string, newPassword: string) => Promise<void>;
+  /** Link to the nickname tag shop (the preview keeps its own route prefix). */
+  tagShopHref?: string;
 }) {
   const characterOf = useCharacterLookup();
   const displayNameOf = useDisplayNameLookup();
@@ -169,7 +174,7 @@ export function Profile({
           </span>
         </div>
         <div className="profile-summary">
-          <h1>{honorific(displayName)}</h1>
+          <h1><PersonName username={username} fallback={displayName} /></h1>
           <div className="stats">
             <div>
               <span>골드</span>
@@ -205,6 +210,7 @@ export function Profile({
           {profileError && <p className="form-message error" role="alert">{profileError}</p>}
           {profileMessage && <p className="profile-edit-success" role="status">{profileMessage}</p>}
         </section>
+        <TagCollection shopHref={tagShopHref} />
         <section className="card profile-password">
           <button type="button" disabled={!onPasswordChange || profileBusy || busy} onClick={() => setPasswordOpen(true)}>비밀번호 변경</button>
           {!onPasswordChange && <p>미리보기에서는 비밀번호를 바꿀 수 없어요. 로그인 후 이용해 주세요.</p>}

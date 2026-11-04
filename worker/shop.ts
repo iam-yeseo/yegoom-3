@@ -36,7 +36,7 @@ function shuffled<T>(values: readonly T[]): T[] {
   }
   return result;
 }
-function requestId(input: Record<string, unknown>): string {
+export function requestId(input: Record<string, unknown>): string {
   if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.requestId)) {
     throw new ShopError(400, 'INVALID_REQUEST_ID', '구매 요청 번호를 확인해 주세요.');
   }
@@ -46,7 +46,7 @@ function payment(input: Record<string, unknown>): ShopPayment {
   if (input.payment !== 'gold' && input.payment !== 'ticket') throw new ShopError(400, 'INVALID_PAYMENT', '골드 또는 이용권을 선택해 주세요.');
   return input.payment;
 }
-function dayWindow(now: Date): { date: string; start: number; end: number } {
+export function dayWindow(now: Date): { date: string; start: number; end: number } {
   const date = kstDate(now);
   const start = kstTimestamp(date, '00:00:00');
   return { date, start, end: start + 86_400_000 };

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, KUJI_RULES, LOTTO_RULES, SLOT_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SLOT_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
 import type { CatchmindSummary, ClawSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
@@ -9,6 +9,8 @@ import { useAttendance } from "../attendance";
 import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import {
   Avatar,
+  NickTag,
+  PersonName,
   honorific,
   plainName,
   CharacterSprite,
@@ -271,12 +273,14 @@ export function ShopCards({ go }: { go: Go }) {
     { path: "/shop/lotto", title: "데일리 로또", schedule: `${formatTime(LOTTO_RULES.drawTime)} 추첨`, tickets: inventory.lottoTickets, icon: "lotto" },
     { path: "/shop/speetto", title: "스피또", schedule: "바로 긁기", tickets: inventory.speettoTickets, icon: "speetto" },
     { path: "/shop/slot", title: "슬롯머신", schedule: `1회 ${SLOT_RULES.price.toLocaleString("ko-KR")}G`, tickets: null, icon: "slot" },
+    { path: "/shop/tag", title: "별명 태그 뽑기", schedule: `1회 ${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`, tickets: null, icon: "tag" },
   ] as const;
   return (
     <div className="tile-grid shop-tile-grid">
       {tiles.map(tile => <button key={tile.path} className="card shop-tile" onClick={() => go(tile.path)}>
         {tile.icon === "lotto" ? <span className="lotto-icon" aria-hidden="true"><i>7</i><i>12</i><i>21</i></span>
           : tile.icon === "speetto" ? <span className="speetto-icon" aria-hidden="true"><i><b /></i></span>
+          : tile.icon === "tag" ? <span className="tag-tile-icon" aria-hidden="true"><NickTag tag={{ grade: "A", text: "별명" }} /></span>
           : <span className="slot-tile-icon" aria-hidden="true"><img src="/slot/seven.svg" alt="" /><img src="/slot/seven.svg" alt="" /><img src="/slot/seven.svg" alt="" /></span>}
         <span className="solo-text">
           <strong>{tile.title}</strong>
@@ -461,7 +465,7 @@ function Room({ data, gold, evening, jumpRequest, onJumpDone }: {
       <div className="room-top">
         <span className="room-identity">
           <Avatar username={data.username} size={32} />
-          <span className="room-name">{honorific(displayNameOf(data.username, data.displayName))}</span>
+          <span className="room-name"><PersonName username={data.username} fallback={data.displayName} /></span>
         </span>
         <span className="gold">
           <Coin size={22} />
@@ -578,7 +582,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
                 <Avatar username={player.username} size={46} nameFormat="plain" />
                 <span className="ranking-preview-main">
                   <span>
-                    <strong>{plainName(player.displayName)}</strong>
+                    <strong><PersonName username={player.username} fallback={player.displayName} honorific={false} /></strong>
                     {player.username === data.username && <em>나</em>}
                     <b>{player.weeklyScore.toLocaleString("ko-KR")}</b>
                   </span>

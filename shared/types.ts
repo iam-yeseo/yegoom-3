@@ -3,6 +3,7 @@ import type { KUJI_RULES, SPEETTO_RULES, SLOT_RULES } from './balance';
 import type { Board, Doll, AttemptResult } from './claw-physics';
 import type { PredictionRules } from './admin';
 import type { RankingPeriod, ScoreGame } from './ranking-periods';
+import type { NicknameTagGrade } from './nickname-tags';
 
 export type GameId = 'wake' | 'offwork' | 'luck';
 export type Role = 'player' | 'admin';
@@ -19,6 +20,8 @@ export interface User {
   gold: number;
   weeklyScore: number;
   character: ArtKey | null;
+  /** The nickname tag the user is wearing, shown before the nickname everywhere. */
+  tag: NicknameTagView | null;
 }
 export interface Player {
   id: string;
@@ -27,7 +30,9 @@ export interface Player {
   photoVersion: number | null;
   weeklyScore: number;
   character: ArtKey;
+  tag: NicknameTagView | null;
 }
+export interface NicknameTagView { grade: NicknameTagGrade; text: string }
 export interface GameResult {
   playerId: string;
   username: string;
@@ -124,7 +129,7 @@ export interface LaunchGiftResponse {
   awarded: boolean;
   serverTime: string;
 }
-export type ShopKind = 'kuji' | 'lotto' | 'speetto' | 'slot';
+export type ShopKind = 'kuji' | 'lotto' | 'speetto' | 'slot' | 'tag';
 export type ShopPayment = 'gold' | 'ticket';
 export interface ShopState { gold: number; inventory: Inventory; canPurchase: boolean; serverTime: string }
 export type KujiGrade = typeof KUJI_RULES.grades[number]['grade'];
@@ -259,3 +264,14 @@ export interface RankingResponse {
   nextBefore: string | null;
   serverTime: string;
 }
+
+export interface NicknameTag { id: string; grade: NicknameTagGrade; text: string; equipped: boolean; createdAt: string }
+export interface NicknameTagState {
+  /** Equipped first, then S→C, newest first. */
+  tags: NicknameTag[];
+  equipped: NicknameTag | null;
+  drawsToday: number; dailyLimit: number; price: number;
+}
+export interface TagDrawInput { requestId: string }
+export interface TagEquipInput { tagId: string | null }
+export interface TagResponse extends ShopState { tags: NicknameTagState; draw?: NicknameTag }
