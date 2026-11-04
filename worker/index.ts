@@ -20,8 +20,10 @@ import { PROFILE_PHOTO, LUCK_PHOTO } from '../shared/profile';
 import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, getLuckPhotoMetadata, luckPhotoUrl } from './luck-photos';
 import { readAnnouncements } from './announcements';
 import { maintainDatabase } from './maintenance';
+import { StockError, addMarketHoliday, advanceStocks, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, stockCronDue, stockSecret, tradeStock } from './stocks';
+import { FEATURES } from '../shared/balance';
 
-export interface Env { DB: D1Database; ASSETS: Fetcher }
+export interface Env { DB: D1Database; ASSETS: Fetcher; STOCK_SEED_SECRET?: string }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null; settings_json: string | null }
 interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null; photo_version: number | null }
@@ -457,7 +459,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id ${EQUIPPED_TAG_JOIN}
     WHERE (u.role = 'player' AND u.active = 1) OR u.id = ? OR u.username IN (?, ?, ?) ORDER BY u.username`)
     .bind(weekStart(now), user.id, ...GAME_IDS.map(id => GAME_RULES[id].author)).all<BootstrapProfile>().then(result => result.results);
-  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, launchGift, announcements, lottoNotice] = await Promise.all([
+  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, launchGift, announcements, lottoNotice, stock] = await Promise.all([
     profiles,
     readGames(env.DB, user, GAME_IDS, now, profiles),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
@@ -469,6 +471,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     getLaunchGiftState(env.DB, user, now),
     readAnnouncements(env.DB, user.id, now),
     readLottoNotice(env.DB, user.id, now),
+    FEATURES.stock ? readStockHome(env.DB, user, now.getTime()) : null,
   ]);
   const viewer = roster.find(player => player.id === user.id);
   const players = roster.filter(player => player.role === 'player' && player.active === 1)
@@ -478,7 +481,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
     inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0 },
-    kuji, lottoNotice, catchmind, claw, launchGift, announcements, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    kuji, lottoNotice, catchmind, claw, launchGift, announcements, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {
   if (kstDate(new Date()) !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
@@ -579,8 +582,8 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
   return json({ game: await readGame(env.DB, user, id, refreshedAt) });
 }
 async function adminState(db: D1Database, now: Date): Promise<AdminState> {
-  const [games, claw, changes, catchmindWordsRemaining] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db), readRemainingWords(db)]);
-  return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, catchmindWordsRemaining, serverTime: now.toISOString() };
+  const [games, claw, changes, catchmindWordsRemaining, marketHolidays] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db), readRemainingWords(db), readMarketHolidays(db, now.getTime())]);
+  return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, catchmindWordsRemaining, marketHolidays, serverTime: now.toISOString() };
 }
 async function api(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -610,6 +613,16 @@ async function api(request: Request, env: Env): Promise<Response> {
       const input = await body(request);
       if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) throw new HttpError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
       await saveAdminClawConfig(env.DB, user, input, new Date());
+      return json(await adminState(env.DB, new Date()));
+    }
+    const holidayMatch = /^\/api\/admin\/market-holidays(?:\/(\d{4}-\d{2}-\d{2}))?$/.exec(url.pathname);
+    if (holidayMatch) {
+      if (request.method === 'POST' && !holidayMatch[1]) {
+        const input = await body(request);
+        if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) throw new HttpError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
+        await addMarketHoliday(env.DB, user, input, Date.now());
+      } else if (request.method === 'DELETE' && holidayMatch[1]) await removeMarketHoliday(env.DB, holidayMatch[1], Date.now());
+      else throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
       return json(await adminState(env.DB, new Date()));
     }
     throw new HttpError(404, 'NOT_FOUND', '요청한 운영 기능이 없어요.');
@@ -711,6 +724,22 @@ async function api(request: Request, env: Env): Promise<Response> {
     }
     return json(await catchmindRoute(env.DB, user, catchmindMatch[1], request.method, input, new Date(), rawSince === null ? undefined : Number(rawSince)));
   }
+  if (url.pathname === '/api/stock' || url.pathname.startsWith('/api/stock/')) {
+    const secret = stockSecret(env.STOCK_SEED_SECRET);
+    if (url.pathname === '/api/stock/trade') {
+      if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+      return json(await tradeStock(env.DB, secret, user, await body(request), Date.now()));
+    }
+    if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    if (url.pathname === '/api/stock') {
+      const since = url.searchParams.get('since');
+      return json(await readStockMarket(env.DB, secret, user, now.getTime(), since && since.length <= 64 ? since : undefined));
+    }
+    if (url.pathname === '/api/stock/news') return json(await readStockNews(env.DB, secret, user, url.searchParams.get('before'), now.getTime()));
+    const stockMatch = /^\/api\/stock\/([A-Z]{4})$/.exec(url.pathname);
+    if (stockMatch) return json(await readStockDetail(env.DB, secret, user, stockMatch[1]!, now.getTime()));
+    throw new HttpError(404, 'NOT_FOUND', '요청한 기능을 찾을 수 없어요.');
+  }
   if (url.pathname === '/api/shop/tag') {
     const input = request.method === 'POST' ? await body(request) : undefined;
     return json(await tagShopRoute(env.DB, user, request.method, input, new Date()));
@@ -736,15 +765,23 @@ async function api(request: Request, env: Env): Promise<Response> {
   throw new HttpError(404, 'NOT_FOUND', '요청한 기능을 찾을 수 없어요.');
 }
 export default {
+  /** One Cron every 10 minutes: daily housekeeping at 00:00 KST, and the stock
+   * market's ticks while it is open (reads also catch up if a run is missed). */
   scheduled(event: ScheduledController, env: Env, context: ExecutionContext) {
-    context.waitUntil(maintainDatabase(env.DB, new Date(event.scheduledTime)));
+    const at = new Date(event.scheduledTime);
+    if (kstTime(at) < '00:10:00') context.waitUntil(maintainDatabase(env.DB, at));
+    if (FEATURES.stock && env.STOCK_SEED_SECRET && stockCronDue(at.getTime())) {
+      context.waitUntil(advanceStocks(env.DB, env.STOCK_SEED_SECRET, at.getTime()).then(() => undefined, error => {
+        console.error('Stock tick failed', error instanceof Error ? error.name : 'UnknownError');
+      }));
+    }
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof RankingError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof RankingError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

@@ -48,11 +48,21 @@ import { CatchmindProvider } from "./catchmind";
 import { Catchmind } from "./screens/Catchmind";
 import { CatchmindGallery } from "./screens/CatchmindGallery";
 import { LaunchGiftProvider, StockNotice } from "./launch-gift";
+import { createPreviewStockClient, previewStockHome, resetPreviewStock, type StockClient } from "./stock-preview";
+
+/** The real stock client: plain API calls (polling is paced by the screens). */
+const serverStock: StockClient = {
+  market: (since) => api.stock(since),
+  detail: (ticker) => api.stockDetail(ticker),
+  news: (before) => api.stockNews(before),
+  trade: (input) => api.tradeStock(input),
+};
 
 const Admin = lazy(() => import("./screens/Admin").then(module => ({ default: module.Admin })));
 const Claw = lazy(() => import("./screens/Claw").then(module => ({ default: module.Claw })));
 const StockMarket = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockMarket })));
 const StockDetail = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockDetail })));
+const StockNews = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockNews })));
 
 function navigate(path: string) {
   window.location.hash = path;
@@ -97,6 +107,7 @@ function previewHome(): HomeData {
     })),
     games: gameIds.map((id) => previewGame(id)),
     kuji: null,
+    stock: null,
     catchmind: emptyCatchmind,
     claw: previewClawSummary(),
     lottoNotice: null,
@@ -116,6 +127,7 @@ function homeData(data: BootstrapResponse): HomeData {
     catchmind: data.catchmind,
     claw: data.claw,
     lottoNotice: data.lottoNotice,
+    stock: data.stock,
     serverTime: data.serverTime,
   };
 }
@@ -324,6 +336,18 @@ export default function App() {
   const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[]; lottoNotice: LottoNotice | null; tag: NicknameTagView | null }>({ gold: previewGold, score: 0, ledger: [], lottoNotice: null, tag: null });
   const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[]; wordsRemaining: number }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [], wordsRemaining: CATCHMIND_WORDS.length });
   const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
+  const [previewStock, setPreviewStock] = useState<{ gold: number; ledger: LedgerEntry[] }>({ gold: 0, ledger: [] });
+  const previewGoldRef = useRef(0);
+  const previewAdminRef = useRef(false);
+  const [previewStockClient] = useState(() => createPreviewStockClient({
+    gold: () => previewGoldRef.current,
+    canTrade: () => !previewAdminRef.current,
+    spend: (amount, reason) => {
+      previewGoldRef.current -= amount;
+      const entry: LedgerEntry = { id: crypto.randomUUID(), currency: "gold", amount: -amount, reason, createdAt: new Date().toISOString() };
+      setPreviewStock(current => ({ gold: current.gold - amount, ledger: [entry, ...current.ledger] }));
+    },
+  }));
   const demo = route.startsWith("/preview");
   const adminDemo = demo && (previewAdmin || route.startsWith("/preview/admin"));
   const adminAllowed = adminDemo || !demo && data?.user.role === "admin";
@@ -338,6 +362,8 @@ export default function App() {
       setPreviewAdminState(createAdminPreview());
       setPreviewShop({ gold: previewGold, score: 0, ledger: [], lottoNotice: null, tag: null });
       setPreviewClaw({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] });
+      setPreviewStock({ gold: 0, ledger: [] });
+      resetPreviewStock();
     }
   }, [demo]);
   // A refresh may commit only while its generation is current. Mutations
@@ -428,7 +454,8 @@ export default function App() {
     };
   }, [data?.user.id, refresh, demo, route]);
   const requestedPath = demo ? route.replace("/preview", "") || "/" : route;
-  const stockBlocked = !FEATURES.stock && /^\/stock(?:\/|$)/.test(requestedPath);
+  // The serverless preview can always open the market (sample seeds, no server).
+  const stockBlocked = !FEATURES.stock && !demo && /^\/stock(?:\/|$)/.test(requestedPath);
   const adminBlocked = /^\/admin(?:\/|$)/.test(requestedPath) && !adminAllowed && !loading && !!data;
   const path = stockBlocked || adminBlocked ? "/" : requestedPath;
   const noticeUserId = demo ? adminDemo ? "preview-admin" : previewUser.id : data?.user.id;
@@ -470,9 +497,9 @@ export default function App() {
     GameId | undefined;
   const play = path.match(/^\/play\/(catchmind|kuji|claw)$/)?.[1] as
     "catchmind" | "kuji" | "claw" | undefined;
-  const stockId = path.match(/^\/stock\/([a-z]+)$/)?.[1];
+  const stockId = path.match(/^\/stock\/([A-Z]{4})$/)?.[1];
   const go = (to: string) => {
-    if (!FEATURES.stock && /^\/stock(?:\/|$)/.test(to)) { setStockNoticeOpen(true); return; }
+    if (!FEATURES.stock && !demo && /^\/stock(?:\/|$)/.test(to)) { setStockNoticeOpen(true); return; }
     navigate(demo ? `/preview${to === "/" ? "" : to}` : to);
   };
   const home = () => go("/");
@@ -647,14 +674,16 @@ export default function App() {
   }
   const catchmindReadKey = useRef("");
   const signedIn = !demo && !loading && data !== null;
-  const view = demo ? { ...previewHome(), displayName: previewProfile.displayName, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold,
-    catchmind: previewCatchmind.summary, claw: previewClaw.summary, lottoNotice: previewShop.lottoNotice,
+  const view = demo ? { ...previewHome(), displayName: previewProfile.displayName, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold + previewStock.gold,
+    catchmind: previewCatchmind.summary, claw: previewClaw.summary, lottoNotice: previewShop.lottoNotice, stock: previewStockHome(),
     ...(adminDemo ? { userId: "preview-admin", username: "preview-admin", displayName: "운영 미리보기", lottoNotice: null,
       games: previewAdminState.games.map(game => previewGame(game.id, game.rules)),
       claw: { ...previewClaw.summary, coins: 0, freeCoins: 0, purchasedCoins: 0, isAdmin: true } } : {}),
     players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, displayName: previewProfile.displayName, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : player) } : data ? homeData(data) : null;
-  const me = demo ? { ...previewUser, displayName: previewProfile.displayName, photoVersion: previewProfile.photoVersion, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score,
+  const me = demo ? { ...previewUser, displayName: previewProfile.displayName, photoVersion: previewProfile.photoVersion, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold + previewStock.gold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score,
     ...(adminDemo ? { id: "preview-admin", username: "preview-admin", displayName: "운영 미리보기", role: "admin" as const, photoVersion: null, weeklyScore: 0 } : {}) } : data?.user;
+  if (demo) { previewGoldRef.current = me?.gold ?? 0; previewAdminRef.current = adminDemo; }
+  const stockClient = demo ? previewStockClient : serverStock;
   const profileDirectory = demo
     ? Object.keys(previewScores).map(username => ({ id: username === previewUser.username ? previewUser.id : username, username,
       displayName: username === previewUser.username ? previewProfile.displayName : username,
@@ -769,7 +798,7 @@ export default function App() {
         </header>
         <div className="screen-body stack">
           <TodayGames data={view} go={go} />
-          <SoloGames go={go} claw={view.claw} />
+          <SoloGames go={go} claw={view.claw} stock={view.stock} />
         </div>
       </div>
     );
@@ -798,7 +827,7 @@ export default function App() {
         attendanceKey={view.attendanceKey}
         gold={me.gold}
         weeklyScore={me.weeklyScore}
-        ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
+        ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewStock.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
         others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
         tagShopHref={demo ? "#/preview/shop/tag" : "#/shop/tag"}
         onBack={home}
@@ -847,9 +876,12 @@ export default function App() {
       />
     );
   else if (path === "/stock")
-    content = <StockMarket gold={me.gold} onBack={home} go={go} />;
+    content = <StockMarket client={stockClient} gold={me.gold} onBack={home} go={go} />;
+  else if (path === "/stock/news")
+    content = <StockNews client={stockClient} onBack={() => go("/stock")} go={go} />;
   else if (stockId)
-    content = <StockDetail id={stockId} gold={me.gold} onBack={() => go("/stock")} />;
+    content = <StockDetail key={stockId} client={stockClient} ticker={stockId} onBack={() => go("/stock")}
+      onTraded={() => { if (!demo) void refresh(); }} />;
   else if (path === "/shop") content = <ShopMain go={go} />;
   else if (path === "/shop/lotto")
     content = <Lotto gold={me.gold} onBack={() => go("/shop")} />;
@@ -862,8 +894,8 @@ export default function App() {
   else content = <Home data={view} go={go} />;
   // Sub-pages have their own back button instead of the tab bar.
   const subPage =
-    !!play || !!gameId || !!stockId ||
-    ["/attendance", "/stock", "/shop/lotto", "/shop/speetto", "/shop/slot", "/shop/tag"].includes(path);
+ !!play || !!gameId || !!stockId ||
+    ["/attendance", "/stock", "/stock/news", "/shop/lotto", "/shop/speetto", "/shop/slot", "/shop/tag"].includes(path);
   const showTabs = !!view && !!me && !subPage;
   const screenRef = useScreenTransition(path);
   useStatusBarColor(screenRef, `${path}|${loading}|${!!data}`);
@@ -903,7 +935,7 @@ export default function App() {
     <ShopProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
       preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
       previewGoldBonus={previewAttendance.goldBonus}
-      previewGameGold={demo ? previewCatchmind.gold + previewClaw.gold : 0}
+      previewGameGold={demo ? previewCatchmind.gold + previewClaw.gold + previewStock.gold : 0}
       previewAttendanceDate={previewAttendance.attendance.today}
       initial={{ gold: demo ? previewGold : me?.gold ?? 0, inventory: data?.inventory ?? { lottoTickets: 0, speettoTickets: 0 },
         canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
@@ -915,7 +947,7 @@ export default function App() {
       }}
       onPreviewChange={(state, ledger, score, lottoNotice, tag) => {
         markViewedLottoDraw(adminDemo ? "preview-admin" : previewUser.id, path, "lotto" in state ? state.lotto.todayDraw : null, state.serverTime);
-        setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold, ledger: [...ledger], score, lottoNotice, tag });
+        setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold - previewStock.gold, ledger: [...ledger], score, lottoNotice, tag });
       }}>
     <LaunchGiftProvider preview={demo} role={me?.role} state={data?.launchGift ?? { available: false, claimed: false }}
       serverTime={new Date(Date.now() + (demo ? 0 : serverClockOffset.current)).toISOString()}

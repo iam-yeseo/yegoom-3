@@ -1,5 +1,7 @@
 /** Daily housekeeping only: accounting and public game history are never deleted. */
-export const MAINTENANCE_RULES = { requestRetentionDays: 30, deleteLimit: 500 } as const;
+import { STOCK_RULES } from '../shared/stocks';
+
+export const MAINTENANCE_RULES = { requestRetentionDays: 30, deleteLimit: 500, stockTickDeleteLimit: 2000 } as const;
 
 export async function maintainDatabase(db: D1Database, now: Date): Promise<void> {
   const cutoff = new Date(now.getTime() - MAINTENANCE_RULES.requestRetentionDays * 86_400_000).toISOString();
@@ -20,5 +22,9 @@ export async function maintainDatabase(db: D1Database, now: Date): Promise<void>
         AND q.result_round_id IS NOT (SELECT round_id FROM catchmind_turn WHERE id = 1)
       ORDER BY q.created_at LIMIT ?
     )`).bind(cutoff, MAINTENANCE_RULES.deleteLimit),
+    // 10-minute prices are kept 30 days; daily candles stay in stock_daily.
+    db.prepare(`DELETE FROM stock_ticks WHERE (ticker, at) IN (
+      SELECT ticker, at FROM stock_ticks WHERE at < ? LIMIT ?
+    )`).bind(now.getTime() - STOCK_RULES.tickRetentionDays * 86_400_000, MAINTENANCE_RULES.stockTickDeleteLimit),
   ]);
 }

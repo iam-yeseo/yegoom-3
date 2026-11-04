@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SLOT_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SLOT_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
 import type { CatchmindSummary, ClawSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
+import type { StockHomeSummary } from "../../shared/stock-types";
 import { advanceNoticeOffset, hasSeenLotto, lottoSeenKey, markLottoSeen, nextKstMidnight, noticeDate } from "../lotto-notice";
 import "../home-shop.css";
 import { useAttendance } from "../attendance";
@@ -28,7 +29,6 @@ import {
 import {
   kstDateText,
   kstParts,
-  marketOpen,
 } from "../sample";
 import {
   anim,
@@ -55,6 +55,8 @@ export interface HomeData {
   catchmind: CatchmindSummary;
   claw: ClawSummary;
   lottoNotice: LottoNotice | null;
+  /** null while the market is not open to players. */
+  stock: StockHomeSummary | null;
   serverTime: string;
 }
 type Go = (path: string) => void;
@@ -231,9 +233,11 @@ function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
   );
 }
 
-export function SoloGames({ go, claw }: { go: Go; claw: ClawSummary }) {
+export function SoloGames({ go, claw, stock }: { go: Go; claw: ClawSummary; stock: StockHomeSummary | null }) {
   const nextGrant = formatTime(new Date(claw.nextGrantAt).toISOString());
-  const open = FEATURES.stock && marketOpen();
+  const open = !!stock?.open;
+  const pnl = stock ? stock.value - stock.cost : 0;
+  const pnlText = `${pnl > 0 ? "+" : pnl < 0 ? "−" : ""}${Math.abs(pnl).toLocaleString("ko-KR")}G`;
   return (
     <>
       <SectionTitle title="혼자 하기" />
@@ -255,11 +259,11 @@ export function SoloGames({ go, claw }: { go: Go; claw: ClawSummary }) {
           </span>
           <span className="solo-text">
             <strong>주식 시장</strong>
-            <small>{FEATURES.stock ? open ? "내 수익 +1,240G" : "오늘 수익 +860G" : "곧 문을 열어요"}</small>
+            <small>{!stock ? "곧 문을 열어요" : stock.cost || stock.value ? `내 손익 ${pnlText}` : open ? "지금 거래할 수 있어요" : "10종목 상장 중"}</small>
           </span>
           <span className={`market-state ${open ? "open" : ""}`}>
             <i />
-            {FEATURES.stock ? open ? "장 열림" : "장 마감" : "준비 중"}
+            {!stock ? "준비 중" : open ? "장 열림" : stock.holiday ? `휴장(${stock.holiday})` : "장 마감"}
           </span>
         </button>
       </div>
@@ -567,7 +571,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
         />
         <LottoNoticeCard data={data} go={go} />
         <TodayGames data={data} go={go} />
-        <SoloGames go={go} claw={data.claw} />
+        <SoloGames go={go} claw={data.claw} stock={data.stock} />
         <SectionTitle title="상점" right="전체" onClick={() => go("/shop")} />
         <ShopCards go={go} />
         <SectionTitle title="이번 주 랭킹" right={settleText()} />

@@ -8,7 +8,7 @@ export function createAdminPreview(): AdminState {
   const now = new Date();
   const today = new Date(now.getTime() + 9 * 3600000).toISOString().slice(0, 10);
   const tomorrow = new Date(Date.parse(`${today}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-  return { today, tomorrow, serverTime: now.toISOString(), changes: [], catchmindWordsRemaining: CATCHMIND_WORDS.length,
+  return { today, tomorrow, serverTime: now.toISOString(), changes: [], catchmindWordsRemaining: CATCHMIND_WORDS.length, marketHolidays: [],
     claw: { payoutEvery: 8, weakPickup: .4, weakCarry: .25 },
     games: (["wake", "offwork", "luck"] as GameId[]).map(id => ({ id, rules: defaultPredictionRules(id),
       scheduledRules: null, canApplyToday: id !== "wake",
