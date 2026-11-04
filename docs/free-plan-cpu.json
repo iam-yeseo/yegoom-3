@@ -1,0 +1,156 @@
+{
+  "measuredOn": "2026-11-04",
+  "baselineCommit": "c873ae8",
+  "scope": "Local isolated Node CPU measurements; no production Worker invocation, API call, or real credential. Host contention and runtime differences affect these numbers.",
+  "commands": {
+    "before": "node scripts/measure-drawing-cpu.mjs --root /workspace/yegoom-3-pr2-baseline",
+    "after": "node scripts/measure-drawing-cpu.mjs",
+    "password": "node scripts/measure-password-cpu.mjs"
+  },
+  "drawingBefore": {
+    "runtime": "v24.19.0",
+    "samples": 30,
+    "metric": "Local Node process CPU (user + system), not production Worker CPU",
+    "fixture": {
+      "decodedBytes": 307200,
+      "dimensions": "2×2; PNG tEXt / WebP unknown RIFF padding reaches the payload limit",
+      "includes": "base64 validation, decode, byte conversion, container validation; PNG includes CRC"
+    },
+    "png": {
+      "cpuMs": {
+        "median": 29.227,
+        "p95": 80.466
+      },
+      "wallMs": {
+        "median": 28.897,
+        "p95": 80.485
+      }
+    },
+    "webp": {
+      "cpuMs": {
+        "median": 19.554,
+        "p95": 73.858
+      },
+      "wallMs": {
+        "median": 19.53,
+        "p95": 73.835
+      }
+    },
+    "crcOnly": {
+      "cpuMs": {
+        "median": 9.467,
+        "p95": 10.181
+      },
+      "wallMs": {
+        "median": 9.473,
+        "p95": 10.37
+      }
+    }
+  },
+  "drawingCrcTableOnly": {
+    "runtime": "v24.19.0",
+    "samples": 30,
+    "metric": "Local Node process CPU (user + system), not production Worker CPU",
+    "fixture": {
+      "decodedBytes": 307200,
+      "dimensions": "2×2; PNG tEXt / WebP unknown RIFF padding reaches the payload limit",
+      "includes": "base64 validation, decode, byte conversion, container validation; PNG includes CRC"
+    },
+    "png": {
+      "cpuMs": {
+        "median": 20.517,
+        "p95": 25.166
+      },
+      "wallMs": {
+        "median": 20.587,
+        "p95": 36.477
+      }
+    },
+    "webp": {
+      "cpuMs": {
+        "median": 20.258,
+        "p95": 24.577
+      },
+      "wallMs": {
+        "median": 20.227,
+        "p95": 24.557
+      }
+    },
+    "crcOnly": {
+      "cpuMs": {
+        "median": 0.684,
+        "p95": 0.778
+      },
+      "wallMs": {
+        "median": 0.685,
+        "p95": 0.779
+      }
+    }
+  },
+  "drawingAfter": {
+    "runtime": "v24.19.0",
+    "samples": 30,
+    "metric": "Local Node process CPU (user + system), not production Worker CPU",
+    "fixture": {
+      "decodedBytes": 307200,
+      "dimensions": "2×2; PNG tEXt / WebP unknown RIFF padding reaches the payload limit",
+      "includes": "base64 validation, decode, byte conversion, container validation; PNG includes CRC"
+    },
+    "png": {
+      "cpuMs": {
+        "median": 2.167,
+        "p95": 4.762
+      },
+      "wallMs": {
+        "median": 2.17,
+        "p95": 3.582
+      }
+    },
+    "webp": {
+      "cpuMs": {
+        "median": 1.372,
+        "p95": 1.809
+      },
+      "wallMs": {
+        "median": 1.373,
+        "p95": 1.789
+      }
+    },
+    "crcOnly": {
+      "cpuMs": {
+        "median": 0.683,
+        "p95": 0.759
+      },
+      "wallMs": {
+        "median": 0.684,
+        "p95": 0.76
+      }
+    }
+  },
+  "password": {
+    "runtime": "v24.19.0",
+    "samples": 30,
+    "metric": "Local Node WebCrypto process CPU (user + system), not production Worker CPU",
+    "login": {
+      "cpuMs": {
+        "median": 13.6,
+        "p95": 16.439
+      },
+      "wallMs": {
+        "median": 13.654,
+        "p95": 16.474
+      }
+    },
+    "change": {
+      "cpuMs": {
+        "median": 27.327,
+        "p95": 31.423
+      },
+      "wallMs": {
+        "median": 27.136,
+        "p95": 31.106
+      }
+    }
+  },
+  "interpretation": "CRC lookup and direct byte copy bring the local 300 KiB validator below 10 ms in this run. Password verification and replacement remain above 10 ms locally; password parameters are unchanged. These measurements do not establish production Workers Free CPU compliance; production observability is still needed."
+}

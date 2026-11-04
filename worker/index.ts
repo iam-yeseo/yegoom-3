@@ -1,26 +1,29 @@
-import type { AttendanceState, BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, Player, LedgerEntry } from '../shared/types';
+import type { AttendanceState, BootstrapResponse, GameId, GameState, GameResult, GameHistoryRound, User, LedgerEntry } from '../shared/types';
 import { ATTENDANCE_RULES, attendanceCycleDay, attendanceReward, attendanceTickets, CATCHMIND_RULES } from '../shared/balance';
-import { predictionPointsForRules } from '../shared/game-settings';
+import { defaultPredictionRules, predictionPointsForRules } from '../shared/game-settings';
 import type { AdminState, PredictionRules } from '../shared/admin';
 import { AdminSettingsError, readAdminGames, readAdminChanges, saveGameSettings, readGameRules, rulesForRound, roundSnapshotWrites } from './game-settings';
 import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
 import { DUMMY_HASH, hashPassword, hashToken, randomToken, verifyPassword } from './crypto';
 import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
-import { readInventory, readKujiSummary, settleDueLotto, ShopError, shopRoute } from './shop';
+import { readKujiSummary, settleDueLotto, ShopError, shopRoute } from './shop';
 import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary } from './catchmind';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
 import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
 import { PhotoError } from './photos';
 import { PROFILE_PHOTO, LUCK_PHOTO } from '../shared/profile';
-import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, getLuckPhotoMetadata } from './luck-photos';
+import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, getLuckPhotoMetadata, luckPhotoUrl } from './luck-photos';
 import { readAnnouncements } from './announcements';
+import { maintainDatabase } from './maintenance';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null; settings_json: string | null }
 interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null; photo_version: number | null }
+interface ProfileRow { id: string; username: string; display_name: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
+interface BootstrapProfile extends ProfileRow { gold: number; weeklyScore: number; lottoTickets: number; speettoTickets: number }
 interface UnsettledRound extends RoundRow { game_id: GameId; round_date: string }
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
@@ -80,16 +83,30 @@ async function requireUser(request: Request, env: Env, now: number): Promise<Use
   if (!user) throw new HttpError(401, 'UNAUTHENTICATED', '다시 로그인해 주세요.');
   return user;
 }
+function userView(user: UserRow, balance: { gold: number; weeklyScore: number; photo_version: number | null } | null | undefined): User {
+  return { id: user.id, username: user.username, displayName: user.display_name, role: user.role,
+    gold: balance?.gold ?? 0, weeklyScore: balance?.weeklyScore ?? 0, character: user.character,
+    photoVersion: balance?.photo_version ?? null };
+}
 async function publicUser(db: D1Database, user: UserRow, now: Date): Promise<User> {
-  const balances = await db.prepare("SELECT COALESCE(SUM(CASE WHEN currency = 'gold' THEN amount ELSE 0 END), 0) AS gold, COALESCE(SUM(CASE WHEN currency = 'score' AND week_start = ? THEN amount ELSE 0 END), 0) AS score, (SELECT CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END FROM users u WHERE u.id = ?) AS photoVersion FROM ledger WHERE user_id = ?").bind(weekStart(now), user.id, user.id).first<{ gold: number; score: number; photoVersion: number | null }>();
-  return { id: user.id, username: user.username, displayName: user.display_name, role: user.role, gold: balances?.gold ?? 0, weeklyScore: balances?.score ?? 0, character: user.character, photoVersion: balances?.photoVersion ?? null };
+  const balance = await db.prepare(`SELECT COALESCE(b.gold, 0) AS gold,
+      COALESCE((SELECT SUM(amount) FROM ledger WHERE currency = 'score' AND week_start = ? AND user_id = u.id), 0) AS weeklyScore,
+      CASE WHEN p.user_id IS NOT NULL THEN u.photo_version ELSE NULL END AS photo_version
+    FROM users u LEFT JOIN user_balances b ON b.user_id = u.id LEFT JOIN user_photos p ON p.user_id = u.id
+    WHERE u.id = ?`).bind(weekStart(now), user.id).first<Pick<BootstrapProfile, 'gold' | 'weeklyScore' | 'photo_version'>>();
+  return userView(user, balance);
 }
 async function consumeLoginLimit(db: D1Database, username: string, ip: string, now: number): Promise<void> {
   const bucketKeys = await Promise.all([hashToken(`user:${username}`), hashToken(`ip:${ip}`)]);
-  const results = await db.batch(bucketKeys.map(bucket => db.prepare(`INSERT INTO login_attempts (bucket, attempts, expires_at) VALUES (?, 1, ?)
+  const results = await db.batch(bucketKeys.map((bucket, index) => db.prepare(`INSERT INTO login_attempts (bucket, attempts, expires_at) VALUES (?, 1, ?)
     ON CONFLICT(bucket) DO UPDATE SET attempts = CASE WHEN expires_at <= ? THEN 1 ELSE attempts + 1 END,
-    expires_at = CASE WHEN expires_at <= ? THEN excluded.expires_at ELSE expires_at END RETURNING attempts`).bind(bucket, now + 15 * 60_000, now, now)));
-  const exceeded = results.some((result, index) => Number((result.results[0] as { attempts?: number } | undefined)?.attempts ?? 0) > (index === 0 ? 10 : 30));
+    expires_at = CASE WHEN expires_at <= ? THEN excluded.expires_at ELSE expires_at END
+    WHERE expires_at <= ? OR attempts <= ? RETURNING attempts`)
+    .bind(bucket, now + 15 * 60_000, now, now, now, index === 0 ? 10 : 30)));
+  // Keep the first denied attempt (limit + 1) for diagnostics, then avoid
+  // repeated writes while blocked. An empty RETURNING result stays fail-closed.
+  const exceeded = results.some((result, index) => !result.results.length
+    || Number((result.results[0] as { attempts: number }).attempts) > (index === 0 ? 10 : 30));
   if (exceeded) throw new HttpError(429, 'TOO_MANY_ATTEMPTS', '로그인 시도가 많아요. 15분 뒤 다시 시도해 주세요.');
 }
 async function login(request: Request, env: Env, now: Date): Promise<Response> {
@@ -103,8 +120,9 @@ async function login(request: Request, env: Env, now: Date): Promise<Response> {
   const token = randomToken();
   const previousToken = sessionToken(request);
   const sessionWrites = await env.DB.batch([
-    env.DB.prepare('DELETE FROM sessions WHERE expires_at <= ? OR token_hash = ?').bind(now.getTime(), previousToken ? await hashToken(previousToken) : ''),
-    env.DB.prepare('DELETE FROM login_attempts WHERE expires_at <= ? OR bucket = ?').bind(now.getTime(), await hashToken(`user:${username}`)),
+    // Expired records are swept in the bounded daily maintenance job.
+    env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(previousToken ? await hashToken(previousToken) : ''),
+    env.DB.prepare('DELETE FROM login_attempts WHERE bucket = ?').bind(await hashToken(`user:${username}`)),
     // Recheck the verified credential snapshot atomically: a password reset, role
     // change or deactivation during the KDF must not mint a fresh session.
     env.DB.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at, created_at)
@@ -136,9 +154,10 @@ async function changePassword(request: Request, env: Env, user: UserRow): Promis
   // Failed verification retains it; only a committed change clears the bucket.
   const attempts = await env.DB.prepare(`INSERT INTO login_attempts (bucket, attempts, expires_at) VALUES (?, 1, ?)
     ON CONFLICT(bucket) DO UPDATE SET attempts = CASE WHEN expires_at <= ? THEN 1 ELSE attempts + 1 END,
-      expires_at = CASE WHEN expires_at <= ? THEN excluded.expires_at ELSE expires_at END RETURNING attempts`)
-    .bind(bucket, attemptedAt + PASSWORD_RULES.windowMs, attemptedAt, attemptedAt).first<number>('attempts');
-  if ((attempts ?? 0) > PASSWORD_RULES.attempts) {
+      expires_at = CASE WHEN expires_at <= ? THEN excluded.expires_at ELSE expires_at END
+    WHERE expires_at <= ? OR attempts <= ? RETURNING attempts`)
+    .bind(bucket, attemptedAt + PASSWORD_RULES.windowMs, attemptedAt, attemptedAt, attemptedAt, PASSWORD_RULES.attempts).first<number>('attempts');
+  if (attempts === null || attempts > PASSWORD_RULES.attempts) {
     throw new HttpError(429, 'TOO_MANY_PASSWORD_ATTEMPTS', '비밀번호 확인 시도가 많아요. 15분 뒤 다시 시도해 주세요.');
   }
   if (!await verifyPassword(input.currentPassword, user.password_hash)) {
@@ -174,6 +193,9 @@ async function roundResults(db: D1Database, id: GameId, date: string, answer: st
     FROM predictions p JOIN users u ON u.id = p.player_id
     WHERE p.game_id = ? AND p.round_date = ? AND u.role = 'player' AND u.username != ?
     ORDER BY p.updated_at, p.player_id`).bind(id, date, GAME_RULES[id].author).all<PredictionRow>()).results;
+  return calculateResults(rows, id, answer, rules);
+}
+function calculateResults(rows: PredictionRow[], id: GameId, answer: string, rules: PredictionRules): GameResult[] {
   const differences = rows.map(row => valueDifference(id, row.value, answer));
   const closest = Math.min(...differences);
   return rows.map((row, index) => {
@@ -191,14 +213,37 @@ async function roundResults(db: D1Database, id: GameId, date: string, answer: st
  * completion marker commit together; references also make concurrent calls safe.
  * Scan past rounds too, since the first visit after a reveal may be on a new day. */
 async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
-  const rounds = (await db.prepare(`SELECT game_id, round_date, answer, hint, reveal_at, revealed_at, settings_json
-    FROM game_rounds WHERE settled_at IS NULL AND answer IS NOT NULL
-    AND (revealed_at IS NOT NULL OR reveal_at <= ?) ORDER BY round_date, game_id`)
-    .bind(now.getTime()).all<UnsettledRound>()).results;
+  const rounds = (await db.prepare(`SELECT r.game_id, r.round_date, r.answer, r.hint, r.reveal_at, r.revealed_at,
+      COALESCE(r.settings_json, (SELECT settings_json FROM game_settings
+        WHERE game_id = r.game_id AND effective_from <= r.round_date ORDER BY effective_from DESC LIMIT 1),
+        CASE r.game_id WHEN 'wake' THEN ? WHEN 'offwork' THEN ? ELSE ? END) AS settings_json
+    FROM game_rounds r WHERE r.settled_at IS NULL AND r.answer IS NOT NULL
+    AND (r.revealed_at IS NOT NULL OR r.reveal_at <= ?) ORDER BY r.round_date, r.game_id`)
+    .bind(...(['wake', 'offwork', 'luck'] as const).map(id => JSON.stringify(defaultPredictionRules(id))), now.getTime()).all<UnsettledRound>()).results;
+  if (!rounds.length) return;
+  // JSON keys keep the captured round set stable without exceeding D1's bound
+  // parameter limit after a long absence. No per-round database calls are needed.
+  const predictions = (await db.prepare(`SELECT p.game_id, p.round_date, p.player_id, p.value,
+      u.username, u.display_name, u.character, NULL AS photo_version
+    FROM predictions p JOIN users u ON u.id = p.player_id
+    WHERE (p.game_id, p.round_date) IN (
+      SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)
+    ) AND u.role = 'player' ORDER BY p.updated_at, p.player_id`)
+    .bind(JSON.stringify(rounds.map(round => [round.game_id, round.round_date])))
+    .all<PredictionRow & { game_id: GameId; round_date: string }>()).results;
+  const byRound = new Map<string, PredictionRow[]>();
+  for (const prediction of predictions) {
+    if (prediction.username.toLowerCase() === GAME_RULES[prediction.game_id].author) continue;
+    const key = `${prediction.game_id}:${prediction.round_date}`;
+    const rows = byRound.get(key) ?? [];
+    rows.push(prediction); byRound.set(key, rows);
+  }
+  const writes: D1PreparedStatement[] = [];
   for (const round of rounds) {
-    const rules = await readGameRules(db, round.game_id, round.round_date, round.settings_json);
-    const results = await roundResults(db, round.game_id, round.round_date, round.answer!, rules);
-    const writes: D1PreparedStatement[] = [];
+    const rules = JSON.parse(round.settings_json!) as PredictionRules;
+    // Settlement needs amounts, not photo metadata; result displays load their
+    // current profile metadata independently after payment has committed.
+    const results = calculateResults(byRound.get(`${round.game_id}:${round.round_date}`) ?? [], round.game_id, round.answer!, rules);
     const gameWeek = weekStart(new Date(kstTimestamp(round.round_date, '00:00:00')));
     for (const result of results) {
       for (const [kind, currency, amount, reason] of [
@@ -215,8 +260,10 @@ async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
     }
     writes.push(db.prepare('UPDATE game_rounds SET settled_at = ? WHERE game_id = ? AND round_date = ? AND settled_at IS NULL')
       .bind(now.getTime(), round.game_id, round.round_date));
-    await db.batch(writes);
   }
+  // One D1 binding call for the whole batch: rewards and completion markers
+  // commit together, including rollbacks and concurrent idempotent retries.
+  await db.batch(writes);
 }
 
 async function readHistory(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameHistoryRound[]> {
@@ -232,32 +279,62 @@ async function readHistory(db: D1Database, user: UserRow, id: GameId, now: Date)
   }));
 }
 
-async function readGame(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameState> {
+/** Current rounds share their roster and predictions. In bootstrap the roster is
+ * also the viewer/standings query, so photos and names are not read per game. */
+async function readGames(db: D1Database, user: UserRow, ids: readonly GameId[], now: Date,
+  sharedProfiles?: Promise<ProfileRow[]>): Promise<GameState[]> {
   const date = kstDate(now);
-  const identity = GAME_RULES[id];
-  const round = await db.prepare('SELECT answer, hint, reveal_at, revealed_at, settings_json FROM game_rounds WHERE game_id = ? AND round_date = ?').bind(id, date).first<RoundRow>();
-  const rules = await readGameRules(db, id, date, round?.settings_json);
-  const revealed = round?.answer != null && (round.revealed_at != null || (round.reveal_at != null && round.reveal_at <= now.getTime()));
-  const closed = !rules.enabled || revealed || now.getTime() >= kstTimestamp(date, rules.deadline);
-  const author = user.role === 'player' && user.username === identity.author;
-  const prediction = await db.prepare('SELECT value FROM predictions WHERE game_id = ? AND round_date = ? AND player_id = ?').bind(id, date, user.id).first<{ value: string }>();
-  const results = revealed ? await roundResults(db, id, date, round!.answer!, rules) : [];
-  const participants = (await db.prepare(`SELECT u.id AS playerId, u.username, u.display_name AS displayName, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photoVersion, p.player_id IS NOT NULL AS submitted
-    FROM users u LEFT JOIN predictions p ON p.player_id = u.id AND p.game_id = ? AND p.round_date = ?
-    WHERE u.active = 1 AND u.role = 'player' AND u.username != ? ORDER BY u.username`).bind(id, date, identity.author).all<{ playerId: string; username: string; displayName: string; photoVersion: number | null; submitted: number }>()).results;
-  const authorName = await db.prepare('SELECT display_name FROM users WHERE username = ?').bind(identity.author).first<string>('display_name');
-  const photo = id === 'luck' ? await getLuckPhotoMetadata(db, user, date, Boolean(revealed)) : null;
-  return {
-    participants: participants.map(player => ({ ...player, submitted: Boolean(player.submitted) })),
-    id, title: identity.title, authorUsername: identity.author, authorDisplayName: authorName ?? identity.author,
-    rules, photo, deadline: rules.deadline, roundDate: date,
-    phase: revealed ? 'revealed' : closed ? 'closed' : 'open', hint: round?.hint ?? '',
-    prediction: prediction?.value ?? null, answer: revealed || author ? round?.answer ?? null : null,
-    answerEntered: round?.answer != null, results,
-    canPredict: !closed && !author && user.role === 'player',
-    canEditAnswer: rules.enabled && author && !revealed,
-    canReveal: rules.enabled && id !== 'wake' && author && !revealed && round?.answer != null,
-  };
+  const [rounds, predictions, profiles] = await Promise.all([
+    db.prepare(`WITH selected(game_id, defaults) AS (VALUES ${ids.map(() => '(?, ?)').join(', ')})
+      SELECT s.game_id, r.answer, r.hint, r.reveal_at, r.revealed_at,
+        COALESCE(r.settings_json, (SELECT settings_json FROM game_settings
+          WHERE game_id = s.game_id AND effective_from <= ? ORDER BY effective_from DESC LIMIT 1), s.defaults) AS settings_json,
+        CASE WHEN s.game_id = 'luck' THEN (SELECT version FROM luck_photos WHERE round_date = ?) END AS luck_photo_version
+      FROM selected s LEFT JOIN game_rounds r ON r.game_id = s.game_id AND r.round_date = ?`)
+      .bind(...ids.flatMap(id => [id, JSON.stringify(defaultPredictionRules(id))]), date, date, date)
+      .all<RoundRow & { game_id: GameId; luck_photo_version: number | null }>(),
+    db.prepare(`SELECT p.game_id, p.player_id, p.value, u.username, u.display_name, u.role, u.character,
+        CASE WHEN photo.user_id IS NOT NULL THEN u.photo_version ELSE NULL END AS photo_version
+      FROM predictions p JOIN users u ON u.id = p.player_id LEFT JOIN user_photos photo ON photo.user_id = u.id
+      WHERE p.game_id IN (${ids.map(() => '?').join(', ')}) AND p.round_date = ? ORDER BY p.updated_at, p.player_id`)
+      .bind(...ids, date).all<PredictionRow & { game_id: GameId; role: 'player' | 'admin' }>(),
+    sharedProfiles ?? db.prepare(`SELECT u.id, u.username, u.display_name, u.role, u.active, u.character,
+        CASE WHEN p.user_id IS NOT NULL THEN u.photo_version ELSE NULL END AS photo_version
+      FROM users u LEFT JOIN user_photos p ON p.user_id = u.id
+      WHERE (u.active = 1 AND u.role = 'player') OR u.username IN (${ids.map(() => '?').join(', ')})
+      ORDER BY u.username`).bind(...ids.map(id => GAME_RULES[id].author)).all<ProfileRow>().then(result => result.results),
+  ]);
+  return ids.map(id => {
+    const identity = GAME_RULES[id];
+    const round = rounds.results.find(row => row.game_id === id)!;
+    const rules = JSON.parse(round.settings_json!) as PredictionRules;
+    const revealed = round.answer != null && (round.revealed_at != null || (round.reveal_at != null && round.reveal_at <= now.getTime()));
+    const closed = !rules.enabled || revealed || now.getTime() >= kstTimestamp(date, rules.deadline);
+    const author = user.role === 'player' && user.username === identity.author;
+    const gamePredictions = predictions.results.filter(row => row.game_id === id);
+    const submitted = new Set(gamePredictions.map(row => row.player_id));
+    return {
+      participants: profiles.filter(player => player.active === 1 && player.role === 'player' && player.username.toLowerCase() !== identity.author)
+        .map(player => ({ playerId: player.id, username: player.username, displayName: player.display_name,
+          photoVersion: player.photo_version, submitted: submitted.has(player.id) })),
+      id, title: identity.title, authorUsername: identity.author,
+      authorDisplayName: profiles.find(player => player.username.toLowerCase() === identity.author)?.display_name ?? identity.author,
+      rules, photo: id === 'luck' && (revealed || author) && round.luck_photo_version != null
+        ? { url: luckPhotoUrl(date, round.luck_photo_version), version: round.luck_photo_version } : null,
+      deadline: rules.deadline, roundDate: date,
+      phase: revealed ? 'revealed' : closed ? 'closed' : 'open', hint: round.hint ?? '',
+      prediction: gamePredictions.find(row => row.player_id === user.id)?.value ?? null,
+      answer: revealed || author ? round.answer ?? null : null,
+      answerEntered: round.answer != null,
+      results: revealed ? calculateResults(gamePredictions.filter(row => row.role === 'player' && row.username.toLowerCase() !== identity.author), id, round.answer!, rules) : [],
+      canPredict: !closed && !author && user.role === 'player',
+      canEditAnswer: rules.enabled && author && !revealed,
+      canReveal: rules.enabled && id !== 'wake' && author && !revealed && round.answer != null,
+    };
+  });
+}
+async function readGame(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameState> {
+  return (await readGames(db, user, [id], now))[0]!;
 }
 async function weeklyDailyScores(db: D1Database, userId: string, now: Date): Promise<number[]> {
   const monday = weekStart(now);
@@ -337,7 +414,7 @@ async function claimAttendance(request: Request, env: Env, user: UserRow, now: D
   }
   const attendance = await readAttendance(env.DB, user, now);
   if (!attendance.claimed) throw new HttpError(403, 'CANNOT_ATTEND', '플레이어만 출석할 수 있어요.');
-  return json({ attendance, user: await publicUser(env.DB, user, now), awarded: writes[1]!.meta.changes === 1 });
+  return json({ attendance, user: await publicUser(env.DB, user, now), awarded: writes[1]!.meta.changes > 0 });
 }
 
 async function updateCharacter(request: Request, env: Env, user: UserRow, now: Date): Promise<Response> {
@@ -362,22 +439,36 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   // Complete payments before reading balances and weekly rankings in parallel.
   await settlePublishedRounds(env.DB, now);
   await settleDueLotto(env.DB, now);
-  const [viewer, players, games, ledger, dailyScores, attendance, inventory, kuji, catchmind, claw, launchGift, announcements] = await Promise.all([
-    publicUser(env.DB, user, now),
-    env.DB.prepare("SELECT u.id, u.username, u.display_name AS displayName, u.character, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photoVersion, COALESCE(SUM(l.amount), 0) AS weeklyScore FROM users u LEFT JOIN ledger l ON l.user_id = u.id AND l.currency = 'score' AND l.week_start = ? WHERE u.role = 'player' AND u.active = 1 GROUP BY u.id ORDER BY weeklyScore DESC, u.username").bind(weekStart(now)).all<Omit<Player, 'character'> & { character: ArtKey | null }>(),
-    Promise.all(GAME_IDS.map(id => readGame(env.DB, user, id, now))),
+  // Keep inactive authors' names available while excluding them from current
+  // participants/standings. Historical result participants are read separately.
+  const profiles = env.DB.prepare(`SELECT u.id, u.username, u.display_name, u.role, u.active, u.character,
+      CASE WHEN p.user_id IS NOT NULL THEN u.photo_version ELSE NULL END AS photo_version,
+      COALESCE(b.gold, 0) AS gold, COALESCE(b.lotto_tickets, 0) AS lottoTickets, COALESCE(b.speetto_tickets, 0) AS speettoTickets,
+      COALESCE((SELECT SUM(amount) FROM ledger WHERE currency = 'score' AND week_start = ? AND user_id = u.id), 0) AS weeklyScore
+    FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id
+    WHERE (u.role = 'player' AND u.active = 1) OR u.id = ? OR u.username IN (?, ?, ?) ORDER BY u.username`)
+    .bind(weekStart(now), user.id, ...GAME_IDS.map(id => GAME_RULES[id].author)).all<BootstrapProfile>().then(result => result.results);
+  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, launchGift, announcements] = await Promise.all([
+    profiles,
+    readGames(env.DB, user, GAME_IDS, now, profiles),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
     weeklyDailyScores(env.DB, user.id, now),
     readAttendance(env.DB, user, now),
-    readInventory(env.DB, user.id),
     readKujiSummary(env.DB),
     readCatchmindSummary(env.DB),
     getClawSummary(env.DB, user, now.getTime()),
     getLaunchGiftState(env.DB, user, now),
     readAnnouncements(env.DB, user.id, now),
   ]);
-  return { user: viewer, players: players.results.map(player => ({ ...player, character: player.character ?? defaultCharacter(player.username) })),
-    games, ledger: ledger.results, dailyScores, attendance, inventory, kuji, catchmind, claw, launchGift, announcements, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+  const viewer = roster.find(player => player.id === user.id);
+  const players = roster.filter(player => player.role === 'player' && player.active === 1)
+    .sort((left, right) => right.weeklyScore - left.weeklyScore)
+    .map(player => ({ id: player.id, username: player.username, displayName: player.display_name,
+      character: player.character ?? defaultCharacter(player.username), photoVersion: player.photo_version, weeklyScore: player.weeklyScore }));
+  return { user: userView(user, viewer), players,
+    games, ledger: ledger.results, dailyScores, attendance,
+    inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0 },
+    kuji, catchmind, claw, launchGift, announcements, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {
   if (kstDate(new Date()) !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
@@ -619,6 +710,9 @@ async function api(request: Request, env: Env): Promise<Response> {
   throw new HttpError(404, 'NOT_FOUND', '요청한 기능을 찾을 수 없어요.');
 }
 export default {
+  scheduled(event: ScheduledController, env: Env, context: ExecutionContext) {
+    context.waitUntil(maintainDatabase(env.DB, new Date(event.scheduledTime)));
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);

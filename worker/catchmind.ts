@@ -20,12 +20,15 @@ export class CatchmindError extends Error {
 const normalize = (value: string) => value.replace(/\s/gu, '');
 function invalidImage(): never { throw new CatchmindError(400, 'INVALID_IMAGE', '정사각형 PNG 또는 WebP 그림을 올려 주세요.'); }
 
+// Reuse the PNG polynomial table across requests; avoid eight bit steps per byte.
+const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  return crc >>> 0;
+});
 function crc32(bytes: Uint8Array, start: number, end: number): number {
   let crc = 0xffffffff;
-  for (let index = start; index < end; index++) {
-    crc ^= bytes[index]!;
-    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
-  }
+  for (let index = start; index < end; index++) crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ bytes[index]!) & 0xff]!;
   return (crc ^ 0xffffffff) >>> 0;
 }
 function pngDimensions(bytes: Uint8Array): [number, number] {
@@ -93,7 +96,9 @@ export function validateDrawing(value: unknown): string {
   try { raw = atob(match[2]!); } catch { return invalidImage(); }
   if (raw.length > CATCHMIND_RULES.maxImageBytes) throw new CatchmindError(413, 'IMAGE_TOO_LARGE', '그림 파일이 너무 커요. 크기를 줄여 다시 올려 주세요.');
   if (btoa(raw) !== match[2]) return invalidImage();
-  const bytes = Uint8Array.from(raw, character => character.charCodeAt(0));
+  // atob returns one byte per code unit; avoid a callback/iterator for every byte.
+  const bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index++) bytes[index] = raw.charCodeAt(index);
   const [width, height] = match[1] === 'png' ? pngDimensions(bytes) : webpDimensions(bytes);
   if (!width || width !== height) return invalidImage();
   return value;

@@ -26,6 +26,7 @@ DELETE FROM claw_coin_purchases;
 DELETE FROM claw_accounts;
 DELETE FROM ledger;
 DELETE FROM inventory_ledger;
+DELETE FROM user_balances;
 DELETE FROM attendance;
 DELETE FROM login_attempts;
 
@@ -44,6 +45,7 @@ SELECT 'attendance' AS cleared_table, COUNT(*) AS remaining FROM attendance;
 SELECT 'game_rounds' AS cleared_table, COUNT(*) AS remaining FROM game_rounds;
 SELECT 'predictions' AS cleared_table, COUNT(*) AS remaining FROM predictions;
 SELECT 'inventory_ledger' AS cleared_table, COUNT(*) AS remaining FROM inventory_ledger;
+SELECT 'user_balances' AS cleared_table, COUNT(*) AS remaining FROM user_balances;
 SELECT 'shop_purchases' AS cleared_table, COUNT(*) AS remaining FROM shop_purchases;
 SELECT 'kuji_claims' AS cleared_table, COUNT(*) AS remaining FROM kuji_claims;
 SELECT 'kuji_boards' AS cleared_table, COUNT(*) AS remaining FROM kuji_boards;

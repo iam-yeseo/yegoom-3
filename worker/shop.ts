@@ -2,6 +2,7 @@ import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, l
 import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket } from '../shared/types';
 import { kstDate, kstTimestamp, weekStart } from './rules';
 import { announcePrize } from './announcements';
+import { readBalances } from './balances';
 
 export interface ShopUser { id: string; role: 'player' | 'admin' }
 export class ShopError extends Error {
@@ -64,17 +65,11 @@ async function rejectedPurchase(db: D1Database, user: ShopUser, start: number, e
 }
 
 export async function readInventory(db: D1Database, userId: string): Promise<Inventory> {
-  const rows = (await db.prepare('SELECT item, SUM(amount) AS quantity FROM inventory_ledger WHERE user_id = ? GROUP BY item')
-    .bind(userId).all<{ item: string; quantity: number }>()).results;
-  return { lottoTickets: rows.find(row => row.item === 'lotto_ticket')?.quantity ?? 0,
-    speettoTickets: rows.find(row => row.item === 'speetto_ticket')?.quantity ?? 0 };
+  return (await readBalances(db, userId)).inventory;
 }
 export async function readShopState(db: D1Database, user: ShopUser, now: Date): Promise<ShopState> {
-  const [gold, inventory] = await Promise.all([
-    db.prepare("SELECT COALESCE(SUM(amount), 0) AS gold FROM ledger WHERE user_id = ? AND currency = 'gold'").bind(user.id).first<number>('gold'),
-    readInventory(db, user.id),
-  ]);
-  return { gold: gold ?? 0, inventory, canPurchase: user.role === 'player', serverTime: now.toISOString() };
+  const balances = await readBalances(db, user.id);
+  return { ...balances, canPurchase: user.role === 'player', serverTime: now.toISOString() };
 }
 
 function chargeStatements(db: D1Database, attempt: string, kind: ShopKind): D1PreparedStatement[] {
@@ -163,7 +158,7 @@ async function buyKuji(db: D1Database, user: ShopUser, input: Record<string, unk
       (SELECT COUNT(*) FROM kuji_claims WHERE board_id = ?) + ? = ?
     FROM users u, priced WHERE u.id = ? AND u.role = 'player' AND u.active = 1
       AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
-      AND COALESCE((SELECT SUM(amount) FROM ledger WHERE user_id = u.id AND currency = 'gold'), 0) >= priced.cost
+      AND COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= priced.cost
       AND NOT EXISTS (SELECT 1 FROM kuji_claims WHERE board_id = ? AND position IN (SELECT value FROM json_each(?)))`)
     .bind(user.id, window.date, positions.length, KUJI_RULES.higherPrice, positions.length, KUJI_RULES.basePriceCount, KUJI_RULES.higherPrice - KUJI_RULES.basePrice,
       attempt, id, payload, window.date, now.toISOString(), JSON.stringify({ boardId: board.id, cells, reward }), board.id, positions.length, KUJI_RULES.size,
@@ -190,40 +185,50 @@ async function buyKuji(db: D1Database, user: ShopUser, input: Record<string, unk
 
 export async function settleDueLotto(db: D1Database, now: Date): Promise<void> {
   const today = kstDate(now);
-  const overdue = (await db.prepare('SELECT DISTINCT draw_date FROM lotto_tickets WHERE settled_at IS NULL AND draw_date <= ?')
-    .bind(today).all<{ draw_date: string }>()).results;
-  const dates = new Set(overdue.map(row => row.draw_date));
-  if (now.getTime() >= kstTimestamp(today, LOTTO_RULES.drawTime)) dates.add(today);
-  for (const date of [...dates].sort()) {
-    const drawAt = kstTimestamp(date, LOTTO_RULES.drawTime);
-    if (drawAt > now.getTime()) continue;
-    const existing = await db.prepare('SELECT numbers FROM lotto_draws WHERE date = ?').bind(date).first<{ numbers: string }>();
-    if (!existing) {
-      const numbers = shuffled(Array.from({ length: LOTTO_RULES.maxNumber }, (_, index) => index + 1)).slice(0, LOTTO_RULES.pickCount).sort((left, right) => left - right);
-      await db.prepare(`INSERT OR IGNORE INTO lotto_draws (date, numbers, created_at)
-        SELECT ?, ?, ? WHERE unixepoch('now') * 1000 >= ?`).bind(date, JSON.stringify(numbers), now.toISOString(), drawAt).run();
+  const afterDraw = now.getTime() >= kstTimestamp(today, LOTTO_RULES.drawTime);
+  const dueThrough = afterDraw ? today : kstDate(new Date(now.getTime() - 86_400_000));
+  // Completed dates disappear from the partial unsettled index. Once today's
+  // draw exists, an idle check is one SELECT even after the draw time.
+  const dates = (await db.prepare(`SELECT due.draw_date, d.date AS existing_date FROM (
+      SELECT DISTINCT draw_date FROM lotto_tickets WHERE settled_at IS NULL AND draw_date <= ?
+      UNION
+      SELECT ? WHERE ? = 1 AND NOT EXISTS (SELECT 1 FROM lotto_draws WHERE date = ?)
+    ) due LEFT JOIN lotto_draws d ON d.date = due.draw_date ORDER BY due.draw_date`)
+    .bind(dueThrough, today, Number(afterDraw), today).all<{ draw_date: string; existing_date: string | null }>()).results;
+  if (!dates.length) return;
+  const missingDraws = dates.filter(date => date.existing_date === null).map(({ draw_date: date }) => {
+    const numbers = shuffled(Array.from({ length: LOTTO_RULES.maxNumber }, (_, index) => index + 1))
+      .slice(0, LOTTO_RULES.pickCount).sort((left, right) => left - right);
+    return db.prepare(`INSERT OR IGNORE INTO lotto_draws (date, numbers, created_at)
+      SELECT ?, ?, ? WHERE unixepoch('now') * 1000 >= ?`)
+      .bind(date, JSON.stringify(numbers), now.toISOString(), kstTimestamp(date, LOTTO_RULES.drawTime));
+  });
+  if (missingDraws.length) await db.batch(missingDraws);
+  // Read the persisted draw after INSERT OR IGNORE: another reader may have won
+  // the race. One query covers every missed date without a per-date call loop.
+  const tickets = (await db.prepare(`SELECT t.id, t.numbers, p.user_id, d.numbers AS winning_numbers
+    FROM lotto_tickets t JOIN shop_purchases p ON p.id = t.id JOIN lotto_draws d ON d.date = t.draw_date
+    WHERE t.settled_at IS NULL AND t.draw_date IN (SELECT value FROM json_each(?))`)
+    .bind(JSON.stringify(dates.map(date => date.draw_date)))
+    .all<{ id: string; numbers: string; user_id: string; winning_numbers: string }>()).results;
+  const writes: D1PreparedStatement[] = [];
+  for (const ticket of tickets) {
+    const winning = JSON.parse(ticket.winning_numbers) as number[];
+    const matches = (JSON.parse(ticket.numbers) as number[]).filter(number => winning.includes(number)).length;
+    const prize = lottoPrize(matches);
+    const rank = lottoRank(matches);
+    if (prize) writes.push(db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+      VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), ticket.user_id, prize, `데일리 로또 ${rank}등`, `lotto:prize:${ticket.id}`, now.toISOString()));
+    if (rank !== null && ANNOUNCEMENT_RULES.lottoRanks.some(value => value === rank)) {
+      writes.push(announcePrize(db, 'lotto', `lotto:prize:${ticket.id}`, rank));
     }
-    const draw = await db.prepare('SELECT numbers FROM lotto_draws WHERE date = ?').bind(date).first<{ numbers: string }>();
-    if (!draw) continue;
-    const winning = JSON.parse(draw.numbers) as number[];
-    const tickets = (await db.prepare(`SELECT t.id, t.numbers, p.user_id FROM lotto_tickets t JOIN shop_purchases p ON p.id = t.id
-      WHERE t.draw_date = ? AND t.settled_at IS NULL`).bind(date).all<{ id: string; numbers: string; user_id: string }>()).results;
-    for (const ticket of tickets) {
-      const matches = (JSON.parse(ticket.numbers) as number[]).filter(number => winning.includes(number)).length;
-      const prize = lottoPrize(matches);
-      const rank = lottoRank(matches);
-      const writes: D1PreparedStatement[] = [];
-      if (prize) writes.push(db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
-        VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
-        .bind(crypto.randomUUID(), ticket.user_id, prize, `데일리 로또 ${rank}등`, `lotto:prize:${ticket.id}`, now.toISOString()));
-      if (rank !== null && ANNOUNCEMENT_RULES.lottoRanks.some(value => value === rank)) {
-        writes.push(announcePrize(db, 'lotto', `lotto:prize:${ticket.id}`, rank));
-      }
-      writes.push(db.prepare('UPDATE lotto_tickets SET matches = ?, rank = ?, prize = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL')
-        .bind(matches, rank, prize, now.toISOString(), ticket.id));
-      await db.batch(writes);
-    }
+    writes.push(db.prepare('UPDATE lotto_tickets SET matches = ?, rank = ?, prize = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL')
+      .bind(matches, rank, prize, now.toISOString(), ticket.id));
   }
+  // D1 counts batch() as one invocation query. Catching up several missed dates
+  // keeps the same call budget, with payouts, notices and settlement atomic.
+  if (writes.length) await db.batch(writes);
 }
 
 function simplePurchaseStatement(db: D1Database, user: ShopUser, id: string, kind: 'lotto' | 'speetto', payload: string, method: ShopPayment,
@@ -232,10 +237,11 @@ function simplePurchaseStatement(db: D1Database, user: ShopUser, id: string, kin
     SELECT ?, u.id, ?, ?, ?, ?, ?, ?, ?, ? FROM users u
     WHERE u.id = ? AND u.role = 'player' AND u.active = 1
       AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
-      AND ((? = 'gold' AND COALESCE((SELECT SUM(amount) FROM ledger WHERE user_id = u.id AND currency = 'gold'), 0) >= ?)
-        OR (? = 'ticket' AND COALESCE((SELECT SUM(amount) FROM inventory_ledger WHERE user_id = u.id AND item = ?), 0) >= 1))`)
+      AND ((? = 'gold' AND COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?)
+        OR (? = 'ticket' AND COALESCE((SELECT CASE ? WHEN 'lotto' THEN lotto_tickets ELSE speetto_tickets END
+          FROM user_balances WHERE user_id = u.id), 0) >= 1))`)
     .bind(attempt, id, kind, payload, method, method === 'gold' ? price : 0, kstDate(now), now.toISOString(), outcome,
-      user.id, start, end, method, price, method, `${kind}_ticket`);
+      user.id, start, end, method, price, method, kind);
 }
 async function buyLotto(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<PurchaseRow> {
   const id = requestId(input); const method = payment(input);

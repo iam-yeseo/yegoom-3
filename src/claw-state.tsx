@@ -3,7 +3,7 @@ import type { Board } from "../shared/claw-physics";
 import type { AdminClawConfig } from "../shared/admin";
 import type { ClawCoinInput, ClawPlayInput, ClawResponse, ClawSummary, LedgerEntry } from "../shared/types";
 import { api, ApiFailure } from "./api";
-import { createClawPreview } from "./claw-preview";
+import type { createClawPreview } from "./claw-preview";
 
 export interface PendingClawPlay { input: ClawPlayInput; board: Board; response?: ClawResponse }
 export interface PendingClawPurchase { input: ClawCoinInput }
@@ -48,7 +48,16 @@ export function ClawProvider({ children, preview, adminPreview = false, previewC
 }) {
   const config = useRef(previewConfig); config.current = previewConfig;
   const engine = useRef<ReturnType<typeof createClawPreview> | null>(null);
-  if (preview && !engine.current) engine.current = createClawPreview({ admin: adminPreview, getConfig: () => config.current });
+  const engineLoad = useRef<Promise<ReturnType<typeof createClawPreview>> | null>(null);
+  const previewEngine = useCallback(async () => {
+    if (!preview) return null;
+    // The provider survives navigation, so its offline wallet and receipts do too.
+    engineLoad.current ??= import("./claw-preview").then(module => {
+      engine.current = module.createClawPreview({ admin: adminPreview, getConfig: () => config.current });
+      return engine.current;
+    }).catch(error => { engineLoad.current = null; throw error; });
+    return engineLoad.current;
+  }, [preview, adminPreview]);
   const key = `yegoom3:claw:pending:${accountKey}`;
   const saved = useRef(preview ? { play: null, purchase: null } : restore(key));
   const [state, setState] = useState<ClawResponse | null>(null);
@@ -83,13 +92,14 @@ export function ClawProvider({ children, preview, adminPreview = false, previewC
     const read = ++generation.current;
     setLoading(true);
     try {
-      const next = engine.current ? engine.current.read() : await api.claw();
+      const local = await previewEngine();
+      const next = local ? local.read() : await api.claw();
       if (!mounted.current || read !== generation.current) return;
       apply(next); setError(""); return next;
     } catch (e) {
       if (mounted.current && read === generation.current) setError(e instanceof Error ? e.message : "기계를 불러오지 못했어요.");
     } finally { if (mounted.current && read === generation.current) setLoading(false); }
-  }, [apply]);
+  }, [apply, previewEngine]);
   const run = useCallback(async (action: () => Promise<ClawResponse>, success: (response: ClawResponse) => void, rejected: () => void) => {
     if (writing.current) throw new Error("이전 요청을 확인하고 있어요.");
     writing.current = true; generation.current++;
@@ -118,9 +128,9 @@ export function ClawProvider({ children, preview, adminPreview = false, previewC
     if (!stateRef.current && !previous) throw new Error("기계를 먼저 불러와 주세요.");
     const attempt = previous ?? { input, board: structuredClone(stateRef.current!.board) };
     remember(attempt, null);
-    return run(async () => engine.current ? engine.current.play(input) : api.playClaw(input),
+    return run(async () => { const local = await previewEngine(); return local ? local.play(input) : api.playClaw(input); },
       response => remember({ ...attempt, response }, null), () => remember(null, null));
-  }, [remember, run]);
+  }, [remember, run, previewEngine]);
   const retryPlay = useCallback(async () => {
     const pending = playRef.current;
     if (!pending) throw new Error("확인할 플레이가 없어요.");
@@ -133,8 +143,8 @@ export function ClawProvider({ children, preview, adminPreview = false, previewC
     if (previous && previous.input.quantity !== quantity) throw new Error("이전 구매 결과를 먼저 확인해 주세요.");
     const attempt = previous ?? { input: { requestId: crypto.randomUUID(), quantity } };
     remember(null, attempt);
-    return run(async () => engine.current ? engine.current.buy(attempt.input, callbacks.current.gold) : api.buyClawCoins(attempt.input),
+    return run(async () => { const local = await previewEngine(); return local ? local.buy(attempt.input, callbacks.current.gold) : api.buyClawCoins(attempt.input); },
       () => remember(null, null), () => remember(null, null));
-  }, [remember, run]);
+  }, [remember, run, previewEngine]);
   return <Context.Provider value={{ preview, state, loading, busy, error, pendingPlay, pendingPurchase, forceStrong, setForceStrong, load, buy, play, retryPlay, completePlay }}>{children}</Context.Provider>;
 }
