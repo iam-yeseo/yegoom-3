@@ -8,6 +8,7 @@ import { DUMMY_HASH, hashPassword, hashToken, randomToken, verifyPassword } from
 import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readKujiSummary, readLottoNotice, settleDueLotto, ShopError, shopRoute } from './shop';
+import { RankingError, readRanking } from './ranking';
 import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary, readRemainingWords } from './catchmind';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
@@ -682,6 +683,10 @@ async function api(request: Request, env: Env): Promise<Response> {
     if (limit > CATCHMIND_RULES.galleryPageSize) throw new HttpError(400, 'INVALID_PAGE', '한 번에 불러올 그림 수를 확인해 주세요.');
     return json(await readCatchmindGallery(env.DB, before, limit));
   }
+  if (url.pathname === '/api/ranking') {
+    if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return json(await readRanking(env.DB, user, url.searchParams.get('period'), url.searchParams.get('before'), now));
+  }
   const catchmindImageMatch = /^\/api\/catchmind\/rounds\/([^/]+)\/image$/.exec(url.pathname);
   if (catchmindImageMatch) {
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
@@ -723,7 +728,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof RankingError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

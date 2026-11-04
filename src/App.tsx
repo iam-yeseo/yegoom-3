@@ -28,7 +28,6 @@ import { PredictionGame } from "./components/PredictionGame";
 import { ClawProvider } from "./claw-state";
 import { previewClawSummary } from "./claw-summary";
 import {
-  previewDaily,
   previewGame,
   previewGold,
   previewLastWeek,
@@ -771,11 +770,12 @@ export default function App() {
     content = (
       <Ranking
         me={view.displayName}
+        viewerId={me.id}
         gold={me.gold}
         players={view.players}
         serverTime={demo ? undefined : new Date(Date.now() + serverClockOffset.current).toISOString()}
-        daily={demo ? previewDaily : (data?.dailyScores ?? [0, 0, 0, 0, 0, 0, 0])}
         lastWeek={demo ? previewLastWeek : null}
+        demo={demo}
         onBack={home}
       />
     );

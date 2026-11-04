@@ -79,6 +79,15 @@ test('home rank sentences cover every tie case and share competition ranks with 
   ];
   let payload = snapshot;
   await page.route('**/api/bootstrap', route => route.fulfill({ json: payload }));
+  // The ranking screen reads its own period response (PR 8); mirror the same fixture.
+  await page.route('**/api/ranking?**', route => route.fulfill({ json: {
+    period: 'week', range: { start: '2026-10-26', end: '2026-11-01' },
+    standings: payload.players.map(player => ({ userId: player.id, username: player.username, displayName: player.displayName,
+      photoVersion: player.photoVersion, character: player.character, score: player.weeklyScore }))
+      .sort((a, b) => b.score - a.score), // stable: same tie order as the mocked bootstrap
+    buckets: ['월', '화', '수', '목', '금', '토', '일'].map((label, index) => ({ key: String(index), label, score: index === 4 ? payload.user.weeklyScore : 0, current: index === 4, future: index > 4 })),
+    history: [], nextBefore: null, serverTime: MORNING,
+  } }));
   for (const scenario of cases) {
     await test.step(scenario.name, async () => {
       payload = withPlayers(snapshot, scenario.people);

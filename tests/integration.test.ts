@@ -22,7 +22,7 @@ import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
 import { maintainDatabase } from '../worker/maintenance';
 import { rankSummary, standings } from '../src/ranking';
-import type { CatchmindGalleryResponse, SlotResponse } from '../shared/types';
+import type { CatchmindGalleryResponse, RankingResponse, SlotResponse } from '../shared/types';
 import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
 // Tiny, real encoded fixtures: solid coral images generated with Pillow, quality 80.
@@ -1019,6 +1019,95 @@ describe('Worker and D1 integration', () => {
       }
       console.log(`Claw authenticated request metrics: ${JSON.stringify(measurements)}`);
     }, 30000);
+  });
+
+  describe('ranking periods API', () => {
+    // TODAY is Friday 2026-10-30 (KST): week 10-26..11-01, month October.
+    async function score(database: Database, id: string, userId: string, amount: number, reference: string, createdAt: string, week: string) {
+      await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
+        VALUES (?, ?, 'score', ?, 'ranking fixture', ?, ?, ?)`).bind(id, userId, amount, reference, createdAt, week).run();
+    }
+    async function seed(database: Database) {
+      await database.prepare(`INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, round_date, created_at)
+        VALUES ('cm-old', 1, 'min', '사과', '사과', '["사과"]', 'ended', '2026-10-28', '2026-10-28T03:00:00.000Z')`).run();
+      // A luck round from yesterday settled this morning still belongs to yesterday.
+      await score(database, 'r-luck', 'min', 20, 'score:luck:2026-10-29:min', `${TODAY}T00:10:00.000Z`, '2026-10-26');
+      await score(database, 'r-wake', 'yeseo', 25, `score:wake:${TODAY}:yeseo`, `${TODAY}T01:31:00.000Z`, '2026-10-26');
+      await score(database, 'r-claw', 'yeseo', 5, 'claw:clear:p1:score', `${TODAY}T02:00:00.000Z`, '2026-10-26');
+      // Guessed today, published on Wednesday: counts for Wednesday.
+      await score(database, 'r-cm', 'siwon', 3, 'catchmind:score:cm-old', `${TODAY}T03:00:00.000Z`, '2026-10-26');
+      await score(database, 'r-kuji', 'siwon', 10, 'kuji:score:k1', '2026-10-20T05:00:00.000Z', '2026-10-19');
+      // Read with the week of 09-28 (it overlaps October) but dated September 30.
+      await score(database, 'r-sept', 'min', 50, 'score:wake:2026-09-30:min', '2026-09-30T02:00:00.000Z', '2026-09-28');
+    }
+    it('ranks day, week and month by game date with zero scores, buckets and names', async () => {
+      await seed(db);
+      await db.prepare(`INSERT INTO users (id, username, display_name, password_hash, role, active) VALUES ('gone', 'gone', '떠난 사람', ?, 'player', 0)`).bind(passwordHash).run();
+      await score(db, 'r-gone', 'gone', 7, 'claw:doll:p2:score', `${TODAY}T04:00:00.000Z`, '2026-10-26');
+      const { cookie } = await login('yeseo');
+      const read = async (period: string) => {
+        const response = await request(`/api/ranking?period=${period}`, { cookie });
+        expect(response.status).toBe(200);
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        return response.json() as Promise<RankingResponse>;
+      };
+      const day = await read('day');
+      expect(day.range).toEqual({ start: TODAY, end: TODAY });
+      expect(day.standings.map(entry => [entry.username, entry.score])).toEqual([['yeseo', 30], ['min', 0], ['siwon', 0]]);
+      expect(day.buckets.map(bucket => [bucket.key, bucket.score])).toEqual([['wake', 25], ['claw', 5]]);
+      expect(day.history.map(entry => [entry.username, entry.label, entry.amount])).toEqual([
+        ['gone', '캐릭터 뽑기', 7], ['yeseo', '캐릭터 뽑기 · 클리어 보너스', 5], ['yeseo', '기상시간 맞히기', 25]]);
+      const week = await read('week');
+      expect(week.range).toEqual({ start: '2026-10-26', end: '2026-11-01' });
+      expect(week.standings.map(entry => [entry.username, entry.score])).toEqual([['yeseo', 30], ['min', 20], ['siwon', 3]]);
+      expect(week.buckets.map(bucket => bucket.score)).toEqual([0, 0, 0, 0, 30, 0, 0]);
+      expect(week.buckets[4]).toMatchObject({ current: true, future: false });
+      expect(week.history.find(entry => entry.id === 'r-cm')).toMatchObject({ game: 'catchmind', gameDate: '2026-10-28' });
+      expect(week.history.find(entry => entry.id === 'r-luck')).toMatchObject({ gameDate: '2026-10-29' });
+      const month = await read('month');
+      expect(month.range).toEqual({ start: '2026-10-01', end: '2026-10-31' });
+      expect(month.standings.map(entry => [entry.username, entry.score])).toEqual([['yeseo', 30], ['min', 20], ['siwon', 13]]);
+      expect(month.buckets.map(bucket => bucket.label)).toEqual(['1주차', '2주차', '3주차', '4주차', '5주차']);
+      expect(month.history.some(entry => entry.id === 'r-sept')).toBe(false);
+    });
+    it('pages history, validates input and lets administrators read', async () => {
+      for (let index = 0; index < 25; index++) {
+        await score(db, `p-${String(index).padStart(2, '0')}`, 'min', 1, `claw:doll:page${index}:score`, `${TODAY}T0${index % 3}:00:00.000Z`, '2026-10-26');
+      }
+      const { cookie } = await login('min');
+      const first = await (await request('/api/ranking?period=day', { cookie })).json() as RankingResponse;
+      expect(first.history).toHaveLength(20);
+      expect(first.nextBefore).toMatch(/^2026-10-30T0\d:00:00\.000Z\|p-\d{2}$/);
+      const second = await (await request(`/api/ranking?period=day&before=${encodeURIComponent(first.nextBefore!)}`, { cookie })).json() as RankingResponse;
+      expect(second.history).toHaveLength(5);
+      expect(second.nextBefore).toBeNull();
+      expect(new Set([...first.history, ...second.history].map(entry => entry.id)).size).toBe(25);
+      expect((await request('/api/ranking?period=year', { cookie })).status).toBe(400);
+      expect((await request('/api/ranking', { cookie })).status).toBe(400);
+      expect((await request('/api/ranking?period=day&before=bad', { cookie })).status).toBe(400);
+      expect((await request('/api/ranking?period=day', { cookie, method: 'POST', body: {} })).status).toBe(405);
+      expect((await request('/api/ranking?period=day')).status).toBe(401);
+      const admin = await login('admin');
+      const adminView = await request('/api/ranking?period=week', { cookie: admin.cookie });
+      expect(adminView.status).toBe(200);
+      const adminBody = await adminView.json() as RankingResponse;
+      expect(adminBody.standings.map(entry => entry.username)).toEqual(['min', 'siwon', 'yeseo']);
+      expect(adminBody.buckets.every(bucket => bucket.score === 0)).toBe(true);
+    });
+    it('reads a period with two queries after authentication and writes nothing', async () => {
+      const instance = runtime(workerWithD1Metrics(script));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        await seed(database);
+        const { cookie } = await login('yeseo', instance);
+        for (const period of ['day', 'week', 'month']) {
+          const response = await request(`/api/ranking?period=${period}`, { cookie, instance });
+          expect(response.status).toBe(200);
+          expect(Number(response.headers.get('X-Test-D1-Queries'))).toBe(3); // session + scores + roster
+          expect(Number(response.headers.get('X-Test-D1-Rows-Written'))).toBe(0);
+        }
+      } finally { await instance.dispose(); }
+    });
   });
 
   describe('self-service password changes', () => {
