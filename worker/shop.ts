@@ -1,5 +1,6 @@
-import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
-import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoNotice, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket } from '../shared/types';
+import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoNotice, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotResponse, SlotSpin, SlotSymbol } from '../shared/types';
+import { slotResult } from '../shared/slot';
 import { kstDate, kstTimestamp, weekStart } from './rules';
 import { announcePrize } from './announcements';
 import { readBalances } from './balances';
@@ -15,6 +16,9 @@ interface PurchaseRow {
 interface BoardRow { id: number; grades: string }
 interface LottoRow extends PurchaseRow {
   draw_date: string; numbers: string; winning_numbers: string | null; matches: number | null; rank: number | null; prize: number | null;
+}
+interface SlotRow {
+  id: string; user_id: string; request_id: string; cost: number; reels: string; prize: number; date: string; created_at: string;
 }
 
 /** Unbiased crypto randomness. Tests replace this function only in their bundle. */
@@ -330,7 +334,50 @@ async function buySpeetto(db: D1Database, user: ShopUser, input: Record<string, 
   return await previousPurchase(db, user, id, 'speetto', payload) ?? await rejectedPurchase(db, user, window.start, window.end);
 }
 
-export async function shopRoute(db: D1Database, user: ShopUser, path: string, method: string, input: Record<string, unknown> | undefined, now: Date): Promise<ShopState | KujiResponse | LottoResponse | SpeettoResponse> {
+function slotSpin(row: SlotRow): SlotSpin {
+  return { id: row.id, requestId: row.request_id, reels: JSON.parse(row.reels) as SlotSymbol[], cost: row.cost,
+    prize: row.prize, date: row.date, createdAt: row.created_at };
+}
+async function previousSlotSpin(db: D1Database, userId: string, id: string): Promise<SlotRow | null> {
+  return db.prepare('SELECT * FROM slot_spins WHERE user_id = ? AND request_id = ?').bind(userId, id).first<SlotRow>();
+}
+async function spinSlot(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<SlotRow> {
+  const id = requestId(input);
+  const previous = await previousSlotSpin(db, user.id, id);
+  if (previous) return previous;
+  const result = slotResult(randomInt);
+  const attempt = crypto.randomUUID();
+  const window = dayWindow(now);
+  const writes = [
+    db.prepare(`INSERT OR IGNORE INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at)
+      SELECT ?, u.id, ?, ?, ?, ?, ?, ? FROM users u
+      WHERE u.id = ? AND u.role = 'player' AND u.active = 1
+        AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
+        AND COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?`)
+      .bind(attempt, id, SLOT_RULES.price, JSON.stringify(result.reels), result.prize, window.date, now.toISOString(),
+        user.id, window.start, window.end, SLOT_RULES.price),
+    db.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+      SELECT ?, user_id, 'gold', -cost, '슬롯머신', 'slot:buy:' || user_id || ':' || request_id, created_at
+      FROM slot_spins WHERE id = ?`).bind(crypto.randomUUID(), attempt),
+  ];
+  if (result.prize) writes.push(db.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+    SELECT ?, user_id, 'gold', prize, '슬롯머신 당첨', 'slot:prize:' || id, created_at
+    FROM slot_spins WHERE id = ? AND prize > 0`).bind(crypto.randomUUID(), attempt));
+  // Every debit, prize and derived balance trigger shares this one transaction.
+  // A duplicate request has no row with this attempt's id and writes no ledger.
+  await db.batch(writes);
+  const receipt = await previousSlotSpin(db, user.id, id);
+  if (receipt) return receipt;
+  const active = await db.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'player' AND active = 1").bind(user.id).first();
+  if (!active) throw new ShopError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');
+  const clock = await db.prepare("SELECT unixepoch('now') * 1000 AS now").first<{ now: number }>();
+  if (!clock || clock.now < window.start || clock.now >= window.end) {
+    throw new ShopError(409, 'PURCHASE_TIME_CHANGED', '구매 날짜가 바뀌었어요. 새로고침하고 다시 시도해 주세요.');
+  }
+  throw new ShopError(409, 'INSUFFICIENT_GOLD', '골드가 부족해요');
+}
+
+export async function shopRoute(db: D1Database, user: ShopUser, path: string, method: string, input: Record<string, unknown> | undefined, now: Date): Promise<ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse> {
   if (method !== 'GET' && method !== 'POST') throw new ShopError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
   if (method === 'POST' && user.role !== 'player') throw new ShopError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');
   await settleDueLotto(db, now);
@@ -357,6 +404,13 @@ export async function shopRoute(db: D1Database, user: ShopUser, path: string, me
     const rows = (await db.prepare("SELECT * FROM shop_purchases WHERE user_id = ? AND date >= ? AND kind = 'speetto' ORDER BY created_at DESC, id")
       .bind(user.id, recentPurchaseDate(now)).all<PurchaseRow>()).results;
     return { ...await readShopState(db, user, now), speetto: { tickets: rows.map(speettoTicket) }, ...(purchase ? { purchase: speettoTicket(purchase) } : {}) };
+  }
+  if (path === '/api/shop/slot') {
+    const receipt = method === 'POST' ? await spinSlot(db, user, input!, now) : undefined;
+    const rows = (await db.prepare(`SELECT * FROM slot_spins WHERE user_id = ? AND date >= ?
+      ORDER BY date DESC, created_at DESC, id DESC LIMIT ?`)
+      .bind(user.id, recentPurchaseDate(now), SLOT_RULES.historyLimit).all<SlotRow>()).results;
+    return { ...await readShopState(db, user, now), slot: { recent: rows.map(slotSpin) }, ...(receipt ? { spin: slotSpin(receipt) } : {}) };
   }
   throw new ShopError(404, 'NOT_FOUND', '요청한 상점 기능이 없어요.');
 }

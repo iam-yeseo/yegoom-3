@@ -1,9 +1,10 @@
-import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, attendanceTickets, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, attendanceTickets, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
 import type {
   Inventory, KujiCell, KujiGrade, KujiPurchase, KujiPurchaseInput, KujiResponse,
   LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoTicket, ShopKind, ShopPayment,
-  ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoSymbol, SpeettoTicket,
+  ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotSpin, SlotSpinInput, SlotResponse,
 } from '../shared/types';
+import { slotResult } from '../shared/slot';
 
 const DAY = 86_400_000;
 const kstDate = (now: Date) => new Date(now.getTime() + 9 * 3_600_000).toISOString().slice(0, 10);
@@ -47,6 +48,9 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   let purchasedToday = 4;
   const lottoTickets: LottoTicket[] = [];
   const speettoTickets: SpeettoTicket[] = [];
+  const slotSpins: SlotSpin[] = [];
+  // Slot receipts have their own table/request namespace on the server too.
+  const slotReceipts = new Map<string, SlotSpin>();
   const draws = new Map<string, number[]>();
   const receipts = new Map<string, {
     kind: ShopKind; payload: string; purchase: KujiPurchase | LottoTicket | SpeettoTicket;
@@ -129,6 +133,13 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     const cutoff = nextDate(kstDate(now), -(SHOP_HISTORY_DAYS - 1));
     return structuredClone({ ...state(now), speetto: { tickets: speettoTickets.filter(ticket => ticket.purchaseDate >= cutoff) }, ...(purchase ? { purchase } : {}) });
   }
+  function slot(now: Date, spin?: SlotSpin): SlotResponse {
+    const cutoff = nextDate(kstDate(now), -(SHOP_HISTORY_DAYS - 1));
+    const recent = slotSpins.filter(entry => entry.date >= cutoff)
+      .sort((left, right) => right.date.localeCompare(left.date) || right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))
+      .slice(0, SLOT_RULES.historyLimit);
+    return structuredClone({ ...state(now), slot: { recent }, ...(spin ? { spin } : {}) });
+  }
   function lottoNotice(now = new Date()): LottoNotice | null {
     settle(now);
     const today = kstDate(now);
@@ -157,12 +168,13 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   function read(kind: 'kuji'): KujiResponse;
   function read(kind: 'lotto'): LottoResponse;
   function read(kind: 'speetto'): SpeettoResponse;
-  function read(kind: ShopKind): KujiResponse | LottoResponse | SpeettoResponse;
-  function read(kind?: ShopKind): ShopState | KujiResponse | LottoResponse | SpeettoResponse;
-  function read(kind?: ShopKind): ShopState | KujiResponse | LottoResponse | SpeettoResponse {
+  function read(kind: 'slot'): SlotResponse;
+  function read(kind: ShopKind): KujiResponse | LottoResponse | SpeettoResponse | SlotResponse;
+  function read(kind?: ShopKind): ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse;
+  function read(kind?: ShopKind): ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse {
     const now = new Date();
     begin(now);
-    return kind === 'kuji' ? kuji(now) : kind === 'lotto' ? lotto(now) : kind === 'speetto' ? speetto(now) : state(now);
+    return kind === 'kuji' ? kuji(now) : kind === 'lotto' ? lotto(now) : kind === 'speetto' ? speetto(now) : kind === 'slot' ? slot(now) : state(now);
   }
   function buyKuji(input: KujiPurchaseInput): KujiResponse {
     const now = new Date();
@@ -238,7 +250,23 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     receipts.set(input.requestId, { kind: 'speetto', payload, purchase });
     return speetto(now, purchase);
   }
-  return { read, buyKuji, buyLotto, buySpeetto, lottoNotice,
+  function spinSlot(input: SlotSpinInput): SlotResponse {
+    const now = new Date();
+    begin(now);
+    if (typeof input.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.requestId)) throw new Error('구매 요청을 다시 시도해 주세요.');
+    const previous = slotReceipts.get(input.requestId);
+    if (previous) return slot(now, previous);
+    if (gold < SLOT_RULES.price) throw new Error('골드가 부족해요');
+    const result = slotResult(max => Math.floor(Math.random() * max));
+    const spin: SlotSpin = { id: crypto.randomUUID(), requestId: input.requestId, ...result,
+      cost: SLOT_RULES.price, date: kstDate(now), createdAt: now.toISOString() };
+    record('gold', -spin.cost, '슬롯머신', now);
+    record('gold', spin.prize, '슬롯머신 당첨', now);
+    slotSpins.unshift(spin);
+    slotReceipts.set(input.requestId, spin);
+    return slot(now, spin);
+  }
+  return { read, buyKuji, buyLotto, buySpeetto, spinSlot, lottoNotice,
     claimLaunchGift() {
       const now = new Date();
       if (kstDate(now) !== LAUNCH_GIFT.date) throw new Error('런칭 선물은 오픈 당일에만 받을 수 있어요.');

@@ -16,7 +16,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventory_ledger', 'user_balances', 'shop_purchases',
   'kuji_claims', 'kuji_boards', 'lotto_tickets', 'lotto_draws', 'catchmind_guesses', 'catchmind_requests', 'catchmind_used_words',
   'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts', 'announcements', 'luck_photos'];
-const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes'];
+// The launch-era reset does not cover the later slot-machine receipts.
+const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -94,6 +95,7 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO claw_accounts (user_id, free_coins, purchased_coins, last_grant_slot, board_json, generation, version, power_counter) VALUES ('min', 2, 4, 1, '{}', 3, 5, 7)"),
       db.prepare("INSERT INTO claw_plays (id, user_id, request_id, generation, version, claw_x, caught, score, gold, clear_bonus, result_json, created_at) VALUES ('old-play', 'min', 'old-play-request', 3, 5, 0.5, 1, 1, 10, 0, '{}', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO claw_coin_purchases (id, user_id, request_id, quantity, cost, created_at) VALUES ('old-coins', 'min', 'old-coins-request', 5, 500, '2026-11-01T00:00:00Z')"),
+      db.prepare("INSERT INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at) VALUES ('retained-slot', 'min', 'retained-slot-request', 500, '[\"banana\",\"apple\",\"seven\"]', 0, '2026-11-01', '2026-11-01T00:00:00Z')"),
     ]);
   });
   afterAll(async () => { await worker?.dispose(); });
@@ -111,7 +113,7 @@ describe('launch reset in an isolated local D1', () => {
     });
   }
 
-  it('clears every record, preserves complete account/configuration data and restores the exact immutable triggers', async () => {
+  it('clears launch-era game records, preserves accounts/configuration and later slot receipts, and restores the exact immutable triggers', async () => {
     const existingTables = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all<{ name: string }>()).results.map(row => row.name).sort();
     expect(existingTables).toEqual([...cleared, ...preserved, 'catchmind_turn'].sort());
     for (const table of [...cleared, ...preserved]) expect(await db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first('count'), table).toBeGreaterThan(0);
@@ -120,6 +122,8 @@ describe('launch reset in an isolated local D1', () => {
     const results = await db.batch<Record<string, unknown>>(reset.map(sql => db.prepare(sql)));
     for (const table of cleared) expect(await db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first('count'), table).toBe(0);
     expect(await contents(preserved)).toEqual(before);
+    expect(await db.prepare("SELECT id, request_id, cost, reels, prize FROM slot_spins WHERE id = 'retained-slot'").first())
+      .toEqual({ id: 'retained-slot', request_id: 'retained-slot-request', cost: 500, reels: '["banana","apple","seven"]', prize: 0 });
     expect(await triggers()).toEqual(originalTriggers);
     expect((await triggers()).filter(trigger => appendOnly.includes(trigger.name))).toHaveLength(4);
     expect(await db.prepare('SELECT * FROM catchmind_turn').all()).toMatchObject({ results: [{ id: 1, drawer_id: null, round_id: null }] });

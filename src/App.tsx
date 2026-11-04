@@ -41,6 +41,7 @@ import { Home, SoloGames, TodayGames, type HomeData } from "./screens/Home";
 import { Profile } from "./screens/Profile";
 import { Ranking } from "./screens/Ranking";
 import { Lotto, ShopMain, Speetto } from "./screens/Shop";
+import { Slot } from "./screens/Slot";
 import { Kuji } from "./screens/Kuji";
 import { ShopProvider } from "./shop";
 import { CatchmindProvider } from "./catchmind";
@@ -846,11 +847,13 @@ export default function App() {
     content = <Lotto gold={me.gold} onBack={() => go("/shop")} />;
   else if (path === "/shop/speetto")
     content = <Speetto gold={me.gold} onBack={() => go("/shop")} />;
+  else if (path === "/shop/slot")
+    content = <Slot onBack={() => go("/shop")} />;
   else content = <Home data={view} go={go} />;
   // Sub-pages have their own back button instead of the tab bar.
   const subPage =
     !!play || !!gameId || !!stockId ||
-    ["/attendance", "/stock", "/shop/lotto", "/shop/speetto"].includes(path);
+    ["/attendance", "/stock", "/shop/lotto", "/shop/speetto", "/shop/slot"].includes(path);
   const showTabs = !!view && !!me && !subPage;
   const screenRef = useScreenTransition(path);
   useStatusBarColor(screenRef, `${path}|${loading}|${!!data}`);
