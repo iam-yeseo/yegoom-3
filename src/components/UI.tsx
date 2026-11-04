@@ -2,9 +2,9 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, us
 import { ART_KEYS, defaultCharacter, isArtKey, type ArtKey } from "../../shared/characters";
 import { anim, useOnChange } from "../motion";
 import "../profile-photo.css";
+import { honorific, plainName } from '../names';
 
-/** Display-only suffix; keep stored nicknames and form values unchanged. */
-export const honorific = (name: string): string => `${name}님`;
+export { honorific, plainName } from '../names';
 
 export interface ProfileDirectoryEntry {
   id: string;
@@ -295,6 +295,7 @@ export function Avatar({
   artKey,
   userId,
   photoVersion,
+  nameFormat = "honorific",
   size = 40,
   radius = "50%",
 }: {
@@ -302,6 +303,7 @@ export function Avatar({
   artKey?: ArtKey;
   userId?: string;
   photoVersion?: number | null;
+  nameFormat?: "honorific" | "plain";
   size?: number;
   radius?: string;
 }) {
@@ -325,7 +327,7 @@ export function Avatar({
       }}
     >
       {source && source !== failedSource
-        ? <img className="avatar-photo" src={source} alt={profile ? `${honorific(profile.displayName)} 프로필 사진` : "프로필 사진"} onError={() => setFailedSource(source)} />
+        ? <img className="avatar-photo" src={source} alt={profile ? `${(nameFormat === 'plain' ? plainName : honorific)(profile.displayName)} 프로필 사진` : "프로필 사진"} onError={() => setFailedSource(source)} />
         : <Character artKey={key} />}
     </span>
   );

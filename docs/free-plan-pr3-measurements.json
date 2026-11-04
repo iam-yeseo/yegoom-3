@@ -1,0 +1,317 @@
+{
+  "measuredOn": "2026-11-04",
+  "baseCommit": "6b52972",
+  "scope": "Improvement PR 3 home and ranking UI; authenticated bootstrap requests only",
+  "baselineSource": "docs/free-plan-measurements.json: after (PR 2 implementation b506262, merged as 6b52972)",
+  "measurementSource": "tests/integration.test.ts: bounds authenticated polling queries and rows as historical ledgers grow",
+  "command": "FREE_PLAN_MEASUREMENTS=/tmp/yegoom-pr3-d1.json npm test -- tests/integration.test.ts -t \"bounds authenticated polling queries\"",
+  "environment": {
+    "node": "v24.19.0",
+    "miniflare": "4.20260730.0",
+    "vitest": "3.2.7",
+    "database": "local D1 / workerd; not remote production measurements"
+  },
+  "fixture": {
+    "frozenKstDate": "2026-10-30",
+    "clockKst": [
+      "09:00",
+      "18:00"
+    ],
+    "activePlayers": 3,
+    "administrators": 1,
+    "currentRounds": 3,
+    "currentPredictions": 6,
+    "currentWeekScoreRows": 45,
+    "historicalRowsPerLedger": [
+      100,
+      10000
+    ],
+    "historicalLedgers": [
+      "ledger gold",
+      "inventory_ledger tickets"
+    ],
+    "historicalDate": "2026-01-01",
+    "lateDraw": "18:00 fixture has already created current lotto_draws row; no payments due",
+    "authentication": "included in every request",
+    "catchmindOpen": "one published round, no guesses"
+  },
+  "counting": {
+    "prepares": "calls to DB.prepare",
+    "queries": "executed SQL statements, including each batch statement",
+    "bindingCalls": "single all/first/run or one batch call",
+    "rowsRead": "sum of D1 result meta.rows_read",
+    "rowsWritten": "sum of D1 result meta.rows_written, including trigger/index effects"
+  },
+  "comparison": {
+    "samples": 12,
+    "preparesUnchanged": true,
+    "queriesUnchanged": true,
+    "bindingCallsUnchanged": true,
+    "rowsReadUnchanged": true,
+    "noDueRowsWrittenZero": true
+  },
+  "before": [
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 159,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 159,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 162,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 161,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 161,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 164,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 160,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 160,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 163,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 162,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 162,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 165,
+      "rowsWritten": 0
+    }
+  ],
+  "after": [
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 159,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 159,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 162,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 161,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 161,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 164,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 160,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 160,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 163,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 162,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 162,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 165,
+      "rowsWritten": 0
+    }
+  ],
+  "standingsWork": {
+    "baseCommit": "6b52972",
+    "method": "Actual baseline/current standings functions, identical descending distinct-score input. Getter counts include sorting, row copies and rank scan; deterministic work counts, not CPU timings.",
+    "measurements": [
+      {
+        "players": 4,
+        "weeklyScorePropertyReads": {
+          "before": 30,
+          "after": 17
+        }
+      },
+      {
+        "players": 1000,
+        "weeklyScorePropertyReads": {
+          "before": 1003998,
+          "after": 4997
+        }
+      }
+    ]
+  }
+}

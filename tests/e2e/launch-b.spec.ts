@@ -200,10 +200,11 @@ test('real profile crop respects EXIF, shares nickname and photo, and deletes ba
   const other = await browser.newContext({ reducedMotion: 'reduce', viewport: { width: 390, height: 900 } });
   try {
     const viewer = await other.newPage(); await login(viewer, 'siwon'); await dismissAnnouncements(viewer);
-    const row = viewer.locator('.ranking-preview-row').filter({ hasText: '해피민님' });
+    const row = viewer.locator('.ranking-preview-row').filter({ hasText: '해피민' });
+    await expect(row.locator('.ranking-preview-main strong')).toHaveText('해피민');
     await expect(row.locator('img.avatar-photo')).toHaveAttribute('src', url);
     for (const width of [390, 560]) await capture(viewer, 'authenticated', 'ranking', width, info);
-    await navigate(viewer, '/ranking'); await expect(viewer.locator('.podium-name').filter({ hasText: '해피민님' })).toBeVisible();
+    await navigate(viewer, '/ranking'); await expect(viewer.locator('.podium-name').filter({ hasText: '해피민' })).toHaveText('해피민');
     await expect(viewer.locator('.podium img.avatar-photo')).toHaveCount(0);
     await navigate(viewer, '/game/wake'); await expect(viewer.locator('.prediction-hero')).toContainText('해피민님');
     await expect(viewer.locator('.prediction-hero img.avatar-photo')).toHaveCount(0);
@@ -279,7 +280,8 @@ test('preview profile supports drag, pinch and keyboard zoom without API calls a
       expect([image.width, image.height]).toEqual([512, 512]); expect(image.size).toBeLessThanOrEqual(260 * 1024);
       await capture(page, 'preview', 'profile', width, info);
       await navigate(page, '/preview');
-      await expect(page.locator('.ranking-preview-row').filter({ hasText: '사진예서님' }).locator('img.avatar-photo')).toHaveAttribute('src', url);
+      await expect(page.locator('.ranking-preview-row').filter({ hasText: '사진예서' }).locator('.ranking-preview-main strong')).toHaveText('사진예서');
+      await expect(page.locator('.ranking-preview-row').filter({ hasText: '사진예서' }).locator('img.avatar-photo')).toHaveAttribute('src', url);
       await capture(page, 'preview', 'ranking', width, info);
       await navigate(page, '/preview/game/offwork');
       await expect(page.locator('.result-list .result-card').filter({ hasText: '사진예서님' }).locator('img.avatar-photo')).toHaveAttribute('src', url);

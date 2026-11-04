@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FEATURES, KUJI_RULES, LOTTO_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
@@ -8,6 +8,7 @@ import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import {
   Avatar,
   honorific,
+  plainName,
   CharacterSprite,
   Chevron,
   Coin,
@@ -33,12 +34,9 @@ import {
   useCountUp,
   useOnChange,
 } from "../motion";
+import { rankSummary, standings, type RankingPlayer } from "../ranking";
 
-export interface HomePlayer {
-  username: string;
-  displayName: string;
-  weeklyScore: number;
-}
+export type HomePlayer = RankingPlayer;
 export interface HomeData {
   username: string;
   displayName: string;
@@ -239,7 +237,7 @@ export function SoloGames({ go, claw }: { go: Go; claw: ClawSummary }) {
           </span>
           <span className="solo-text">
             <strong>캐릭터 뽑기</strong>
-            <small>{claw.isAdmin ? "무제한 플레이 · 보상 없음" : `코인 ${claw.coins}개 · ${nextGrant} 충전`}</small>
+            <small>{claw.isAdmin ? "무제한 플레이 · 보상 없음" : <>코인 {claw.coins}개 · <span className="home-schedule">{nextGrant} 충전</span></>}</small>
           </span>
         </button>
         <button className="card solo-tile" onClick={() => go("/stock")}>
@@ -274,7 +272,7 @@ export function ShopCards({ go }: { go: Go }) {
         </span>
         <span className="solo-text">
           <strong>데일리 로또</strong>
-          <small>{formatTime(LOTTO_RULES.drawTime)} 추첨</small>
+          <small className="home-schedule">{formatTime(LOTTO_RULES.drawTime)} 추첨</small>
           <small>이용권 {inventory.lottoTickets}장</small>
         </span>
       </button>
@@ -299,13 +297,6 @@ const rankColors = [
   ["#EEE8FC", "#7556C4", "#B9A3F0"],
   ["#E3F6EE", "#2E8C6E", "#A7E3CF"],
 ];
-export function standings(players: HomePlayer[]) {
-  const sorted = [...players].sort((a, b) => b.weeklyScore - a.weeklyScore);
-  return sorted.map((player) => ({
-    ...player,
-    rank: sorted.findIndex((p) => p.weeklyScore === player.weeklyScore) + 1,
-  }));
-}
 function settleText() {
   const days = 6 - kstParts().weekday;
   return days ? `이번 주 종료까지 ${days}일` : "오늘 주간 집계 종료";
@@ -414,6 +405,7 @@ function Room({ data, gold, evening, jumpRequest, onJumpDone }: {
   jumpRequest: number;
   onJumpDone: () => void;
 }) {
+  const displayNameOf = useDisplayNameLookup();
   const shown = useCountUp(gold);
   const chosen = useCharacter(data.username);
   const [oneShot, setOneShot] = useState<CharState | null>(null);
@@ -440,7 +432,10 @@ function Room({ data, gold, evening, jumpRequest, onJumpDone }: {
   return (
     <div className={`room ${evening ? "evening" : ""}`}>
       <div className="room-top">
-        <span className="room-name">예굼방</span>
+        <span className="room-identity">
+          <Avatar username={data.username} size={32} />
+          <span className="room-name">{honorific(displayNameOf(data.username, data.displayName))}</span>
+        </span>
         <span className="gold">
           <Coin size={22} />
           {shown.toLocaleString("ko-KR")}
@@ -504,35 +499,31 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
     jumpFinished.current = resolve;
     setJumpRequest(request => request + 1);
   });
-  const table = standings(data.players);
+  const table = useMemo(() => standings(data.players.map(player => ({
+    ...player, displayName: displayNameOf(player.username, player.displayName),
+  }))), [data.players, displayNameOf]);
   const me = table.find((p) => p.username === data.username);
   const top = table[0];
   const max = Math.max(top?.weeklyScore ?? 0, 1);
   const score = useCountUp(me?.weeklyScore ?? 0);
-  const rankLine = !me
-    ? ""
-    : me.rank === 1
-      ? table[1]
-        ? `2위 ${honorific(displayNameOf(table[1].username, table[1].displayName))}과 ${me.weeklyScore - table[1].weeklyScore}점 차`
-        : "이번 주 1위"
-      : `1위 ${honorific(displayNameOf(top.username, top.displayName))}까지 ${top.weeklyScore - me.weeklyScore}점`;
+  const summary = rankSummary(table, data.username);
   return (
     <div className={`home ${evening ? "evening" : ""}`}>
       <Room data={data} gold={data.gold} evening={evening} jumpRequest={jumpRequest} onJumpDone={finishJump} />
       <div className="home-score">
         <div className="home-score-row">
           <div>
-            <h1>{honorific(displayNameOf(data.username, data.displayName))}</h1>
+            <h1>이번 주 점수</h1>
             <p>
               <strong>{score}</strong>
               <span>점</span>
             </p>
           </div>
-          {me && <span className="rank-chip">주간 {me.rank}위</span>}
+          {summary.chip && <span className="rank-chip">{summary.chip}</span>}
         </div>
-        {rankLine && (
+        {summary.line && (
           <button className="rank-line" onClick={() => go("/ranking")}>
-            {rankLine}
+            {summary.line}
             <Chevron direction="right" size={14} width={2.6} />
           </button>
         )}
@@ -556,10 +547,10 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
                 <span className="rank-dot" style={{ background: badgeBg, color: badgeFg }}>
                   {player.rank}
                 </span>
-                <Avatar username={player.username} size={46} />
+                <Avatar username={player.username} size={46} nameFormat="plain" />
                 <span className="ranking-preview-main">
                   <span>
-                    <strong>{honorific(displayNameOf(player.username, player.displayName))}</strong>
+                    <strong>{plainName(player.displayName)}</strong>
                     {player.username === data.username && <em>나</em>}
                     <b>{player.weeklyScore.toLocaleString("ko-KR")}</b>
                   </span>

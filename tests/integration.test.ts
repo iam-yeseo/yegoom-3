@@ -18,6 +18,7 @@ import { readAnnouncements } from '../worker/announcements';
 import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
 import { maintainDatabase } from '../worker/maintenance';
+import { rankSummary, standings } from '../src/ranking';
 import type { CatchmindGalleryResponse } from '../shared/types';
 import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
@@ -449,6 +450,62 @@ describe('Worker and D1 integration', () => {
   });
 
   describe('free-plan request budgets', () => {
+    it('uses current-week bootstrap scores for shared home ranks without extra queries or writes', async () => {
+      const instance = runtime(workerWithD1Metrics(script));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        await database.prepare(`INSERT INTO users (id, username, display_name, password_hash, role)
+          VALUES ('fourth', 'fourth', '넷째', ?, 'player')`).bind(passwordHash).run();
+        for (const [id, name] of [['min', '민'], ['siwon', '시원'], ['yeseo', '예서']]) {
+          await database.prepare('UPDATE users SET display_name = ? WHERE id = ?').bind(name, id).run();
+        }
+        const { cookie } = await login('yeseo', instance);
+        let baselineQueries = 0;
+        const snapshot = async () => {
+          const response = await request('/api/bootstrap', { cookie, instance }); expect(response.status).toBe(200);
+          const queries = Number(response.headers.get('X-Test-D1-Queries'));
+          baselineQueries ||= queries;
+          expect(queries).toBe(baselineQueries);
+          expect(Number(response.headers.get('X-Test-D1-Rows-Written'))).toBe(0);
+          return response.json() as Promise<BootstrapResponse>;
+        };
+        const empty = await snapshot();
+        expect(empty.players).toHaveLength(4);
+        expect(rankSummary(standings(empty.players), 'yeseo'))
+          .toEqual({ line: '아직 이번 주 점수가 없어요', chip: null });
+        const score = async (userId: string, amount: number, reference: string, week = '2026-10-26') => {
+          await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
+            VALUES (?, ?, 'score', ?, 'home rank fixture', ?, ?, ?)`)
+            .bind(reference, userId, amount, reference, `${TODAY}T00:00:00.000Z`, week).run();
+        };
+        // Different award counts can still produce a tie. Prior weeks, admins
+        // and later inactive players must not become current ranking leaders.
+        await score('min', 60, 'home:min:a'); await score('min', 40, 'home:min:b');
+        await score('siwon', 100, 'home:siwon'); await score('yeseo', 80, 'home:yeseo');
+        await score('fourth', 80, 'home:fourth'); await score('admin', 1000, 'home:admin');
+        await score('min', 999, 'home:old-week', '2026-10-19');
+        const lowerTie = await snapshot();
+        const lowerTable = standings(lowerTie.players);
+        expect(lowerTable.map(player => [player.username, player.weeklyScore, player.rank]))
+          .toEqual([['min', 100, 1], ['siwon', 100, 1], ['fourth', 80, 3], ['yeseo', 80, 3]]);
+        expect(lowerTie.user.weeklyScore).toBe(80);
+        expect(lowerTie.user.gold).toBe(0);
+        expect(rankSummary(lowerTable, 'yeseo'))
+          .toEqual({ line: '넷째님과 공동 3등 · 1위 민님 외 1명까지 20점', chip: '주간 공동 3위' });
+        await score('yeseo', 20, 'home:yeseo:catchup'); await score('fourth', 20, 'home:fourth:catchup');
+        const fourWay = await snapshot();
+        expect(rankSummary(standings(fourWay.players), 'yeseo'))
+          .toEqual({ line: '넷째님 외 2명과 공동 1등', chip: '주간 공동 1위' });
+        await database.prepare("UPDATE users SET active = 0 WHERE id = 'min'").run();
+        const inactiveExcluded = await snapshot();
+        expect(inactiveExcluded.players.map(player => player.username)).toEqual(['fourth', 'siwon', 'yeseo']);
+        expect(rankSummary(standings(inactiveExcluded.players), 'yeseo'))
+          .toEqual({ line: '넷째님, 시원님과 공동 1등', chip: '주간 공동 1위' });
+        expect(inactiveExcluded.players.every(player => !player.displayName.endsWith('님'))).toBe(true);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
     it('settles a thirty-day backlog within the D1 binding-call budget and retries without writes', async () => {
       const instance = runtime(workerWithD1Metrics(script));
       try {
@@ -539,6 +596,7 @@ describe('Worker and D1 integration', () => {
 
     it('bounds authenticated polling queries and rows as historical ledgers grow', async () => {
       const measurements: { clockKst: string; historicalRowsPerLedger: number; route: string; prepares: number; queries: number; bindingCalls: number; rowsRead: number; rowsWritten: number }[] = [];
+      const previous = JSON.parse(readFileSync(new URL('../docs/free-plan-measurements.json', import.meta.url), 'utf8')) as { after: typeof measurements };
       for (const clockKst of ['09:00', '18:00']) for (const historicalRows of [100, 10_000]) {
         const measuredScript = clockKst === '09:00' ? script : await workerAt(`${TODAY}T09:00:00Z`);
         const instance = runtime(workerWithD1Metrics(measuredScript));
@@ -587,6 +645,14 @@ describe('Worker and D1 integration', () => {
             expect(metrics.queries, route).toBeLessThanOrEqual(maxQueries);
             expect(metrics.rowsRead, route).toBeLessThanOrEqual(maxRows);
             expect(metrics.rowsWritten, route).toBe(0);
+            if (route.startsWith('bootstrap')) {
+              const prior = previous.after.find(row => row.clockKst === clockKst && row.historicalRowsPerLedger === historicalRows && row.route === route)!;
+              expect(prior, `PR 2 baseline for ${route}`).toBeDefined();
+              expect(metrics.prepares, route).toBeLessThanOrEqual(prior.prepares);
+              expect(metrics.bindingCalls, route).toBeLessThanOrEqual(prior.bindingCalls);
+              expect(metrics.queries, route).toBeLessThanOrEqual(prior.queries);
+              expect(metrics.rowsRead, route).toBeLessThanOrEqual(prior.rowsRead);
+            }
             await response.arrayBuffer();
           };
           // Ranking currently consumes bootstrap; PR 8 will add its own API.

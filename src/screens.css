@@ -301,13 +301,28 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+}
+.room-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.room-identity .avatar {
+  flex: none;
 }
 .room-name {
   font-size: 19px;
   font-weight: 800;
   letter-spacing: -0.4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .room-top .gold {
+  flex: none;
   height: 34px;
   padding: 0 13px 0 6px;
   gap: 6px;
@@ -766,6 +781,9 @@
   font-weight: 500;
   color: #7c7383;
 }
+.home-schedule {
+  white-space: nowrap;
+}
 .solo-text small.gain {
   font-weight: 600;
   color: #e0644e;
@@ -816,6 +834,15 @@
   gap: 12px;
   text-align: left;
   color: inherit;
+}
+@media (max-width: 420px) {
+  .shop-tile {
+    padding-inline: 12px;
+    gap: 8px;
+  }
+  .shop-tile .home-schedule {
+    font-size: 12px;
+  }
 }
 .lotto-icon,
 .speetto-icon {

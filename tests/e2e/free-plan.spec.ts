@@ -134,7 +134,7 @@ test('hidden tabs stop polling, quick returns reuse the last read, and slow requ
     const completed = page.waitForResponse('**/api/bootstrap');
     release();
     await completed;
-    await expect(page.getByRole('heading', { name: '느린조회님', exact: true })).toBeVisible();
+    await expect(page.locator('.room-name').filter({ hasText: '느린조회님' })).toBeVisible();
     await visibility(page, 'hidden');
     await visibility(page, 'visible');
     expect(reads()).toBe(pending);

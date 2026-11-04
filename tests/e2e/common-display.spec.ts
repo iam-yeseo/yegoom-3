@@ -46,7 +46,7 @@ test('preview names, dates and second-precision results share the display rules 
     return route.abort();
   });
   await page.goto('/#/preview');
-  await expect(page.getByRole('heading', { name: 'yeseo님', exact: true })).toBeVisible();
+  await expect(page.locator('.room-name').filter({ hasText: 'yeseo님' })).toBeVisible();
   await expect(page.locator('.game-row').filter({ hasText: '기상시간' })).toContainText('10시 30분');
   await captureWidths(page, 'preview-home', info);
 
@@ -70,7 +70,7 @@ test('preview names, dates and second-precision results share the display rules 
   expect(requests).toEqual([]);
 });
 
-test('nickname values remain raw while every displayed name adds the honorific', async ({ page }) => {
+test('nickname values remain raw while sentences retain the honorific and ranking labels omit it', async ({ page }) => {
   await page.goto('/#/preview/profile');
   const nickname = page.getByLabel('닉네임', { exact: true });
   await expect(nickname).toHaveValue('yeseo');
@@ -82,7 +82,11 @@ test('nickname values remain raw while every displayed name adds the honorific',
   await expect(nickname).toHaveValue('별님');
   await expect(page.locator('.profile-summary h1')).toHaveText('별님님');
   await navigate(page, '/preview');
-  await expect(page.getByRole('heading', { name: '별님님', exact: true })).toBeVisible();
+  await expect(page.locator('.room-name').filter({ hasText: '별님님' })).toBeVisible();
+  await expect(page.locator('.ranking-preview-main strong')).toContainText(['siwon', '별님', 'min']);
+  await navigate(page, '/preview/ranking');
+  await expect(page.locator('.podium-name')).toHaveText(['별님', 'siwon', 'min']);
+  await expect(page.locator('.daily-card .card-head span')).toHaveText('별님');
   await navigate(page, '/preview/game/offwork');
   await expect(page.locator('.result-list .result-name strong').first()).toHaveText('별님님 (나)');
 });
