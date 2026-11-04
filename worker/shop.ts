@@ -1,5 +1,5 @@
-import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
-import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket } from '../shared/types';
+import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoNotice, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket } from '../shared/types';
 import { kstDate, kstTimestamp, weekStart } from './rules';
 import { announcePrize } from './announcements';
 import { readBalances } from './balances';
@@ -50,6 +50,9 @@ function dayWindow(now: Date): { date: string; start: number; end: number } {
 function targetDrawDate(now: Date): string {
   const today = kstDate(now);
   return now.getTime() < kstTimestamp(today, LOTTO_RULES.drawTime) ? today : kstDate(new Date(now.getTime() + 86_400_000));
+}
+function recentPurchaseDate(now: Date): string {
+  return kstDate(new Date(now.getTime() - (SHOP_HISTORY_DAYS - 1) * 86_400_000));
 }
 async function previousPurchase(db: D1Database, user: ShopUser, id: string, kind: ShopKind, payload: string): Promise<PurchaseRow | null> {
   const row = await db.prepare('SELECT * FROM shop_purchases WHERE user_id = ? AND request_id = ?').bind(user.id, id).first<PurchaseRow>();
@@ -190,7 +193,8 @@ export async function settleDueLotto(db: D1Database, now: Date): Promise<void> {
   // Completed dates disappear from the partial unsettled index. Once today's
   // draw exists, an idle check is one SELECT even after the draw time.
   const dates = (await db.prepare(`SELECT due.draw_date, d.date AS existing_date FROM (
-      SELECT DISTINCT draw_date FROM lotto_tickets WHERE settled_at IS NULL AND draw_date <= ?
+      SELECT DISTINCT draw_date FROM lotto_tickets INDEXED BY lotto_tickets_due_idx
+      WHERE settled_at IS NULL AND draw_date <= ?
       UNION
       SELECT ? WHERE ? = 1 AND NOT EXISTS (SELECT 1 FROM lotto_draws WHERE date = ?)
     ) due LEFT JOIN lotto_draws d ON d.date = due.draw_date ORDER BY due.draw_date`)
@@ -264,19 +268,47 @@ async function buyLotto(db: D1Database, user: ShopUser, input: Record<string, un
   return await previousPurchase(db, user, id, 'lotto', payload) ?? await rejectedPurchase(db, user, start, end);
 }
 function lottoTicket(row: LottoRow): LottoTicket {
-  return { id: row.id, requestId: row.request_id, drawDate: row.draw_date, numbers: JSON.parse(row.numbers) as number[], payment: row.payment, cost: row.cost,
+  return { id: row.id, requestId: row.request_id, purchaseDate: row.date, createdAt: row.created_at, drawDate: row.draw_date, numbers: JSON.parse(row.numbers) as number[], payment: row.payment, cost: row.cost,
     winningNumbers: row.winning_numbers == null ? null : JSON.parse(row.winning_numbers) as number[], matches: row.matches, rank: row.rank, prize: row.prize };
+}
+function visibleLottoTicket(row: LottoRow, now: Date): LottoTicket {
+  return lottoTicket(kstTimestamp(row.draw_date, LOTTO_RULES.drawTime) <= now.getTime()
+    ? row : { ...row, winning_numbers: null, matches: null, rank: null, prize: null });
 }
 async function readLottoTickets(db: D1Database, userId: string, now: Date): Promise<LottoTicket[]> {
   const rows = (await db.prepare(`SELECT p.*, t.draw_date, t.numbers, t.matches, t.rank, t.prize, d.numbers AS winning_numbers
+    FROM shop_purchases p JOIN lotto_tickets t ON t.id = p.id LEFT JOIN lotto_draws d ON d.date = t.draw_date
+    WHERE p.user_id = ? AND p.date >= ? AND p.kind = 'lotto' ORDER BY p.created_at DESC, p.id`)
+    .bind(userId, recentPurchaseDate(now)).all<LottoRow>()).results;
+  return rows.map(row => visibleLottoTicket(row, now));
+}
+
+/** Explicit retries retain their original receipt even after it disappears
+ * from the seven-day history. Normal purchases use the already loaded list. */
+async function readLottoReceipt(db: D1Database, userId: string, id: string, now: Date): Promise<LottoTicket | undefined> {
+  const row = await db.prepare(`SELECT p.*, t.draw_date, t.numbers, t.matches, t.rank, t.prize, d.numbers AS winning_numbers
     FROM lotto_tickets t JOIN shop_purchases p ON p.id = t.id LEFT JOIN lotto_draws d ON d.date = t.draw_date
-    WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id`).bind(userId).all<LottoRow>()).results;
-  return rows.map(row => lottoTicket(kstTimestamp(row.draw_date, LOTTO_RULES.drawTime) <= now.getTime() ? row : { ...row, winning_numbers: null, matches: null, rank: null, prize: null }));
+    WHERE t.id = ? AND p.user_id = ?`).bind(id, userId).first<LottoRow>();
+  return row ? visibleLottoTicket(row, now) : undefined;
+}
+
+/** Today's draw, independent of the purchase-date history window. A notice
+ * never needs to load individual tickets or historical purchases. */
+export async function readLottoNotice(db: D1Database, userId: string, now: Date): Promise<LottoNotice | null> {
+  const today = kstDate(now);
+  if (now.getTime() < kstTimestamp(today, LOTTO_RULES.drawTime)) return null;
+  const row = await db.prepare(`SELECT COUNT(*) AS tickets,
+      COALESCE(SUM(CASE WHEN t.prize > 0 THEN 1 ELSE 0 END), 0) AS winners,
+      COALESCE(SUM(t.prize), 0) AS prize
+    FROM lotto_tickets t INDEXED BY lotto_unsettled_idx JOIN shop_purchases p ON p.id = t.id
+    WHERE t.draw_date = ? AND p.user_id = ?`)
+    .bind(today, userId).first<{ tickets: number; winners: number; prize: number }>();
+  return row && row.tickets > 0 ? { drawDate: today, tickets: row.tickets, winners: row.winners, prize: row.prize } : null;
 }
 
 function speettoTicket(row: PurchaseRow): SpeettoTicket {
   const result = JSON.parse(row.outcome) as { cells: SpeettoSymbol[]; won: boolean; prize: number };
-  return { ...result, id: row.id, requestId: row.request_id, payment: row.payment, cost: row.cost, createdAt: row.created_at };
+  return { ...result, id: row.id, requestId: row.request_id, payment: row.payment, cost: row.cost, purchaseDate: row.date, createdAt: row.created_at };
 }
 async function buySpeetto(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<PurchaseRow> {
   const id = requestId(input); const method = payment(input); const payload = JSON.stringify({ payment: method });
@@ -312,16 +344,18 @@ export async function shopRoute(db: D1Database, user: ShopUser, path: string, me
   if (path === '/api/shop/lotto') {
     const purchase = method === 'POST' ? await buyLotto(db, user, input!, now) : undefined;
     const tickets = await readLottoTickets(db, user.id, now);
+    const receipt = purchase && (tickets.find(ticket => ticket.id === purchase.id)
+      ?? await readLottoReceipt(db, user.id, purchase.id, now));
     const today = kstDate(now);
     const draw = now.getTime() >= kstTimestamp(today, LOTTO_RULES.drawTime)
       ? await db.prepare('SELECT numbers FROM lotto_draws WHERE date = ?').bind(today).first<{ numbers: string }>() : null;
     return { ...await readShopState(db, user, now), lotto: { targetDrawDate: targetDrawDate(now), todayDraw: { date: today, numbers: draw ? JSON.parse(draw.numbers) as number[] : null }, tickets },
-      ...(purchase ? { purchase: tickets.find(ticket => ticket.id === purchase.id)! } : {}) };
+      ...(receipt ? { purchase: receipt } : {}) };
   }
   if (path === '/api/shop/speetto') {
     const purchase = method === 'POST' ? await buySpeetto(db, user, input!, now) : undefined;
-    const rows = (await db.prepare("SELECT * FROM shop_purchases WHERE user_id = ? AND kind = 'speetto' ORDER BY created_at DESC, id")
-      .bind(user.id).all<PurchaseRow>()).results;
+    const rows = (await db.prepare("SELECT * FROM shop_purchases WHERE user_id = ? AND date >= ? AND kind = 'speetto' ORDER BY created_at DESC, id")
+      .bind(user.id, recentPurchaseDate(now)).all<PurchaseRow>()).results;
     return { ...await readShopState(db, user, now), speetto: { tickets: rows.map(speettoTicket) }, ...(purchase ? { purchase: speettoTicket(purchase) } : {}) };
   }
   throw new ShopError(404, 'NOT_FOUND', '요청한 상점 기능이 없어요.');

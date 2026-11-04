@@ -1,7 +1,47 @@
-# 무료 플랜 예산 — 개선 PR 2~5
+# 무료 플랜 예산 — 개선 PR 2~6
 
 측정일 2026-11-04. 기준 main `c873ae8`과 PR 2 코드를 같은 로컬 D1 fixture로 비교했다. 실제 운영 계정의 사용량이나 Workers CPU를 측정한 결과는 아니다. 원자료는 [D1 측정 JSON](free-plan-measurements.json), [CPU 측정 JSON](free-plan-cpu.json)이다.
 
+
+
+## 개선 PR 6 — 데일리 로또·스피또
+
+기준 main `f8ca8c1`과 같은 인증 포함 D1 래퍼·fixture를 비교했다. [PR 6 요청 원자료](free-plan-pr6-measurements.json)는 오전/오후×과거 표0/5,000장(종류별)의 bootstrap·로또·스피또 **12개 표본** 및 기존 큰 원장 bootstrap **12개 전후 표본**을 담는다. 로컬 D1/workerd 측정이며 운영 DB에 접근하지 않았다.
+
+아래는 **SQL 문장 수 / rows_read**다. 과거 표는 이미 정산된 2026년01월01일 표이며 각 종류에 최근3장이 따로 있다. 구매·지급·동시 요청은 별도 규칙 테스트로 확인한다. 조회 표본의 rows_written은 전후 모두0이다.
+
+| 시각·조회 | 과거0장: 이전 → 이후 | 과거5,000장/종류: 이전 → 이후 |
+| --- | ---: | ---: |
+| 09시 bootstrap | 15 / 25 → 15 / 23 | 15 / 5,025 → 15 / 23 |
+| 09시 로또 | 4 / 22 → 4 / 20 | 4 / 30,022 → 4 / 20 |
+| 09시 스피또 | 4 / 16 → 4 / 14 | 4 / 20,016 → 4 / 14 |
+| 18시 bootstrap | 15 / 26 → 16 / 26 | 15 / 5,026 → 16 / 26 |
+| 18시 로또 | 5 / 24 → 5 / 22 | 5 / 30,024 → 5 / 22 |
+| 18시 스피또 | 4 / 17 → 4 / 15 | 4 / 20,017 → 4 / 15 |
+
+최근7일 필터는 기존 `shop_user_date_idx(user_id,date,kind)`로 오래된 구매를 제외한다. 함께 측정한 기존 미정산 후보 조회가 전체 추첨일 인덱스를 고르면 정산 완료 표도 읽는 것이 확인돼, 동일한 `settled_at IS NULL` 조건에 이미 있는0011의 `lotto_tickets_due_idx` 부분 인덱스를 명시했다. 스키마·정산 대상·지급 규칙은 바꾸지 않는다. 이 두 조치 뒤 과거0장과5,000장의 개선 후 비용이 같아졌다. 오늘/최근7일에 산 표 자체가 늘면 읽기량도 늘 수 있다.
+
+`lottoNotice`는17시30분 전 null을 추가 쿼리 없이 반환하고, 이후에는 COUNT/SUM 집계 **1문장**을 추가한다. 위 fixture의 오후 안내는2행을 읽지만 기존 정산 확인에서2행을 줄여 총 rows_read는 과거0장 표본에서도 그대로다. 이 안내는 정산된 오늘 표도 세므로 기존 full `(draw_date,settled_at)` 인덱스를 사용한다. 사용자별 오늘 표의 실제 수에 따라 비용이 달라진다. 닫기/확인 기억은 localStorage이며 서버 요청을 추가하지 않는다.
+
+큰 골드/이용권 원장(각100/10,000행) fixture의 오전 bootstrap12개 중 해당6개는 쿼리·읽기 비용이 동일하다. 오후6개는 prepare/문장/binding 호출만 **+1**, rows_read는 동일하다. 10,000행 기준 오전 idle15/161·open17/164, 오후 idle15/162→16/162·open17/165→18/165다. 기존 회귀 테스트도 이 오후1쿼리만 허용하고 행 읽기 상한은 유지한다.
+
+홈·랭킹30초/기타화면60초·숨김/뽑기/미리보기 중단 정책은 그대로다. 4명×10시간×30초를 보수적으로 모두 오후 최대 표본(18문장/165행)에 대입하면 **4,800요청·86,400문장·792,000행/일**이다. 이전 같은 큰 원장 표본은81,600문장·792,000행이었으므로 요청·읽기량은 같고 문장만 최대4,800개 늘어난다. 실제17시30분 전에는 안내 쿼리가 없고, 추첨 시각·지급·새 점수·오늘 표·복귀·여러 탭·상점 진입/구매는 실제 표본 비용으로 따로 더한다.
+
+오늘 표가 없는 같은 큰 원장 fixture의 오후 비용을 이전 화면별 예산에 대입하면, PR4 캐치마인드 공개 화면(4명·10시간)은 bootstrap2,400회에 각1문장이 더해져98,400→100,800문장/일이며 요청31,200건·읽기511,200행은 같다. PR5의4명×20플레이 예시도 bootstrap80회만 늘어2,700→2,780문장/일이며 요청260건·읽기14,960행은 같다. 오늘 표가 있거나 실제 정산이 발생하면 그 표본의 행 읽기를 사용한다.
+
+명시적인7일 밖 lotto requestId 재시도는 최근목록과 별도로 본인 영수증1장을 읽어 원래 결과를 돌려준다. 이 드문 복구 경로에만1쿼리가 추가되며 history에 오래된 행을 끼워 넣거나 다시 차감하지 않는다. 과거 미정산 표의 정산과 원장 보존은7일 표시 제한과 별개다.
+
+PR 6 최종 검증: `npm run check` **17파일/734개**(D1 통합 **292개**)·타입·빌드 통과. 마지막 자정 지연 응답 보완 뒤 관련11개·타입·빌드도 다시 통과했다. 전체 Playwright는 신규6개를 포함해 **103개 통과**했다. 첫 전체 실행은 기존 그리기 성능 검사에서99ms Long Task 1건을 관측해102개 통과·1개 실패였다. 소스·빌드·측정 기준을 바꾸지 않은 단독 및 전체 재실행에서는 해당 검사가 통과했다. 원인을 단정하지 않으며 세 표본을 [검증 원자료](pr6-validation.json)에 모두 보존한다. 배포 dry-run과 문서 링크·이미지 확인을 마쳤고 실제 배포는 하지 않았다.
+
+| PR 6 화면 자료 | 390px | 560px |
+| --- | --- | --- |
+| 홈 로또 안내 | [보기](screenshots/update-pr6-home-lotto-notice-390.png) | [보기](screenshots/update-pr6-home-lotto-notice-560.png) |
+| 로또 버튼 두 칸 | [보기](screenshots/update-pr6-lotto-buttons-390.png) | [보기](screenshots/update-pr6-lotto-buttons-560.png) |
+| 여러 날 로또 기록 | [보기](screenshots/update-pr6-lotto-history-390.png) | [보기](screenshots/update-pr6-lotto-history-560.png) |
+| 스피또 버튼 두 칸 | [보기](screenshots/update-pr6-speetto-buttons-390.png) | [보기](screenshots/update-pr6-speetto-buttons-560.png) |
+| 스피또 기록 | [보기](screenshots/update-pr6-speetto-history-390.png) | [보기](screenshots/update-pr6-speetto-history-560.png) |
+| 긁기 전 | [보기](screenshots/update-pr6-scratch-before-390.png) | [보기](screenshots/update-pr6-scratch-before-560.png) |
+| 긁는 중 | [보기](screenshots/update-pr6-scratch-partial-390.png) | [보기](screenshots/update-pr6-scratch-partial-560.png) |
 
 ## 개선 PR 5 — 캐릭터 뽑기
 

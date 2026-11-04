@@ -9,6 +9,7 @@ import type {
   KujiResponse,
   CatchmindSummary,
   ClawSummary,
+  LottoNotice,
   LaunchGiftResponse, AuthResponse, LuckPhotoResponse,
 } from "../shared/types";
 import { normalizeNickname } from "../shared/profile";
@@ -18,6 +19,7 @@ import { AnnouncementBanner } from "./AnnouncementBanner";
 import { FEATURES } from "../shared/balance";
 import { CATCHMIND_WORDS } from "../shared/catchmind-words";
 import { ApiFailure, api } from "./api";
+import { markLottoSeen, markViewedLottoDraw } from "./lotto-notice";
 import { anim } from "./motion";
 import { ProfileDirectoryProvider, CharacterProvider, CharacterSprite, TabBar, tabs, readLegacyCharacter, clearLegacyCharacter, choosePreviewCharacter } from "./components/UI";
 import { AttendanceProvider, clearLegacyAttendance, usePreviewAttendance } from "./attendance";
@@ -81,6 +83,7 @@ const gameIds: GameId[] = ["wake", "offwork", "luck"];
 const emptyCatchmind: CatchmindSummary = { roundId: null, status: "idle", drawer: null, turn: null, wrongCount: 0, winner: null, answer: null };
 function previewHome(): HomeData {
   return {
+    userId: previewUser.id,
     username: previewUser.username,
     displayName: previewUser.displayName,
     attendanceKey: "preview",
@@ -94,10 +97,13 @@ function previewHome(): HomeData {
     kuji: null,
     catchmind: emptyCatchmind,
     claw: previewClawSummary(),
+    lottoNotice: null,
+    serverTime: new Date().toISOString(),
   };
 }
 function homeData(data: BootstrapResponse): HomeData {
   return {
+    userId: data.user.id,
     username: data.user.username,
     displayName: data.user.displayName,
     attendanceKey: data.user.username,
@@ -107,6 +113,8 @@ function homeData(data: BootstrapResponse): HomeData {
     kuji: data.kuji,
     catchmind: data.catchmind,
     claw: data.claw,
+    lottoNotice: data.lottoNotice,
+    serverTime: data.serverTime,
   };
 }
 /** Navigation depth: tab pages 0, sub-pages 1, a stock's detail 2. */
@@ -311,7 +319,7 @@ export default function App() {
   const adminGeneration = useRef(0);
   const [previewProfile, setPreviewProfile] = useState<{ displayName: string; photoVersion: number | null; photoUrl: string | null }>({ displayName: previewUser.displayName, photoVersion: null, photoUrl: null });
   const previewPhotoCounter = useRef(0);
-  const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[] }>({ gold: previewGold, score: 0, ledger: [] });
+  const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[]; lottoNotice: LottoNotice | null }>({ gold: previewGold, score: 0, ledger: [], lottoNotice: null });
   const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[]; wordsRemaining: number }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [], wordsRemaining: CATCHMIND_WORDS.length });
   const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
   const demo = route.startsWith("/preview");
@@ -323,10 +331,10 @@ export default function App() {
     else if (route.startsWith("/preview/admin")) setPreviewAdmin(true);
   }, [demo, route]);
   const previewAttendance = usePreviewAttendance(demo);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (demo) {
       setPreviewAdminState(createAdminPreview());
-      setPreviewShop({ gold: previewGold, score: 0, ledger: [] });
+      setPreviewShop({ gold: previewGold, score: 0, ledger: [], lottoNotice: null });
       setPreviewClaw({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] });
     }
   }, [demo]);
@@ -421,6 +429,11 @@ export default function App() {
   const stockBlocked = !FEATURES.stock && /^\/stock(?:\/|$)/.test(requestedPath);
   const adminBlocked = /^\/admin(?:\/|$)/.test(requestedPath) && !adminAllowed && !loading && !!data;
   const path = stockBlocked || adminBlocked ? "/" : requestedPath;
+  const noticeUserId = demo ? adminDemo ? "preview-admin" : previewUser.id : data?.user.id;
+  const noticeDrawDate = demo ? adminDemo ? null : previewShop.lottoNotice?.drawDate : data?.lottoNotice?.drawDate;
+  useEffect(() => {
+    if (path === "/shop/lotto" && noticeUserId && noticeDrawDate) markLottoSeen(noticeUserId, noticeDrawDate);
+  }, [path, noticeUserId, noticeDrawDate]);
   useEffect(() => {
     if (adminBlocked) window.location.replace("#/");
   }, [adminBlocked]);
@@ -629,8 +642,8 @@ export default function App() {
   const catchmindReadKey = useRef("");
   const signedIn = !demo && !loading && data !== null;
   const view = demo ? { ...previewHome(), displayName: previewProfile.displayName, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold,
-    catchmind: previewCatchmind.summary, claw: previewClaw.summary,
-    ...(adminDemo ? { username: "preview-admin", displayName: "운영 미리보기",
+    catchmind: previewCatchmind.summary, claw: previewClaw.summary, lottoNotice: previewShop.lottoNotice,
+    ...(adminDemo ? { userId: "preview-admin", username: "preview-admin", displayName: "운영 미리보기", lottoNotice: null,
       games: previewAdminState.games.map(game => previewGame(game.id, game.rules)),
       claw: { ...previewClaw.summary, coins: 0, freeCoins: 0, purchasedCoins: 0, isAdmin: true } } : {}),
     players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, displayName: previewProfile.displayName, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score } : player) } : data ? homeData(data) : null;
@@ -883,10 +896,14 @@ export default function App() {
         canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
       transact={transactShop}
       onServerRead={state => {
+        if (data) markViewedLottoDraw(data.user.id, path, "lotto" in state ? state.lotto.todayDraw : null, state.serverTime);
         if (data && (state.gold !== data.user.gold || state.inventory.lottoTickets !== data.inventory.lottoTickets || state.inventory.speettoTickets !== data.inventory.speettoTickets
           || "kuji" in state && (state.kuji.boardId !== data.kuji.boardId || state.kuji.remaining !== data.kuji.remaining))) void refresh();
       }}
-      onPreviewChange={(state, ledger, score) => setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold, ledger: [...ledger], score })}>
+      onPreviewChange={(state, ledger, score, lottoNotice) => {
+        markViewedLottoDraw(adminDemo ? "preview-admin" : previewUser.id, path, "lotto" in state ? state.lotto.todayDraw : null, state.serverTime);
+        setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold, ledger: [...ledger], score, lottoNotice });
+      }}>
     <LaunchGiftProvider preview={demo} role={me?.role} state={data?.launchGift ?? { available: false, claimed: false }}
       serverTime={new Date(Date.now() + (demo ? 0 : serverClockOffset.current)).toISOString()}
       path={path} suspended={stockNoticeOpen || stockBlocked} claim={claimLaunchGift}>

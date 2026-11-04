@@ -12,7 +12,7 @@ export const BALANCE = {
   firstPlaceGold: PREDICTION_REWARDS.firstGold,
   catchmind: { points: CATCHMIND_RULES.score, gold: CATCHMIND_RULES.gold, hintAfter: CATCHMIND_RULES.hintAfter, endAfter: CATCHMIND_RULES.endAfter },
   kuji: { price: KUJI_RULES.basePrice, raisedPrice: KUJI_RULES.higherPrice, raiseFrom: KUJI_RULES.basePriceCount + 1, boughtToday: 4 },
-  lotto: { price: LOTTO_RULES.price, picks: LOTTO_RULES.pickCount, max: LOTTO_RULES.maxNumber, drawHour: Number(LOTTO_RULES.drawTime.slice(0, 2)) },
+  lotto: { price: LOTTO_RULES.price, picks: LOTTO_RULES.pickCount, max: LOTTO_RULES.maxNumber, drawTime: LOTTO_RULES.drawTime, drawHour: Number(LOTTO_RULES.drawTime.slice(0, 2)), drawMinute: Number(LOTTO_RULES.drawTime.slice(3, 5)) },
   speetto: { price: SPEETTO_RULES.price, prize: SPEETTO_RULES.prize },
 };
 

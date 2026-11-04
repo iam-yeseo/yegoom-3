@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { LOTTO_RULES, SPEETTO_RULES } from "../../shared/balance";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES } from "../../shared/balance";
 import type { LottoPurchaseInput, LottoTicket, ShopKind, ShopPayment, SpeettoPurchaseInput, SpeettoTicket } from "../../shared/types";
-import { SectionTitle, Toolbar, art, artSrc } from "../components/UI";
-import { anim, confetti, crumbs, popIn, reduced, shake, toast, tween, useCountUp } from "../motion";
+import { SectionTitle, Toolbar } from "../components/UI";
+import { ScratchTicket } from "../components/ScratchTicket";
+import { anim, reduced, shake, toast, useCountUp } from "../motion";
 import { useShop } from "../shop";
 import { formatDate, formatTime } from "../format";
 import { ShopCards } from "./Home";
@@ -82,20 +83,46 @@ function DrawNumbers({ date, numbers }: { date: string; numbers: number[] }) {
     <div ref={draw}>{numbers.map((number, i) => <i key={number} style={{ background: winColors[i], color: i ? "#fff" : "#5C4300", visibility: i < rolled ? "visible" : "hidden" }}>{number}</i>)}</div>
   </div></section>;
 }
-function TicketCard({ ticket }: { ticket: LottoTicket }) {
-  const settled = ticket.matches !== null;
-  return <article className="card ticket" data-ticket-id={ticket.id}>
-    <div className="card-head">
-      <span className={`ticket-tag ${ticket.rank ? "won" : ""}`}>{settled ? `${ticket.rank ? `${ticket.rank}등 · ` : ""}${ticket.matches}개 일치` : "추첨 대기"}</span>
-      <b className={ticket.prize ? "gain" : "none"}>{settled ? ticket.prize ? `+${ticket.prize.toLocaleString("ko-KR")}G` : "낙첨" : ""}</b>
-    </div>
-    <p className="ticket-date">{formatDate(ticket.drawDate)} · {formatTime(LOTTO_RULES.drawTime)} 추첨</p>
-    <div className="ticket-balls">{ticket.numbers.map(number => {
-      const index = ticket.winningNumbers?.indexOf(number) ?? -1;
-      return <i key={number} data-n={number} style={index >= 0 ? { background: winColors[index], color: index ? "#fff" : "#5C4300" } : undefined}>{number}</i>;
-    })}</div>
-  </article>;
+/** Keep the server's order within each purchase day, newest days first. */
+function purchaseGroups<T extends { purchaseDate: string; prize: number | null }>(tickets: T[]) {
+  const groups = new Map<string, { date: string; tickets: T[]; prize: number }>();
+  for (const ticket of tickets) {
+    let group = groups.get(ticket.purchaseDate);
+    if (!group) { group = { date: ticket.purchaseDate, tickets: [], prize: 0 }; groups.set(ticket.purchaseDate, group); }
+    group.tickets.push(ticket);
+    group.prize += ticket.prize ?? 0;
+  }
+  return [...groups.values()].sort((left, right) => right.date.localeCompare(left.date));
 }
+function HistoryHeading({ date, tickets, prize }: { date: string; tickets: number; prize: number }) {
+  return <div className="shop-history-heading"><h3>{formatDate(date)} <span>· {tickets}장</span></h3><strong>당첨 +{prize.toLocaleString("ko-KR")}G</strong></div>;
+}
+const LottoTicketRow = memo(function LottoTicketRow({ ticket, number }: { ticket: LottoTicket; number: number }) {
+  const settled = ticket.matches !== null;
+  const result = settled ? ticket.rank ? `${ticket.rank}등 · +${(ticket.prize ?? 0).toLocaleString("ko-KR")}G` : "낙첨" : "추첨 대기";
+  return <li className="ticket lotto-ticket-row" data-ticket-id={ticket.id}>
+    <span className="shop-ticket-order" aria-label={`${number}번째 표`}>{number}</span>
+    <div className="ticket-balls" aria-label="선택 번호">{ticket.numbers.map(value => {
+      const index = ticket.winningNumbers?.indexOf(value) ?? -1;
+      return <i key={value} data-n={value} style={index >= 0 ? { background: winColors[index], color: index ? "#fff" : "#5C4300" } : undefined}>{String(value).padStart(2, "0")}</i>;
+    })}</div>
+    <span className="ticket-outcome"><strong className={`ticket-result ${ticket.prize ? "gain" : "none"}`}>{result}</strong>
+      {ticket.drawDate !== ticket.purchaseDate && <small className="ticket-date">{formatDate(ticket.drawDate).replace(/^\d+년 /, "")} 추첨</small>}
+    </span>
+  </li>;
+});
+const LottoHistory = memo(function LottoHistory({ tickets, loading }: { tickets: LottoTicket[]; loading: boolean }) {
+  const groups = useMemo(() => purchaseGroups(tickets), [tickets]);
+  return <section className="card lotto-tickets shop-ticket-history" aria-label="내 데일리 로또">
+    <h2>내 데일리 로또 {tickets.length}장</h2>
+    {groups.map(group => <section className="shop-history-group" data-purchase-date={group.date} key={group.date}>
+      <HistoryHeading date={group.date} tickets={group.tickets.length} prize={group.prize} />
+      <ol className="shop-ticket-list">{group.tickets.map((ticket, index) => <LottoTicketRow key={ticket.id} ticket={ticket} number={index + 1} />)}</ol>
+    </section>)}
+    {!tickets.length && !loading && <p className="empty-state">아직 구매한 표가 없어요.</p>}
+    <p className="subtle-note shop-history-note">{`최근 ${SHOP_HISTORY_DAYS}일 기록만 보여요`}</p>
+  </section>;
+});
 
 export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
   const shop = useLoadShop("lotto");
@@ -175,109 +202,37 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
       <div className="shop-purchase-actions">
         {!full && <p className="subtle-note">{LOTTO_RULES.pickCount - selected.length}개 더 골라주세요</p>}
         {full && shop.canPurchase && !pending && shop.gold < LOTTO_RULES.price && <p className="subtle-note">골드가 부족해요. 이용권이 있으면 사용할 수 있어요.</p>}
-        <button className="primary-button" disabled={!available || pending?.payment === "ticket" || !pending && shop.gold < LOTTO_RULES.price} onClick={() => void purchase("gold")}>{busy ? "구매 확인 중…" : `골드로 1장 사기 · ${LOTTO_RULES.price}G`}</button>
-        <button className="secondary-button" disabled={!available || pending?.payment === "gold" || !pending && shop.inventory.lottoTickets < 1} onClick={() => void purchase("ticket")}>이용권으로 1장 사기</button>
+        <button className="primary-button" aria-label={`골드로 사기 · ${LOTTO_RULES.price}G`} disabled={!available || pending?.payment === "ticket" || !pending && shop.gold < LOTTO_RULES.price} onClick={() => void purchase("gold")}>{busy ? "구매 확인 중…" : `골드 ${LOTTO_RULES.price}G`}</button>
+        <button className="secondary-button" aria-label={`이용권으로 사기 · 1장 · 보유 ${shop.inventory.lottoTickets}장`} disabled={!available || pending?.payment === "gold" || !pending && shop.inventory.lottoTickets < 1} onClick={() => void purchase("ticket")}><span>이용권 1장</span><small>보유 {shop.inventory.lottoTickets}장</small></button>
       </div>
       <ShopNotice kind="lotto" error={error} />
       {round?.todayDraw.numbers && <DrawNumbers key={round.todayDraw.date} date={round.todayDraw.date} numbers={round.todayDraw.numbers} />}
-      <section className="lotto-tickets" aria-label="내 데일리 로또">
-        <h2>내 데일리 로또 {round?.tickets.length ?? 0}장</h2>
-        {round?.tickets.length ? round.tickets.map(ticket => <TicketCard key={ticket.id} ticket={ticket} />) : !shop.loading && <p className="card empty-state">아직 구매한 표가 없어요.</p>}
-      </section>
-      <details className="card shop-rules"><summary>데일리 로또 당첨금</summary><p>{LOTTO_RULES.maxNumber}개 숫자 중 {LOTTO_RULES.pickCount}개를 골라요. 매일 {formatTime(LOTTO_RULES.drawTime)} 이후에는 다음 날 추첨 표를 살 수 있어요.</p>
+      <LottoHistory tickets={round?.tickets ?? []} loading={shop.loading} />
+      <details className="card shop-rules"><summary>데일리 로또 당첨금</summary><p>{LOTTO_RULES.maxNumber}개 숫자 중 {LOTTO_RULES.pickCount}개를 골라요. 매일 {formatTime(LOTTO_RULES.drawTime)} 판매 마감·추첨 후에는 다음 날 추첨 표를 살 수 있어요.</p>
         <table><thead><tr><th>일치</th><th>당첨금</th></tr></thead><tbody>{Object.entries(LOTTO_RULES.prizes).reverse().map(([matches, prize]) => <tr key={matches}><td>{matches}개</td><td>{prize.toLocaleString("ko-KR")}G</td></tr>)}</tbody></table>
       </details>
     </div>
   </div>;
 }
 
-/** Scratching reveals an already purchased ticket; it never changes a balance. */
-function ScratchTicket({ ticket }: { ticket: SpeettoTicket }) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const strokes = useRef(0);
-  const scratching = useRef(false);
-  const symbolsRef = useRef<HTMLDivElement>(null);
-  const [revealed, setRevealed] = useState(false);
-  const [prize, setPrize] = useState(0);
-  useEffect(() => {
-    if (!revealed) return;
-    const symbols = [...(symbolsRef.current?.children ?? [])];
-    symbols.forEach((element, i) => popIn(element, { delay: 450 + i * 150 }));
-    if (!ticket.won) return;
-    let stop = () => {};
-    const timer = window.setTimeout(() => {
-      confetti(symbolsRef.current);
-      stop = tween(0, ticket.prize, 900, value => setPrize(Math.round(value)));
-    }, reduced() ? 0 : 450 + symbols.length * 150);
-    return () => { window.clearTimeout(timer); stop(); };
-  }, [revealed, ticket.won, ticket.prize]);
-  useEffect(() => {
-    const node = canvas.current;
-    const context = node?.getContext("2d");
-    if (!node || !context) return;
-    context.globalCompositeOperation = "source-over";
-    const gradient = context.createLinearGradient(0, 0, node.width, node.height);
-    gradient.addColorStop(0, "#D8CCF7");
-    gradient.addColorStop(1, "#C4DFF5");
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, node.width, node.height);
-    context.fillStyle = "rgba(255,255,255,.35)";
-    for (let i = 0; i < 60; i++) {
-      context.beginPath();
-      context.arc((i * 97) % node.width, (i * 53) % node.height, 6, 0, 7);
-      context.fill();
-    }
-    context.fillStyle = "#fff";
-    context.font = "800 40px TmoneyRoundWind, Pretendard Variable, sans-serif";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillText("여기를 긁어보세요", node.width / 2, node.height / 2);
-  }, []);
-  function cleared(node: HTMLCanvasElement) {
-    const data = node.getContext("2d")!.getImageData(0, 0, node.width, node.height).data;
-    let clear = 0;
-    let total = 0;
-    for (let y = 4; y < node.height; y += 10) for (let x = 4; x < node.width; x += 10) {
-      total += 1;
-      if (data[(y * node.width + x) * 4 + 3] < 40) clear += 1;
-    }
-    return clear / total;
-  }
-  function scratch(event: PointerEvent<HTMLCanvasElement>) {
-    const node = canvas.current;
-    const context = node?.getContext("2d");
-    if (!node || !context || revealed) return;
-    const rect = node.getBoundingClientRect();
-    context.globalCompositeOperation = "destination-out";
-    context.beginPath();
-    context.arc((event.clientX - rect.left) * node.width / rect.width, (event.clientY - rect.top) * node.height / rect.height, 34, 0, 7);
-    context.fill();
-    crumbs(event.clientX, event.clientY);
-    strokes.current += 1;
-    if (strokes.current % 8 === 0 && cleared(node) > .6) setRevealed(true);
-  }
-  return <section className="scratch-card" data-ticket-id={ticket.id}>
-    <div className="card-head"><h2>예굼 스피또</h2><span className="scratch-ticket-number">No. {ticket.id.slice(-8)}</span></div>
-    <div className="scratch-area">
-      <div className="scratch-symbols" ref={symbolsRef}>{ticket.cells.map((key, i) => <span key={i} style={{ background: art[key].tint }}><img className="character" src={artSrc(key)} alt={art[key].name} /></span>)}</div>
-      <canvas ref={canvas} width="652" height="300" className={revealed ? "revealed" : ""} aria-label="긁는 영역. 손가락이나 마우스로 문질러 주세요."
-        onPointerDown={event => { if (event.button !== 0 || !event.isPrimary || revealed) return; event.currentTarget.setPointerCapture(event.pointerId); scratching.current = true; scratch(event); }}
-        onPointerMove={event => { if (scratching.current) scratch(event); }} onPointerUp={() => { scratching.current = false; }} onPointerCancel={() => { scratching.current = false; }} onLostPointerCapture={() => { scratching.current = false; }} />
-    </div>
-    <div className={`scratch-result ${revealed ? ticket.won ? "won" : "lost" : ""}`} aria-live="polite">{revealed ? ticket.won ? `당첨! +${prize.toLocaleString("ko-KR")}G` : "아쉽지만 낙첨이에요" : "?"}</div>
-    {!revealed && <button className="text-button" onClick={() => setRevealed(true)}>한 번에 열기</button>}
-  </section>;
-}
 export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
   const shop = useLoadShop("speetto");
   const shownGold = useCountUp(shop.gold);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [revealedIds, setRevealedIds] = useState(() => new Set<string>());
+  const scratchCard = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pendingClick = useRef(false);
   const tickets = shop.speetto?.tickets ?? [];
+  const groups = useMemo(() => purchaseGroups(tickets), [tickets]);
   const ticket = tickets.find(entry => entry.id === selectedId) ?? tickets[0];
   const pending = shop.pending?.kind === "speetto" ? shop.pending.input as SpeettoPurchaseInput : null;
+  function reveal(id: string) { setRevealedIds(previous => previous.has(id) ? previous : new Set(previous).add(id)); }
+  function select(id: string) {
+    setSelectedId(id);
+    requestAnimationFrame(() => scratchCard.current?.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" }));
+  }
   async function purchase(payment: ShopPayment) {
     if (pendingClick.current || !shop.canPurchase || shop.pending && !pending) return;
     pendingClick.current = true;
@@ -296,15 +251,30 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
     <p className="speetto-rule">같은 캐릭터 3개면 {SPEETTO_RULES.prize.toLocaleString("ko-KR")}G 당첨</p>
     <div className="screen-body stack">
       <InventoryCard kind="speetto" />
-      {ticket ? <ScratchTicket key={ticket.id} ticket={ticket} /> : !shop.loading && <section className="card empty-state"><h2>오늘의 행운을 긁어볼까요?</h2><p>골드나 이용권으로 스피또를 구매해 주세요.</p></section>}
+      {ticket ? <div ref={scratchCard} className="scratch-ticket-slot"><ScratchTicket key={ticket.id} ticket={ticket} revealed={revealedIds.has(ticket.id)} onReveal={() => reveal(ticket.id)} /></div> : !shop.loading && <section className="card empty-state"><h2>오늘의 행운을 긁어볼까요?</h2><p>골드나 이용권으로 스피또를 구매해 주세요.</p></section>}
       <div className="shop-purchase-actions">
         {shop.canPurchase && !pending && shop.gold < SPEETTO_RULES.price && <p className="subtle-note">골드가 부족해요. 이용권이 있으면 사용할 수 있어요.</p>}
-        <button className="primary-button" disabled={!available || pending?.payment === "ticket" || !pending && shop.gold < SPEETTO_RULES.price} onClick={() => void purchase("gold")}>{busy ? "구매 확인 중…" : `골드로 1장 사기 · ${SPEETTO_RULES.price}G`}</button>
-        <button className="secondary-button" disabled={!available || pending?.payment === "gold" || !pending && shop.inventory.speettoTickets < 1} onClick={() => void purchase("ticket")}>이용권으로 1장 사기</button>
+        <button className="primary-button" aria-label={`골드로 사기 · ${SPEETTO_RULES.price}G`} disabled={!available || pending?.payment === "ticket" || !pending && shop.gold < SPEETTO_RULES.price} onClick={() => void purchase("gold")}>{busy ? "구매 확인 중…" : `골드 ${SPEETTO_RULES.price}G`}</button>
+        <button className="secondary-button" aria-label={`이용권으로 사기 · 1장 · 보유 ${shop.inventory.speettoTickets}장`} disabled={!available || pending?.payment === "gold" || !pending && shop.inventory.speettoTickets < 1} onClick={() => void purchase("ticket")}><span>이용권 1장</span><small>보유 {shop.inventory.speettoTickets}장</small></button>
       </div>
       <p className="subtle-note">당첨 확률 {SPEETTO_RULES.winPercent}% · 당첨금은 구매할 때 바로 받아요. 긁다가 나가도 지급은 유지돼요.</p>
       <ShopNotice kind="speetto" error={error} />
-      {tickets.length > 1 && <section className="card speetto-history"><h2>내 스피또</h2>{tickets.map((entry, i) => <button key={entry.id} aria-pressed={ticket?.id === entry.id} onClick={() => setSelectedId(entry.id)}><span>구매 기록 {tickets.length - i}</span><strong>{entry.won ? `+${entry.prize.toLocaleString("ko-KR")}G` : "낙첨"}</strong></button>)}</section>}
+      <section className="card speetto-history shop-ticket-history" aria-label="내 스피또">
+        <h2>내 스피또 {tickets.length}장</h2>
+        {groups.map(group => <section className="shop-history-group" data-purchase-date={group.date} key={group.date}>
+          <HistoryHeading date={group.date} tickets={group.tickets.length} prize={group.prize} />
+          <ol className="shop-ticket-list">{group.tickets.map((entry, index) => {
+            const revealed = revealedIds.has(entry.id);
+            const result = revealed ? entry.won ? `+${entry.prize.toLocaleString("ko-KR")}G` : "낙첨" : "긁기 전";
+            return <li key={entry.id}><button className="shop-ticket-row speetto-ticket-row" data-ticket-id={entry.id} aria-pressed={ticket?.id === entry.id}
+              aria-label={`${formatDate(entry.purchaseDate)} ${formatTime(entry.createdAt)} 구매한 스피또 ${index + 1}번 · ${result}`} onClick={() => select(entry.id)}>
+              <span className="shop-ticket-order" aria-hidden="true">{index + 1}</span><time dateTime={entry.createdAt}>{formatTime(entry.createdAt)}</time><strong className={revealed && entry.won ? "gain" : "none"}>{result}</strong>
+            </button></li>;
+          })}</ol>
+        </section>)}
+        {!tickets.length && !shop.loading && <p className="empty-state">아직 구매한 표가 없어요.</p>}
+        <p className="subtle-note shop-history-note">{`최근 ${SHOP_HISTORY_DAYS}일 기록만 보여요`}</p>
+      </section>
     </div>
   </div>;
 }

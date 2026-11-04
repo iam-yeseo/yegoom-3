@@ -2606,8 +2606,13 @@ em.ring::after {
 .inventory-card h2 { font-size: 14px; color: #7c7383; }
 .inventory-card p { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; }
 .inventory-card strong { color: #7556c4; white-space: nowrap; }
-.shop-purchase-actions { display: flex; flex-direction: column; gap: 10px; }
-.shop-purchase-actions .primary-button { font-size: 16px; }
+.shop-purchase-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: stretch; }
+.shop-purchase-actions > p { grid-column: 1 / -1; margin: 0; }
+.shop-purchase-actions > button { min-width: 0; min-height: 48px; padding: 10px 8px; font-size: 14px; line-height: 1.3; white-space: nowrap; }
+.shop-purchase-actions > button:only-of-type { grid-column: 1 / -1; }
+.shop-purchase-actions .secondary-button { display: flex; justify-content: center; align-items: center; gap: 6px; }
+.shop-purchase-actions .secondary-button > span { flex-shrink: 0; }
+.shop-purchase-actions .secondary-button > small { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10px; font-weight: 500; }
 .shop-purchase-actions .secondary-button:disabled { color: #ada4b3; background: #f1ece6; }
 .shop-error { text-align: center; }
 .lotto-target { margin: 0; padding: 0 20px 18px; color: #3b7fb3; font-size: 13px; }
@@ -2616,9 +2621,26 @@ em.ring::after {
 .lotto-draw .draw { padding-left: 12px; padding-right: 12px; }
 .lotto-draw .draw > div { gap: 6px; width: 100%; justify-content: center; }
 .lotto-draw .draw i { width: min(52px, 17%); height: auto; aspect-ratio: 1; flex-shrink: 0; }
-.lotto-tickets { display: flex; flex-direction: column; gap: 12px; }
-.lotto-tickets > h2 { padding: 2px 4px; font-size: 16px; }
-.ticket-date { font-size: 12px; color: #7c7383; margin: 0; }
+.shop-ticket-history { display: flex; flex-direction: column; gap: 14px; padding: 16px 14px; }
+.shop-ticket-history > h2 { padding: 0; margin: 0; font-size: 16px; }
+.shop-history-group + .shop-history-group { border-top: 1px solid #eee8e2; padding-top: 14px; }
+.shop-history-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 5px 10px; margin-bottom: 5px; }
+.shop-history-heading h3 { margin: 0; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.shop-history-heading h3 > span { font-weight: 500; color: #7c7383; }
+.shop-history-heading > strong { flex-shrink: 0; font-size: 11px; color: #c9533e; white-space: nowrap; }
+.shop-ticket-list { list-style: none; margin: 0; padding: 0; }
+.shop-ticket-list .lotto-ticket-row { display: grid; grid-template-columns: 14px max-content minmax(0, 1fr); align-items: center; gap: 7px; padding: 9px 0; }
+.shop-ticket-list > li + li { border-top: 1px solid #f3eee8; }
+.shop-ticket-order { display: inline-grid; place-items: center; width: 14px; min-width: 14px; height: 14px; border: 1px solid #cfc7cf; border-radius: 50%; color: #7c7383; font-size: 9px; line-height: 1; font-variant-numeric: tabular-nums; }
+.lotto-ticket-row .ticket-balls { gap: 4px; }
+.lotto-ticket-row .ticket-balls i { flex-shrink: 0; width: 22px; height: 22px; font-size: 11px; }
+.ticket-outcome { display: flex; justify-content: flex-end; align-items: center; gap: 6px; min-width: 0; }
+.ticket-result { font-size: 11px; font-weight: 700; white-space: nowrap; }
+.shop-ticket-history .gain { color: #c9533e; }
+.shop-ticket-history .none { color: #7c7383; }
+.lotto-ticket-row .ticket-date { margin: 0; font-size: 9px; color: #7c7383; white-space: nowrap; }
+.shop-history-note { margin: 0; padding-top: 4px; font-size: 11px; }
+.scratch-ticket-slot { scroll-margin-top: 12px; }
 .shop-rules { padding: 18px; font-size: 13px; line-height: 1.7; }
 .shop-rules summary { cursor: pointer; font-weight: 800; }
 .shop-rules p { margin-top: 12px; color: #7c7383; }
@@ -2626,10 +2648,20 @@ em.ring::after {
 .shop-rules td, .shop-rules th { padding: 7px 0; border-bottom: 1px solid #f3eee8; }
 .scratch-ticket-number { max-width: 50%; overflow-wrap: anywhere; font-size: 12px; }
 .scratch-result.lost { color: #7c7383; }
-.speetto-history { padding: 18px; display: flex; flex-direction: column; gap: 8px; }
-.speetto-history h2 { font-size: 16px; margin-bottom: 4px; }
-.speetto-history button { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border-radius: 14px; background: #f6f1eb; font-size: 13px; text-align: left; }
-.speetto-history button[aria-pressed="true"] { background: #ffe6df; }
+.speetto-history .speetto-ticket-row { width: 100%; display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 10px; min-height: 40px; border: 0; border-radius: 9px; padding: 8px 6px; background: transparent; font-size: 12px; text-align: left; }
+.speetto-history .speetto-ticket-row[aria-pressed="true"] { background: #ffe6df; }
+.speetto-ticket-row:focus-visible { outline: 3px solid #7556c4; outline-offset: 2px; }
+.speetto-ticket-row time { color: #7c7383; font-variant-numeric: tabular-nums; }
+.speetto-ticket-row > strong { white-space: nowrap; }
+@media (max-width: 360px) {
+  .shop-purchase-actions { gap: 8px; }
+  .shop-purchase-actions > button { font-size: 12px; padding-left: 6px; padding-right: 6px; }
+  .shop-purchase-actions .secondary-button { gap: 4px; }
+  .shop-purchase-actions .secondary-button > small { font-size: 9px; }
+  .lotto-ticket-row .ticket-balls { gap: 3px; }
+  .lotto-ticket-row .ticket-balls i { width: 18px; height: 18px; font-size: 10px; }
+  .ticket-outcome { flex-wrap: wrap; gap: 2px 5px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .scratch-area canvas { transition-duration: 180ms; }
 }

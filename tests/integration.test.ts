@@ -651,9 +651,13 @@ describe('Worker and D1 integration', () => {
             if (route.startsWith('bootstrap')) {
               const prior = previous.after.find(row => row.clockKst === clockKst && row.historicalRowsPerLedger === historicalRows && row.route === route)!;
               expect(prior, `PR 2 baseline for ${route}`).toBeDefined();
-              expect(metrics.prepares, route).toBeLessThanOrEqual(prior.prepares);
-              expect(metrics.bindingCalls, route).toBeLessThanOrEqual(prior.bindingCalls);
-              expect(metrics.queries, route).toBeLessThanOrEqual(prior.queries);
+              // PR 6 adds exactly one aggregate notice read after the draw.
+              // This fixture has no lottery purchases, so the empty aggregate
+              // must leave billed rows unchanged and add no writes.
+              const noticeAllowance = clockKst === '18:00' ? 1 : 0;
+              expect(metrics.prepares, route).toBeLessThanOrEqual(prior.prepares + noticeAllowance);
+              expect(metrics.bindingCalls, route).toBeLessThanOrEqual(prior.bindingCalls + noticeAllowance);
+              expect(metrics.queries, route).toBeLessThanOrEqual(prior.queries + noticeAllowance);
               expect(metrics.rowsRead, route).toBeLessThanOrEqual(prior.rowsRead);
             }
             await response.arrayBuffer();
@@ -729,6 +733,225 @@ describe('Worker and D1 integration', () => {
     }, 30000);
   });
 
+
+  describe('lotto cutoff, home notice and recent shop histories', () => {
+    it('returns a user-scoped notice only for today after 17:30 and clears it on the next day', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-lotto-notice-'));
+      let instance = runtime(await workerAt(`${TODAY}T08:29:59Z`), persistence);
+      try {
+        let database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await fund(1500, 'min', database);
+        const { cookie } = await login('min', instance);
+        const view = async (viewer = cookie) => {
+          const response = await request('/api/bootstrap', { cookie: viewer, instance });
+          expect(response.status).toBe(200);
+          return response.json() as Promise<BootstrapResponse>;
+        };
+        expect((await view()).lottoNotice).toBeNull();
+        for (const numbers of [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]) {
+          const response = await request('/api/shop/lotto', { method: 'POST', cookie, instance,
+            body: { requestId: crypto.randomUUID(), numbers, payment: 'gold' } });
+          expect(response.status).toBe(200);
+          expect((await response.json() as LottoResponse).purchase).toMatchObject({ drawDate: TODAY, purchaseDate: TODAY, createdAt: `${TODAY}T08:29:59.000Z` });
+        }
+        expect((await view()).lottoNotice).toBeNull();
+        await instance.dispose();
+        instance = runtime(await workerAt(`${TODAY}T08:30:00Z`), persistence);
+        database = await instance.getD1Database('DB');
+        await database.prepare("INSERT INTO lotto_draws (date, numbers, created_at) VALUES (?, '[1,2,3,4,5]', ?)")
+          .bind(TODAY, `${TODAY}T08:30:00.000Z`).run();
+        const finished = await view();
+        expect(finished.lottoNotice).toEqual({ drawDate: TODAY, tickets: 2, winners: 1, prize: 5000 });
+        expect(finished.user.gold).toBe(5500);
+        const peer = await login('siwon', instance);
+        expect((await view(peer.cookie)).lottoNotice).toBeNull();
+        await instance.dispose();
+        instance = runtime(await workerAt('2026-10-31T09:00:00Z'), persistence);
+        const tomorrow = await view();
+        expect(tomorrow.lottoNotice).toBeNull();
+        expect(tomorrow.user.gold).toBe(5500);
+        await expectBalanced(await instance.getD1Database('DB'));
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it('does not include a next-day ticket in the current draw notice', async () => {
+      const instance = runtime(await workerAt(`${TODAY}T08:30:00Z`));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        await fund(500, 'min', database);
+        const { cookie } = await login('min', instance);
+        const response = await request('/api/shop/lotto', { method: 'POST', cookie, instance,
+          body: { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'gold' } });
+        expect(response.status).toBe(200);
+        expect((await response.json() as LottoResponse).purchase).toMatchObject({ purchaseDate: TODAY, drawDate: '2026-10-31' });
+        const snapshot = await request('/api/bootstrap', { cookie, instance });
+        expect(snapshot.status).toBe(200);
+        expect((await snapshot.json() as BootstrapResponse).lottoNotice).toBeNull();
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('keeps an explicit old purchase retry idempotent without restoring that ticket to recent histories', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-old-shop-receipt-'));
+      const oldInstant = '2026-10-20T00:00:00Z';
+      let instance = runtime(await workerAt(oldInstant, oldInstant, 99), persistence);
+      try {
+        let database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        await fund(800, 'min', database);
+        let { cookie } = await login('min', instance);
+        const inputs = {
+          lotto: { requestId: crypto.randomUUID(), payment: 'gold', numbers: [1, 2, 3, 4, 5] },
+          speetto: { requestId: crypto.randomUUID(), payment: 'gold' },
+        };
+        const originalIds: string[] = [];
+        for (const kind of ['lotto', 'speetto'] as const) {
+          const bought = await request(`/api/shop/${kind}`, { method: 'POST', cookie, instance, body: inputs[kind] });
+          expect(bought.status).toBe(200);
+          originalIds.push((await bought.json() as LottoResponse | SpeettoResponse).purchase!.id);
+        }
+        await instance.dispose();
+        instance = runtime(await workerAt(`${TODAY}T00:00:00Z`), persistence);
+        database = await instance.getD1Database('DB');
+        // A ten-day-old session has expired; the same account reauthenticates.
+        cookie = (await login('min', instance)).cookie;
+        await database.prepare("INSERT INTO lotto_draws (date, numbers, created_at) VALUES ('2026-10-20', '[6,7,8,9,10]', '2026-10-20T08:30:00.000Z')").run();
+        for (const kind of ['lotto', 'speetto'] as const) {
+          const current = await request(`/api/shop/${kind}`, { cookie, instance }); expect(current.status).toBe(200);
+          const body = await current.json() as LottoResponse & SpeettoResponse;
+          expect(body[kind].tickets).toEqual([]);
+        }
+        const before = await ledgerRows(database);
+        for (const [index, kind] of (['lotto', 'speetto'] as const).entries()) {
+          const responses = await Promise.all([1, 2].map(() => request(`/api/shop/${kind}`, { method: 'POST', cookie, instance, body: inputs[kind] })));
+          expect(responses.map(response => response.status)).toEqual([200, 200]);
+          for (const response of responses) {
+            const body = await response.json() as LottoResponse & SpeettoResponse;
+            expect(body.purchase).toMatchObject({ id: originalIds[index], requestId: inputs[kind].requestId, purchaseDate: '2026-10-20', createdAt: '2026-10-20T00:00:00.000Z' });
+            expect(body[kind].tickets).toEqual([]);
+          }
+        }
+        expect(await ledgerRows(database)).toEqual(before);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(2);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it('limits both histories by KST purchase date while still settling an older unpaid lotto ticket once', async () => {
+      const instance = runtime(await workerAt(`${TODAY}T09:00:00Z`));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        for (const [id, date] of [['old-unpaid', '2026-10-01'], ['expired', '2026-10-23'], ['last-visible', '2026-10-24'], ['today', TODAY]]) {
+          const createdAt = date === '2026-10-24' ? '2026-10-23T15:00:00.000Z' : `${date}T00:00:00.000Z`;
+          for (const kind of ['lotto', 'speetto'] as const) {
+            const outcome = kind === 'lotto' ? { drawDate: date, numbers: [1, 2, 3, 4, 5] }
+              : { cells: ['cat', 'bunny', 'bread'], won: false, prize: 0 };
+            await database.prepare(`INSERT INTO shop_purchases
+              (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome)
+              VALUES (?, 'min', ?, ?, '{}', 'ticket', 0, ?, ?, ?)`)
+              .bind(`${kind}:${id}`, `${kind}:${id}`, kind, date, createdAt, JSON.stringify(outcome)).run();
+            if (kind === 'lotto') {
+              await database.prepare(`INSERT INTO lotto_tickets (id, draw_date, numbers, settled_at, matches, rank, prize)
+                VALUES (?, ?, '[1,2,3,4,5]', ?, ?, NULL, ?)`)
+                .bind(`${kind}:${id}`, date, id === 'old-unpaid' ? null : createdAt, id === 'old-unpaid' ? null : 0, id === 'old-unpaid' ? null : 0).run();
+              await database.prepare("INSERT OR IGNORE INTO lotto_draws (date, numbers, created_at) VALUES (?, '[1,2,3,4,5]', ?)").bind(date, createdAt).run();
+            }
+          }
+        }
+        const lottery = await request('/api/shop/lotto', { cookie, instance }); expect(lottery.status).toBe(200);
+        const lotto = await lottery.json() as LottoResponse;
+        expect(lotto.lotto.tickets.map(ticket => ticket.id)).toEqual(['lotto:today', 'lotto:last-visible']);
+        expect(lotto.lotto.tickets[1]).toMatchObject({ purchaseDate: '2026-10-24', createdAt: '2026-10-23T15:00:00.000Z' });
+        expect(lotto.gold).toBe(5000);
+        const scratch = await request('/api/shop/speetto', { cookie, instance }); expect(scratch.status).toBe(200);
+        const speetto = await scratch.json() as SpeettoResponse;
+        expect(speetto.speetto.tickets.map(ticket => ticket.id)).toEqual(['speetto:today', 'speetto:last-visible']);
+        expect(speetto.speetto.tickets[1]).toMatchObject({ purchaseDate: '2026-10-24', createdAt: '2026-10-23T15:00:00.000Z' });
+        expect(await database.prepare("SELECT prize, rank, settled_at FROM lotto_tickets WHERE id = 'lotto:old-unpaid'").first())
+          .toMatchObject({ prize: 5000, rank: 1, settled_at: `${TODAY}T09:00:00.000Z` });
+        await Promise.all(['/api/bootstrap', '/api/shop/lotto', '/api/shop/speetto'].map(path => request(path, { cookie, instance })));
+        expect((await ledgerRows(database)).filter(row => row.reference === 'lotto:prize:lotto:old-unpaid')).toHaveLength(1);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+  });
+
+  describe('shop recent history request budgets', () => {
+    it('records authenticated recent lottery and scratch histories before and after large past histories', async () => {
+      const baseline = process.env.FREE_PLAN_SHOP_BASELINE === '1';
+      const measurements: { clockKst: string; historicalTicketsPerKind: number; route: string; prepares: number; queries: number; bindingCalls: number; rowsRead: number; rowsWritten: number; returnedTickets: number | null }[] = [];
+      for (const clockKst of ['09:00', '18:00']) for (const historicalTickets of [0, 5000]) {
+        const instant = `${TODAY}T${clockKst === '09:00' ? '00' : '09'}:00:00Z`;
+        const instance = runtime(workerWithD1Metrics(await workerAt(instant)));
+        try {
+          const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+          // Settled fixtures isolate list/notice reads from payout creation. Each
+          // kind has three recent purchases and independently growing old rows.
+          for (const date of ['2026-01-01', '2026-10-24', '2026-10-29', TODAY]) {
+            await database.prepare("INSERT INTO lotto_draws (date, numbers, created_at) VALUES (?, '[1,2,3,4,5]', ?)").bind(date, `${date}T09:00:00.000Z`).run();
+          }
+          if (historicalTickets) {
+            for (const kind of ['lotto', 'speetto'] as const) {
+              await database.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ?)
+                INSERT INTO shop_purchases (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome)
+                SELECT ? || x, 'min', ? || x, ?, '{}', 'ticket', 0, '2026-01-01', '2026-01-01T00:00:00.000Z', ? FROM n`)
+                .bind(historicalTickets, `${kind}:history:`, `${kind}:history:`, kind,
+                  JSON.stringify(kind === 'lotto' ? { drawDate: '2026-01-01', numbers: [6, 7, 8, 9, 10] } : { cells: ['cat', 'bunny', 'bread'], won: false, prize: 0 })).run();
+            }
+            await database.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ?)
+              INSERT INTO lotto_tickets (id, draw_date, numbers, settled_at, matches, rank, prize)
+              SELECT 'lotto:history:' || x, '2026-01-01', '[6,7,8,9,10]', '2026-01-01T09:00:00.000Z', 0, NULL, 0 FROM n`).bind(historicalTickets).run();
+          }
+          for (const date of ['2026-10-24', '2026-10-29', TODAY]) for (const kind of ['lotto', 'speetto'] as const) {
+            const id = `${kind}:recent:${date}`;
+            await database.prepare(`INSERT INTO shop_purchases (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome)
+              VALUES (?, 'min', ?, ?, '{}', 'ticket', 0, ?, ?, ?)`)
+              .bind(id, id, kind, date, `${date}T00:00:00.000Z`, JSON.stringify(kind === 'lotto' ? { drawDate: date, numbers: [6, 7, 8, 9, 10] } : { cells: ['cat', 'bunny', 'bread'], won: false, prize: 0 })).run();
+            if (kind === 'lotto') await database.prepare(`INSERT INTO lotto_tickets (id, draw_date, numbers, settled_at, matches, rank, prize)
+              VALUES (?, ?, '[6,7,8,9,10]', ?, 0, NULL, 0)`).bind(id, date, `${date}T09:00:00.000Z`).run();
+          }
+          const { cookie } = await login('min', instance);
+          for (const route of ['bootstrap', 'lotto', 'speetto']) {
+            const path = route === 'bootstrap' ? '/api/bootstrap' : `/api/shop/${route}`;
+            const response = await request(path, { cookie, instance }); expect(response.status).toBe(200);
+            const body = await response.json() as BootstrapResponse & LottoResponse & SpeettoResponse;
+            const tickets = route === 'bootstrap' ? null : route === 'lotto' ? body.lotto.tickets : body.speetto.tickets;
+            const row = { clockKst, historicalTicketsPerKind: historicalTickets, route,
+              prepares: Number(response.headers.get('X-Test-D1-Prepares')), queries: Number(response.headers.get('X-Test-D1-Queries')),
+              bindingCalls: Number(response.headers.get('X-Test-D1-Binding-Calls')), rowsRead: Number(response.headers.get('X-Test-D1-Rows-Read')),
+              rowsWritten: Number(response.headers.get('X-Test-D1-Rows-Written')), returnedTickets: tickets?.length ?? null };
+            measurements.push(row);
+            expect(row.bindingCalls).toBeLessThanOrEqual(50); expect(row.rowsWritten).toBe(0);
+            if (tickets) {
+              expect(tickets).toHaveLength(baseline ? historicalTickets + 3 : 3);
+              if (!baseline) expect(tickets.map(ticket => ticket.purchaseDate)).toEqual([TODAY, '2026-10-29', '2026-10-24']);
+            }
+            if (!baseline && route === 'bootstrap') {
+              expect(body.lottoNotice).toEqual(clockKst === '09:00' ? null : { drawDate: TODAY, tickets: 1, winners: 0, prize: 0 });
+            }
+          }
+          await expectBalanced(database);
+        } finally { await instance.dispose(); }
+      }
+      if (process.env.FREE_PLAN_SHOP_MEASUREMENTS) {
+        writeFileSync(process.env.FREE_PLAN_SHOP_MEASUREMENTS, `${JSON.stringify(measurements, null, 2)}\n`);
+      } else {
+        const prior = JSON.parse(readFileSync(new URL('../docs/free-plan-pr6-measurements.json', import.meta.url), 'utf8')) as { after: typeof measurements };
+        expect(measurements.map(row => [row.clockKst, row.historicalTicketsPerKind, row.route])).toEqual(prior.after.map(row => [row.clockKst, row.historicalTicketsPerKind, row.route]));
+        for (const row of measurements) {
+          const limit = prior.after.find(candidate => candidate.clockKst === row.clockKst && candidate.historicalTicketsPerKind === row.historicalTicketsPerKind && candidate.route === row.route)!;
+          for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsRead', 'rowsWritten'] as const) expect(row[field], `${row.clockKst} ${row.route}: ${field}`).toBeLessThanOrEqual(limit[field]);
+        }
+      }
+      if (!baseline) for (const row of measurements.filter(value => value.historicalTicketsPerKind === 5000)) {
+        const empty = measurements.find(value => value.clockKst === row.clockKst && value.route === row.route && value.historicalTicketsPerKind === 0)!;
+        expect(row.queries).toBe(empty.queries);
+        expect(row.rowsRead, `${row.clockKst} ${row.route}: old histories must not increase reads`).toBeLessThanOrEqual(empty.rowsRead + 2);
+      }
+      console.log(`Recent shop authenticated request metrics: ${JSON.stringify(measurements)}`);
+    }, 30000);
+  });
 
   describe('claw authenticated request budgets', () => {
     it('keeps authenticated machine reads, play receipts and bootstrap within the PR 4 main costs', async () => {
@@ -4082,7 +4305,7 @@ describe('Worker and D1 integration', () => {
 
     it.each([
       { kind: 'kuji', before: '2026-11-01T14:59:59Z', after: '2026-11-01T15:00:00Z' },
-      { kind: 'lotto', before: '2026-10-30T07:59:59Z', after: '2026-10-30T08:00:00Z' },
+      { kind: 'lotto', before: '2026-10-30T08:29:59Z', after: '2026-10-30T08:30:00Z' },
     ])('rejects a $kind purchase crossing its SQL time boundary without partial writes', async ({ kind, before, after }) => {
       const instance = runtime(await workerAt(before, after));
       try {
@@ -4105,7 +4328,7 @@ describe('Worker and D1 integration', () => {
 
     it('replays an original lotto purchase after the draw cutoff and KST midnight', async () => {
       const persistence = await mkdtemp(join(tmpdir(), 'yegoom-shop-replay-'));
-      let instance = runtime(await workerAt(`${TODAY}T07:59:59Z`), persistence);
+      let instance = runtime(await workerAt(`${TODAY}T08:29:59Z`), persistence);
       try {
         const database = await instance.getD1Database('DB');
         await provision(database, migration, passwordHash);
@@ -4115,7 +4338,7 @@ describe('Worker and D1 integration', () => {
         const first = await request('/api/shop/lotto', { method: 'POST', cookie, instance, body });
         expect(first.status).toBe(200);
         const original = (await first.json() as LottoResponse).purchase!;
-        for (const instant of [`${TODAY}T08:00:00Z`, `${TODAY}T15:00:00Z`]) {
+        for (const instant of [`${TODAY}T08:30:00Z`, `${TODAY}T15:00:00Z`]) {
           await instance.dispose();
           instance = runtime(await workerAt(instant), persistence);
           const replay = await request('/api/shop/lotto', { method: 'POST', cookie, instance, body });
@@ -4132,10 +4355,12 @@ describe('Worker and D1 integration', () => {
 
     it.each([
       ['2026-10-30T07:59:59Z', '2026-10-30'],
-      ['2026-10-30T08:00:00Z', '2026-10-31'],
+      ['2026-10-30T08:00:00Z', '2026-10-30'],
+      ['2026-10-30T08:29:59Z', '2026-10-30'],
+      ['2026-10-30T08:30:00Z', '2026-10-31'],
       ['2026-10-30T14:59:59Z', '2026-10-31'],
       ['2026-10-30T15:00:00Z', '2026-10-31'],
-      ['2026-10-31T08:00:00Z', '2026-11-01'],
+      ['2026-10-31T08:30:00Z', '2026-11-01'],
     ])('assigns the lotto target using server KST at %s', async (instant, drawDate) => {
       const instance = runtime(await workerAt(instant));
       try {
@@ -4152,8 +4377,8 @@ describe('Worker and D1 integration', () => {
       } finally { await instance.dispose(); }
     });
 
-    it('creates the 17:00 lotto draw once across concurrent reads', async () => {
-      const instance = runtime(await workerAt(`${TODAY}T08:00:00Z`));
+    it('creates the 17:30 lotto draw once across concurrent reads', async () => {
+      const instance = runtime(await workerAt(`${TODAY}T08:30:00Z`));
       try {
         const database = await instance.getD1Database('DB');
         await provision(database, migration, passwordHash);

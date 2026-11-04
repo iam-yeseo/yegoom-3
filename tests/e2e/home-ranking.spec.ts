@@ -170,7 +170,7 @@ test('morning and evening previews retain honorific sentences, plain ranking lab
         const card = element.closest('.card')!.getBoundingClientRect();
         return { text: element.textContent, lines: lines.size, contained: box.left >= card.left && box.right <= card.right };
       }));
-      expect(times.some(time => time.text?.includes('17시 00분 추첨'))).toBe(true);
+      expect(times.some(time => time.text?.includes('17시 30분 추첨'))).toBe(true);
       for (const time of times) expect(time).toMatchObject({ lines: 1, contained: true });
     }
     await capture(page, name, info);

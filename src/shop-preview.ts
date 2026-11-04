@@ -1,7 +1,7 @@
-import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, SPEETTO_RULES, attendanceTickets, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, attendanceTickets, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
 import type {
   Inventory, KujiCell, KujiGrade, KujiPurchase, KujiPurchaseInput, KujiResponse,
-  LedgerEntry, LottoPurchaseInput, LottoResponse, LottoTicket, ShopKind, ShopPayment,
+  LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoTicket, ShopKind, ShopPayment,
   ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoSymbol, SpeettoTicket,
 } from '../shared/types';
 
@@ -70,8 +70,18 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   const sampleMatches = sampleNumbers.filter(number => sampleWinning.includes(number)).length;
   draws.set(yesterday, sampleWinning);
   lottoTickets.push({ id: 'preview-lotto-history', requestId: 'preview-lotto-history', drawDate: yesterday,
+    purchaseDate: yesterday, createdAt: `${yesterday}T12:00:00+09:00`,
     numbers: sampleNumbers, payment: 'gold', cost: LOTTO_RULES.price, winningNumbers: sampleWinning,
     matches: sampleMatches, rank: lottoRank(sampleMatches), prize: lottoPrize(sampleMatches) });
+  // An evening visit can demonstrate the home notice without buying a real
+  // ticket. As with yesterday's example, its prize is already in sample gold.
+  if (Date.now() >= drawAt(purchaseDate)) {
+    draws.set(purchaseDate, sampleWinning);
+    lottoTickets.unshift({ id: 'preview-lotto-today', requestId: 'preview-lotto-today', drawDate: purchaseDate,
+      purchaseDate, createdAt: `${purchaseDate}T16:00:00+09:00`, numbers: sampleNumbers,
+      payment: 'gold', cost: LOTTO_RULES.price, winningNumbers: sampleWinning,
+      matches: sampleMatches, rank: lottoRank(sampleMatches), prize: lottoPrize(sampleMatches) });
+  }
 
   function record(currency: 'gold' | 'score', amount: number, reason: string, now: Date) {
     if (!amount) return;
@@ -109,13 +119,24 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   }
   function lotto(now: Date, purchase?: LottoTicket): LottoResponse {
     const today = kstDate(now);
+    const cutoff = nextDate(today, -(SHOP_HISTORY_DAYS - 1));
     return structuredClone({ ...state(now), lotto: {
       targetDrawDate: now.getTime() < drawAt(today) ? today : nextDate(today),
-      todayDraw: { date: today, numbers: draws.get(today) ?? null }, tickets: lottoTickets,
+      todayDraw: { date: today, numbers: draws.get(today) ?? null }, tickets: lottoTickets.filter(ticket => ticket.purchaseDate >= cutoff),
     }, ...(purchase ? { purchase } : {}) });
   }
   function speetto(now: Date, purchase?: SpeettoTicket): SpeettoResponse {
-    return structuredClone({ ...state(now), speetto: { tickets: speettoTickets }, ...(purchase ? { purchase } : {}) });
+    const cutoff = nextDate(kstDate(now), -(SHOP_HISTORY_DAYS - 1));
+    return structuredClone({ ...state(now), speetto: { tickets: speettoTickets.filter(ticket => ticket.purchaseDate >= cutoff) }, ...(purchase ? { purchase } : {}) });
+  }
+  function lottoNotice(now = new Date()): LottoNotice | null {
+    settle(now);
+    const today = kstDate(now);
+    if (now.getTime() < drawAt(today)) return null;
+    const tickets = lottoTickets.filter(ticket => ticket.drawDate === today);
+    return tickets.length ? { drawDate: today, tickets: tickets.length,
+      winners: tickets.filter(ticket => (ticket.prize ?? 0) > 0).length,
+      prize: tickets.reduce((sum, ticket) => sum + (ticket.prize ?? 0), 0) } : null;
   }
   function replay(kind: ShopKind, requestId: string, payload: string) {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(requestId)) throw new Error('구매 요청을 다시 시도해 주세요.');
@@ -191,6 +212,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     pay(input.payment, 'lottoTickets', LOTTO_RULES.price, '데일리 로또 구매', now);
     const today = kstDate(now);
     const purchase: LottoTicket = { id: crypto.randomUUID(), requestId: input.requestId,
+      purchaseDate: today, createdAt: now.toISOString(),
       drawDate: now.getTime() < drawAt(today) ? today : nextDate(today), numbers, payment: input.payment,
       cost: input.payment === 'gold' ? LOTTO_RULES.price : 0, winningNumbers: null, matches: null, rank: null, prize: null };
     lottoTickets.unshift(purchase);
@@ -208,6 +230,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     const symbols = shuffled(SPEETTO_RULES.characters);
     const resultCells: SpeettoSymbol[] = won ? [symbols[0], symbols[0], symbols[0]] : symbols.slice(0, 3);
     const purchase: SpeettoTicket = { id: crypto.randomUUID(), requestId: input.requestId, cells: resultCells, won,
+      purchaseDate: kstDate(now),
       prize: won ? SPEETTO_RULES.prize : 0, payment: input.payment,
       cost: input.payment === 'gold' ? SPEETTO_RULES.price : 0, createdAt: now.toISOString() };
     record('gold', purchase.prize, '스피또 당첨', now);
@@ -215,7 +238,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     receipts.set(input.requestId, { kind: 'speetto', payload, purchase });
     return speetto(now, purchase);
   }
-  return { read, buyKuji, buyLotto, buySpeetto,
+  return { read, buyKuji, buyLotto, buySpeetto, lottoNotice,
     claimLaunchGift() {
       const now = new Date();
       if (kstDate(now) !== LAUNCH_GIFT.date) throw new Error('런칭 선물은 오픈 당일에만 받을 수 있어요.');

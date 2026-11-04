@@ -1,0 +1,50 @@
+.lotto-notice {
+  position: relative;
+  display: flex;
+  margin-bottom: 20px;
+  padding: 0;
+  border: 1px solid #f4d98c;
+  background: #fff4cc;
+}
+.lotto-notice-open {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 48px 18px 18px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  text-align: left;
+  color: #6c510f;
+}
+.lotto-notice-copy { min-width: 0; display: grid; gap: 7px; }
+.lotto-notice-copy strong { font-size: 14px; line-height: 1.6; word-break: keep-all; }
+.lotto-notice-copy > span { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; }
+.lotto-notice-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  color: #8c7335;
+  background: transparent;
+  font-size: 21px;
+}
+.lotto-notice-close:focus-visible, .lotto-notice-open:focus-visible { outline: 3px solid #7556c4; outline-offset: 3px; }
+.shop-tile-grid .shop-tile {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.shop-tile-grid .shop-tile > .solo-text { display: contents; }
+.shop-tile-grid .shop-tile .solo-text strong { grid-column: 2; grid-row: 1; line-height: 1.4; }
+.shop-tile-grid .shop-tile .solo-text small { grid-column: 1 / -1; min-width: 0; }
+.shop-tile-grid .shop-tile .home-schedule { white-space: nowrap; }
+/* A later third tile occupies a full last row, without a placeholder game. */
+.shop-tile-grid > .shop-tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
