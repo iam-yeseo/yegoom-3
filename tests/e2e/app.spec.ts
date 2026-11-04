@@ -327,6 +327,7 @@ test('a delayed bootstrap cannot restore the previous user after logout', async 
     await route.fulfill({ response });
   });
   await login(page, 'siwon');
+  await page.clock.setFixedTime(new Date(Date.parse(TEST_NOW) + 10000));
   holdNext = true;
   await expect.poll(async () => {
     if (!held) await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));

@@ -1,0 +1,525 @@
+{
+  "baseCommit": "c873ae8",
+  "source": "tests/integration.test.ts: free-plan request budgets / bounds authenticated polling queries and rows as historical ledgers grow",
+  "environment": {
+    "node": "v24.19.0",
+    "miniflare": "4.20260730.0",
+    "vitest": "3.2.7",
+    "database": "local D1 / workerd; not remote production measurements"
+  },
+  "fixture": {
+    "frozenKstDate": "2026-10-30",
+    "clockKst": [
+      "09:00",
+      "18:00"
+    ],
+    "activePlayers": 3,
+    "administrators": 1,
+    "currentRounds": 3,
+    "currentPredictions": 6,
+    "currentWeekScoreRows": 45,
+    "historicalRowsPerLedger": [
+      100,
+      10000
+    ],
+    "historicalLedgers": [
+      "ledger gold",
+      "inventory_ledger tickets"
+    ],
+    "historicalDate": "2026-01-01",
+    "lateDraw": "18:00 fixture has already created current lotto_draws row; no payments due",
+    "authentication": "included in every request",
+    "catchmindOpen": "one published round, no guesses"
+  },
+  "counting": {
+    "prepares": "calls to DB.prepare",
+    "queries": "executed SQL statements, including each batch statement",
+    "bindingCalls": "single all/first/run or one batch call",
+    "rowsRead": "sum of D1 result meta.rows_read",
+    "rowsWritten": "sum of D1 result meta.rows_written, including trigger/index effects"
+  },
+  "before": [
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 32,
+      "queries": 32,
+      "bindingCalls": 32,
+      "rowsRead": 246,
+      "rowsWritten": 2
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 30,
+      "queries": 30,
+      "bindingCalls": 30,
+      "rowsRead": 245,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "shop",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 138,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "catchmind (idle)",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "catchmind (open, no new guesses)",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 32,
+      "queries": 32,
+      "bindingCalls": 32,
+      "rowsRead": 248,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 32,
+      "queries": 32,
+      "bindingCalls": 32,
+      "rowsRead": 6848,
+      "rowsWritten": 2
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 30,
+      "queries": 30,
+      "bindingCalls": 30,
+      "rowsRead": 6847,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "shop",
+      "prepares": 4,
+      "queries": 4,
+      "bindingCalls": 4,
+      "rowsRead": 13338,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "catchmind (idle)",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "catchmind (open, no new guesses)",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 32,
+      "queries": 32,
+      "bindingCalls": 32,
+      "rowsRead": 6850,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 35,
+      "queries": 35,
+      "bindingCalls": 35,
+      "rowsRead": 248,
+      "rowsWritten": 2
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 33,
+      "queries": 33,
+      "bindingCalls": 33,
+      "rowsRead": 247,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "shop",
+      "prepares": 7,
+      "queries": 7,
+      "bindingCalls": 7,
+      "rowsRead": 140,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "catchmind (idle)",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "catchmind (open, no new guesses)",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 35,
+      "queries": 35,
+      "bindingCalls": 35,
+      "rowsRead": 250,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 35,
+      "queries": 35,
+      "bindingCalls": 35,
+      "rowsRead": 6850,
+      "rowsWritten": 2
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 33,
+      "queries": 33,
+      "bindingCalls": 33,
+      "rowsRead": 6849,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "shop",
+      "prepares": 7,
+      "queries": 7,
+      "bindingCalls": 7,
+      "rowsRead": 13340,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "catchmind (idle)",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "catchmind (open, no new guesses)",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 35,
+      "queries": 35,
+      "bindingCalls": 35,
+      "rowsRead": 6852,
+      "rowsWritten": 0
+    }
+  ],
+  "after": [
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 159,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 159,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "shop",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 6,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "catchmind (idle)",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "catchmind (open, no new guesses)",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 162,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 161,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 161,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "shop",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 6,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "catchmind (idle)",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "catchmind (open, no new guesses)",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "09:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 164,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 160,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 160,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "shop",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "catchmind (idle)",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "catchmind (open, no new guesses)",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 100,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 163,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle catchmind)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 162,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, idle repeated)",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 162,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "shop",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "catchmind (idle)",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "catchmind (open, no new guesses)",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "clockKst": "18:00",
+      "historicalRowsPerLedger": 10000,
+      "route": "bootstrap (home/ranking, open catchmind)",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 165,
+      "rowsWritten": 0
+    }
+  ]
+}

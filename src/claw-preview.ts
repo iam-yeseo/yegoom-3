@@ -10,11 +10,7 @@ const randomSeed = () => typeof globalThis.crypto !== 'undefined'
 const randomUnit = () => randomSeed() / 0x100000000;
 const validRequest = (value: string) => typeof value === 'string' && /^[a-zA-Z0-9_-]{16,80}$/.test(value);
 
-/** The home preview does not need to construct or simulate a machine. */
-export function previewClawSummary(now = Date.now()): ClawSummary {
-  return { coins: CLAW_RULES.freeCoins, freeCoins: CLAW_RULES.freeCoins, purchasedCoins: 0,
-    nextGrantAt: nextGrantAt(now), serverNow: now, isAdmin: false };
-}
+export { previewClawSummary } from './claw-summary';
 
 /** One offline visit owns its machine, wallet and receipts. Nothing is persisted
  * or uploaded. Player preview grip is sampled independently of server settings;

@@ -30,7 +30,7 @@ npm run launch:profiles:preflight:remote
 
 3. 출력된 확인 결과를 읽는다. 원격 `--file`은 import 요약만 출력하므로 스크립트가 파일 끝의 읽기 전용 SELECT를 다시 실행해 보여 준다.
 
-   - `cleared_table`의 19개 행에서 `remaining`이 모두 **0**이어야 한다.
+   - `cleared_table`의 20개 행에서 `remaining`이 모두 **0**이어야 한다. PR 2의 `user_balances`는 원장에서 파생한 잔액 캐시이므로 원장과 함께 비운다. 이후 첫 지급부터 원장 INSERT 트리거가 다시 채운다.
    - `users`, `sessions`, `d1_migrations`, `claw_config`, `user_photos`의 `rows_kept`는 초기화 전과 같아야 한다. 스크립트는 이 다섯 테이블의 행·컬럼을 수정하지 않는다.
    - `catchmind_turn`은 `id = 1` 행이 남고 `drawer_id`, `round_id`가 모두 `NULL`이어야 한다.
    - `restored_append_only_triggers`는 **4**여야 한다. 뒤에 출력되는 `ledger_no_update`, `ledger_no_delete`, `inventory_no_update`, `inventory_no_delete` 정의가 각각 수정·삭제를 `RAISE(ABORT, ...)`로 거절해야 한다.

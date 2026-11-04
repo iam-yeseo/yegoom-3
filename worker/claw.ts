@@ -60,8 +60,8 @@ async function wallet(db: D1Database, user: Actor, now: number): Promise<WalletR
   const read = () => db.prepare('SELECT free_coins, purchased_coins, last_grant_slot FROM claw_accounts WHERE user_id = ?').bind(user.id).first<WalletRow>();
   let row = await read();
   if (!row) {
-    // A bootstrap request initializes only this wallet, never anybody else's
-    // account or a physical board. No player/ledger/history scan is needed.
+    // Entering the machine or buying/playing initializes only this wallet.
+    // Bootstrap derives an available balance without creating account rows.
     await db.prepare(`INSERT OR IGNORE INTO claw_accounts (user_id, free_coins, last_grant_slot)
       SELECT id, ?, ? FROM users WHERE id = ? AND role = ? AND active = 1`)
       .bind(user.role === 'admin' ? 0 : CLAW_RULES.freeCoins, slot, user.id, user.role).run();
@@ -80,12 +80,19 @@ async function wallet(db: D1Database, user: Actor, now: number): Promise<WalletR
   return row;
 }
 function summary(user: Actor, row: WalletRow | null, now: number): ClawSummary {
-  const freeCoins = user.role === 'admin' ? 0 : row?.free_coins ?? 0;
+  // A missing or stale wallet receives the current slot's replacement grant
+  // when it is next used. Reading its availability need not persist that grant.
+  // A future watermark belongs to a newer request and must never be reset here.
+  const freeCoins = user.role === 'admin' ? 0
+    : !row || row.last_grant_slot < coinSlot(now) ? CLAW_RULES.freeCoins : row.free_coins;
   const purchasedCoins = user.role === 'admin' ? 0 : row?.purchased_coins ?? 0;
   return { coins: freeCoins + purchasedCoins, freeCoins, purchasedCoins, nextGrantAt: nextCoinGrant(now), serverNow: now, isAdmin: user.role === 'admin' };
 }
 export async function getClawSummary(db: D1Database, user: Actor, now = Date.now()): Promise<ClawSummary> {
-  return summary(user, user.role === 'admin' ? null : await wallet(db, user, now), now);
+  const row = user.role === 'admin' ? null
+    : await db.prepare('SELECT free_coins, purchased_coins, last_grant_slot FROM claw_accounts WHERE user_id = ?')
+      .bind(user.id).first<WalletRow>();
+  return summary(user, row, now);
 }
 async function machine(db: D1Database, user: Actor, now: number): Promise<MachineRow> {
   await wallet(db, user, now);
@@ -129,7 +136,7 @@ export async function purchaseClawCoins(db: D1Database, user: Actor, input: Reco
     db.prepare(`INSERT OR IGNORE INTO claw_coin_purchases (id, user_id, request_id, quantity, cost, created_at)
       SELECT ?, u.id, ?, ?, ?, ? FROM users u JOIN claw_accounts a ON a.user_id = u.id
       WHERE u.id = ? AND u.role = 'player' AND u.active = 1
-      AND COALESCE((SELECT SUM(amount) FROM ledger WHERE user_id = u.id AND currency = 'gold'), 0) >= ?`)
+      AND COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?`)
       .bind(id, purchase.requestId, purchase.quantity, cost, createdAt, user.id, cost),
     db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
       SELECT ?, user_id, 'gold', -cost, '뽑기 코인 구매', 'claw:coins:' || user_id || ':' || request_id, created_at

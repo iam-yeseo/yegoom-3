@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   BootstrapResponse,
   AttendanceState,
@@ -13,7 +13,6 @@ import type {
 } from "../shared/types";
 import { normalizeNickname } from "../shared/profile";
 import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/admin";
-import { Admin } from "./screens/Admin";
 import { createAdminPreview, savePreviewGame, savePreviewClaw } from "./admin-preview";
 import { AnnouncementBanner } from "./AnnouncementBanner";
 import { FEATURES } from "../shared/balance";
@@ -23,9 +22,8 @@ import { ProfileDirectoryProvider, CharacterProvider, CharacterSprite, TabBar, t
 import { AttendanceProvider, clearLegacyAttendance, usePreviewAttendance } from "./attendance";
 import { defaultCharacter, type ArtKey } from "../shared/characters";
 import { PredictionGame } from "./components/PredictionGame";
-import { Claw } from "./screens/Claw";
 import { ClawProvider } from "./claw-state";
-import { previewClawSummary } from "./claw-preview";
+import { previewClawSummary } from "./claw-summary";
 import {
   previewDaily,
   previewGame,
@@ -40,13 +38,17 @@ import { Home, SoloGames, TodayGames, type HomeData } from "./screens/Home";
 import { Profile } from "./screens/Profile";
 import { Ranking } from "./screens/Ranking";
 import { Lotto, ShopMain, Speetto } from "./screens/Shop";
-import { StockDetail, StockMarket } from "./screens/Stock";
 import { Kuji } from "./screens/Kuji";
 import { ShopProvider } from "./shop";
 import { CatchmindProvider } from "./catchmind";
 import { Catchmind } from "./screens/Catchmind";
 import { CatchmindGallery } from "./screens/CatchmindGallery";
 import { LaunchGiftProvider, StockNotice } from "./launch-gift";
+
+const Admin = lazy(() => import("./screens/Admin").then(module => ({ default: module.Admin })));
+const Claw = lazy(() => import("./screens/Claw").then(module => ({ default: module.Claw })));
+const StockMarket = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockMarket })));
+const StockDetail = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockDetail })));
 
 function navigate(path: string) {
   window.location.hash = path;
@@ -335,13 +337,19 @@ export default function App() {
   const serverClockOffset = useRef(0);
   const activeUserId = useRef<string | null>(null);
   const characterImports = useRef(new Set<string>());
+  const lastBootstrapSuccessAt = useRef(-Infinity);
+  // Only the current generation can pause polling. An invalidated request may
+  // remain on the network after a mutation or account switch.
+  const pendingBootstrap = useRef<number | null>(null);
   const refresh = useCallback(async () => {
     if (pendingMutations.current) return null;
     const generation = ++requestGeneration.current;
     const current = () => generation === requestGeneration.current;
+    pendingBootstrap.current = generation;
     try {
       const next = await api.bootstrap();
       if (!current()) return null;
+      lastBootstrapSuccessAt.current = Date.now();
       serverClockOffset.current = Date.parse(next.serverTime) - Date.now();
       activeUserId.current = next.user.id;
       clearLegacyAttendance(next.user.username);
@@ -359,6 +367,7 @@ export default function App() {
       }
       return null;
     } finally {
+      if (pendingBootstrap.current === generation) pendingBootstrap.current = null;
       if (current()) setLoading(false);
     }
   }, []);
@@ -385,14 +394,14 @@ export default function App() {
   useEffect(() => {
     // The claw screen owns event-driven reads; it must never poll.
     if (!data || demo || route.endsWith("/play/claw")) return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible" && navigator.onLine)
-        void refresh();
-    }, 30000);
-    const visible = () => {
-      if (document.visibilityState === "visible" && navigator.onLine)
+    const poll = () => {
+      if (document.visibilityState === "visible" && navigator.onLine
+        && pendingBootstrap.current !== requestGeneration.current && Date.now() - lastBootstrapSuccessAt.current >= 10000)
         void refresh();
     };
+    const timer = window.setInterval(poll, route === "/" || route === "/ranking" ? 30000 : 60000);
+    // Rapid tab switches and a still-pending read must not create extra requests.
+    const visible = poll;
     document.addEventListener("visibilitychange", visible);
     return () => {
       clearInterval(timer);
@@ -473,6 +482,7 @@ export default function App() {
     return operation;
   }
   const applyBootstrap = (next: BootstrapResponse) => {
+    lastBootstrapSuccessAt.current = Date.now();
     serverClockOffset.current = Date.parse(next.serverTime) - Date.now();
     activeUserId.current = next.user.id;
     clearLegacyAttendance(next.user.username);
@@ -881,7 +891,7 @@ export default function App() {
         <AnnouncementBanner announcements={data?.announcements ?? []} userId={data?.user.id ?? null} preview={demo}
           serverTime={new Date(Date.now() + (demo ? 0 : serverClockOffset.current)).toISOString()} />
         <div className="screen" ref={screenRef}>
-          {content}
+          <Suspense fallback={<Skeleton />}>{content}</Suspense>
         </div>
         {showTabs && <TabBar active={tab ?? "/"} onNavigate={go} admin={me?.role === "admin"} />}
         {stockNoticeOpen && <StockNotice onClose={() => setStockNoticeOpen(false)} />}

@@ -231,6 +231,9 @@ test('real profile crop respects EXIF, shares nickname and photo, and deletes ba
     const staleDraft = await beginCrop(page);
     const switched = await page.request.post(`${ORIGIN}/api/auth/login`, { data: { username: 'siwon', password: PASSWORD }, headers: { Origin: ORIGIN } });
     expect(switched.status()).toBe(200);
+    // Visibility refreshes reuse a successful bootstrap for ten seconds. The
+    // fixed wall clock must cross that window before simulating the return.
+    await page.clock.setFixedTime(new Date(Date.parse(NOW) + 10000));
     await expect.poll(async () => {
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       return page.locator('.profile-summary h1').textContent();

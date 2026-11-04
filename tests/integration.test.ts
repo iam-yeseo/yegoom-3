@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +6,7 @@ import { deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken, verifyPassword } from '../worker/crypto';
 import { PASSWORD_RULES } from '../shared/password';
 import type { AdminState, PredictionRules } from '../shared/admin';
@@ -17,6 +17,7 @@ import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
 import { readAnnouncements } from '../worker/announcements';
 import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
+import { maintainDatabase } from '../worker/maintenance';
 import type { CatchmindGalleryResponse } from '../shared/types';
 import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
@@ -85,15 +86,16 @@ function workerWithD1Metrics(script: string): string {
   return `${script.replace(exported, '')}
 export default {
   async fetch(request, env, context) {
-    let rowsRead = 0;
+    let prepares = 0; let queries = 0; let bindingCalls = 0; let rowsRead = 0; let rowsWritten = 0;
     const originals = new WeakMap();
-    const record = result => { rowsRead += result.meta.rows_read; return result; };
+    const record = result => { queries++; rowsRead += result.meta.rows_read; rowsWritten += result.meta.rows_written; return result; };
     const wrap = statement => {
       const wrapped = {
         bind: (...values) => wrap(statement.bind(...values)),
-        all: async () => record(await statement.all()),
-        run: async () => record(await statement.run()),
+        all: async () => { bindingCalls++; return record(await statement.all()); },
+        run: async () => { bindingCalls++; return record(await statement.run()); },
         first: async column => {
+          bindingCalls++;
           const result = record(await statement.all());
           return column ? result.results[0]?.[column] ?? null : result.results[0] ?? null;
         }
@@ -102,15 +104,20 @@ export default {
       return wrapped;
     };
     const DB = {
-      prepare: sql => wrap(env.DB.prepare(sql)),
+      prepare: sql => { prepares++; return wrap(env.DB.prepare(sql)); },
       batch: async statements => {
+        bindingCalls++;
         const results = await env.DB.batch(statements.map(statement => originals.get(statement)));
         return results.map(record);
       }
     };
     const response = await ${match[1]}.fetch(request, { ...env, DB }, context);
     const headers = new Headers(response.headers);
+    headers.set('X-Test-D1-Binding-Calls', String(bindingCalls));
+    headers.set('X-Test-D1-Prepares', String(prepares));
+    headers.set('X-Test-D1-Queries', String(queries));
     headers.set('X-Test-D1-Rows-Read', String(rowsRead));
+    headers.set('X-Test-D1-Rows-Written', String(rowsWritten));
     return new Response(response.body, { status: response.status, headers });
   }
 };`;
@@ -302,6 +309,310 @@ describe('Worker and D1 integration', () => {
   });
 
   afterAll(async () => { await worker?.dispose(); });
+
+  async function expectBalanced(database: Database = db) {
+    const mismatches = (await database.prepare(`SELECT u.id FROM users u
+      LEFT JOIN user_balances b ON b.user_id = u.id
+      LEFT JOIN (SELECT user_id, SUM(amount) gold FROM ledger WHERE currency = 'gold' GROUP BY user_id) g ON g.user_id = u.id
+      LEFT JOIN (SELECT user_id, SUM(CASE WHEN item = 'lotto_ticket' THEN amount ELSE 0 END) lotto,
+        SUM(CASE WHEN item = 'speetto_ticket' THEN amount ELSE 0 END) speetto FROM inventory_ledger GROUP BY user_id) i ON i.user_id = u.id
+      WHERE COALESCE(b.gold, 0) != COALESCE(g.gold, 0)
+        OR COALESCE(b.lotto_tickets, 0) != COALESCE(i.lotto, 0)
+        OR COALESCE(b.speetto_tickets, 0) != COALESCE(i.speetto, 0)`).all()).results;
+    expect(mismatches, 'cached balances must equal both append-only ledgers').toEqual([]);
+  }
+  // Also covers every existing primary-database payout, concurrent debit,
+  // idempotent retry and forced rollback test, rather than only synthetic writes.
+  afterEach(async () => { if (db) await expectBalanced(); });
+
+  describe('derived ledger balances', () => {
+    it('backfills existing gold and both ticket balances without including scores', async () => {
+      const instance = runtime(script);
+      try {
+        const database = await instance.getD1Database('DB');
+        const oldMigration = (await Promise.all((await readdir(new URL('../migrations/', import.meta.url)))
+          .filter(name => name.endsWith('.sql') && name < '0010').sort()
+          .map(name => readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8')))).join('\n');
+        await provision(database, oldMigration, passwordHash);
+        await fund(900, 'min', database); await fund(-200, 'min', database); await fund(40, 'siwon', database);
+        await grantTicket('lotto_ticket', 4, database); await grantTicket('lotto_ticket', -1, database);
+        await grantTicket('speetto_ticket', 2, database);
+        await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
+          VALUES ('score-only', 'yeseo', 'score', 99, 'fixture', 'score-only', ?, '2026-10-26')`).bind(`${TODAY}T00:00:00.000Z`).run();
+        await applyMigration(database, await readFile(new URL('../migrations/0010_balances.sql', import.meta.url), 'utf8'));
+        expect((await database.prepare('SELECT * FROM user_balances ORDER BY user_id').all()).results).toEqual([
+          { user_id: 'admin', gold: 0, lotto_tickets: 0, speetto_tickets: 0 },
+          { user_id: 'min', gold: 700, lotto_tickets: 3, speetto_tickets: 2 },
+          { user_id: 'siwon', gold: 40, lotto_tickets: 0, speetto_tickets: 0 },
+          { user_id: 'yeseo', gold: 0, lotto_tickets: 0, speetto_tickets: 0 },
+        ]);
+        await expectBalanced(database);
+        await fund(25, 'min', database); await grantTicket('lotto_ticket', -1, database);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('ignores duplicate references and rolls cache changes back with a failed batch', async () => {
+      const { cookie } = await login('min');
+      expect((await request('/api/shop', { cookie })).status).toBe(200);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM user_balances').first('n')).toBe(0);
+      await fund(700); await grantTicket('lotto_ticket', 3); await grantTicket('speetto_ticket', 2);
+      await db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+        SELECT 'duplicate-gold', user_id, currency, amount, reason, reference, created_at FROM ledger LIMIT 1`).run();
+      await db.prepare(`INSERT OR IGNORE INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at)
+        SELECT 'duplicate-ticket', user_id, item, amount, reason, reference, created_at FROM inventory_ledger LIMIT 1`).run();
+      expect(await db.prepare("SELECT gold, lotto_tickets, speetto_tickets FROM user_balances WHERE user_id = 'min'").first())
+        .toEqual({ gold: 700, lotto_tickets: 3, speetto_tickets: 2 });
+      await db.prepare(`CREATE TRIGGER reject_balance_batch BEFORE INSERT ON inventory_ledger
+        WHEN NEW.reference = 'fail-balance' BEGIN SELECT RAISE(ABORT, 'test balance rollback'); END`).run();
+      await expect(db.batch([
+        db.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+          VALUES ('rollback-gold', 'min', 'gold', -500, 'fixture', 'rollback-gold', ?)` ).bind(`${TODAY}T00:00:00.000Z`),
+        db.prepare(`INSERT INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at)
+          VALUES ('rollback-ticket', 'min', 'lotto_ticket', -1, 'fixture', 'fail-balance', ?)` ).bind(`${TODAY}T00:00:00.000Z`),
+      ])).rejects.toThrow('test balance rollback');
+      expect(await db.prepare("SELECT gold, lotto_tickets, speetto_tickets FROM user_balances WHERE user_id = 'min'").first())
+        .toEqual({ gold: 700, lotto_tickets: 3, speetto_tickets: 2 });
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM ledger WHERE id = 'rollback-gold'").first('n')).toBe(0);
+      await expectBalanced();
+    });
+
+    it('derives fresh and pending claw grants without writing during bootstrap summaries', async () => {
+      const now = Date.parse(`${TODAY}T00:00:00Z`); const observed = measuredDatabase(db, now);
+      const user = { id: 'min', role: 'player' as const };
+      expect(await getClawSummary(observed.binding, user, now)).toMatchObject({ freeCoins: 5, purchasedCoins: 0 });
+      expect(observed.queries.every(query => query.rowsWritten === 0)).toBe(true);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM claw_accounts').first('n')).toBe(0);
+      const { cookie } = await login('min'); await getClaw(cookie);
+      await db.prepare("UPDATE claw_accounts SET free_coins = 1, purchased_coins = 3, last_grant_slot = last_grant_slot - 1 WHERE user_id = 'min'").run();
+      observed.reset();
+      expect(await getClawSummary(observed.binding, user, now)).toMatchObject({ freeCoins: 5, purchasedCoins: 3, coins: 8 });
+      expect(observed.queries.every(query => query.rowsWritten === 0)).toBe(true);
+      expect(await db.prepare("SELECT free_coins FROM claw_accounts WHERE user_id = 'min'").first('free_coins')).toBe(1);
+      expect(await getClaw(cookie)).toMatchObject({ freeCoins: 5, purchasedCoins: 3, coins: 8 });
+      expect(await db.prepare("SELECT free_coins FROM claw_accounts WHERE user_id = 'min'").first('free_coins')).toBe(5);
+      await db.prepare("UPDATE claw_accounts SET free_coins = 1, last_grant_slot = last_grant_slot + 1 WHERE user_id = 'min'").run();
+      observed.reset();
+      expect(await getClawSummary(observed.binding, user, now)).toMatchObject({ freeCoins: 1, purchasedCoins: 3, coins: 4 });
+      expect(observed.queries.every(query => query.rowsWritten === 0)).toBe(true);
+    });
+  });
+
+  describe('bounded daily maintenance', () => {
+    it('caps expired deletions and preserves current receipts, guesses and all ledgers', async () => {
+      const now = new Date(`${TODAY}T00:00:00Z`); const expired = now.getTime() - 1;
+      const cutoff = new Date(now.getTime() - 30 * 86400000).toISOString();
+      const old = new Date(Date.parse(cutoff) - 1).toISOString();
+      await fund(900); await grantTicket('lotto_ticket', 2);
+      for (const table of ['sessions', 'login_attempts']) {
+        const columns = table === 'sessions' ? 'token_hash, user_id, expires_at, created_at' : 'bucket, expires_at';
+        const values = table === 'sessions' ? "'expired-' || x, 'min', ?, 0" : "'expired-' || x, ?";
+        await db.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<502)
+          INSERT INTO ${table} (${columns}) SELECT ${values} FROM n`).bind(expired).run();
+      }
+      await db.prepare("INSERT INTO sessions VALUES ('live', 'min', ?, 0)").bind(now.getTime() + 1).run();
+      await db.prepare("INSERT INTO login_attempts VALUES ('live', 1, ?)").bind(now.getTime() + 1).run();
+      for (const [index, status] of ['ended', 'draft', 'open', 'ended'].entries()) {
+        await db.prepare(`INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, created_at)
+          VALUES (?, ?, 'min', '사과', '사과', '["사과"]', ?, ?)` ).bind(`retention-${index}`, index + 1, status, old).run();
+      }
+      await db.prepare("UPDATE catchmind_turn SET drawer_id = 'min', round_id = 'retention-3' WHERE id = 1").run();
+      await db.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<502)
+        INSERT INTO catchmind_requests (id, user_id, request_id, action, round_id, result_round_id, payload_hash, created_at)
+        SELECT 'expired-' || x, 'min', 'expired-' || x, 'publish', 'retention-0', 'retention-0', 'fixture', ? FROM n`).bind(old).run();
+      for (const [id, round, action, date] of [
+        ['guess', 'retention-0', 'guess', old], ['draft', 'retention-1', 'reroll', old],
+        ['open', 'retention-2', 'publish', old], ['current', 'retention-3', 'end', old],
+        ['boundary', 'retention-0', 'publish', cutoff], ['recent', 'retention-0', 'end', now.toISOString()],
+      ]) {
+        await db.prepare(`INSERT INTO catchmind_requests (id, user_id, request_id, action, round_id, result_round_id, payload_hash, created_at)
+          VALUES (?, 'min', ?, ?, ?, ?, 'fixture', ?)` ).bind(id, id, action, round, round, date).run();
+      }
+      await db.prepare(`INSERT INTO catchmind_guesses (id, round_id, player_id, answer, normalized_answer, correct, created_at)
+        VALUES ('guess', 'retention-0', 'siwon', '사과', '사과', 1, ?)` ).bind(old).run();
+      await maintainDatabase(db as unknown as D1Database, now);
+      for (const table of ['sessions', 'login_attempts']) expect(await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first('n')).toBe(3);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_requests').first('n')).toBe(8);
+      await maintainDatabase(db as unknown as D1Database, now);
+      for (const table of ['sessions', 'login_attempts']) expect(await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first('n')).toBe(1);
+      expect((await db.prepare('SELECT id FROM catchmind_requests ORDER BY id').all()).results.map(row => row.id))
+        .toEqual(['boundary', 'current', 'draft', 'guess', 'open', 'recent']);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_guesses').first('n')).toBe(1);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_rounds').first('n')).toBe(4);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM ledger').first('n')).toBe(1);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM inventory_ledger').first('n')).toBe(1);
+      const observed = measuredDatabase(db, now.getTime());
+      await maintainDatabase(observed.binding, now);
+      expect(observed.queries).toHaveLength(3);
+      expect(observed.queries.every(query => query.rowsWritten === 0)).toBe(true);
+    });
+  });
+
+  describe('free-plan request budgets', () => {
+    it('settles a thirty-day backlog within the D1 binding-call budget and retries without writes', async () => {
+      const instance = runtime(workerWithD1Metrics(script));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        for (let day = 1; day <= 30; day++) {
+          const date = `2026-09-${String(day).padStart(2, '0')}`;
+          await seedRound({ game: 'wake', date, answer: '08:00:00', revealedAt: Date.parse(`${date}T00:00:00Z`),
+            predictions: [['siwon', '08:00:00']], database });
+        }
+        const { cookie } = await login('siwon', instance);
+        const first = await request('/api/bootstrap', { cookie, instance }); expect(first.status).toBe(200);
+        expect(Number(first.headers.get('X-Test-D1-Binding-Calls'))).toBeLessThanOrEqual(50);
+        expect(Number(first.headers.get('X-Test-D1-Queries'))).toBeGreaterThan(50);
+        console.log(`Thirty-round settlement: ${first.headers.get('X-Test-D1-Binding-Calls')} D1 binding calls, ${first.headers.get('X-Test-D1-Queries')} statements, ${first.headers.get('X-Test-D1-Rows-Read')} rows_read, ${first.headers.get('X-Test-D1-Rows-Written')} rows_written (authentication included)`);
+        const view = await first.json() as BootstrapResponse;
+        const rules = defaultPredictionRules('wake');
+        expect(view.user.gold).toBe(30 * rules.firstGold);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM game_rounds WHERE settled_at IS NOT NULL').first('n')).toBe(30);
+        expect(await database.prepare("SELECT COUNT(*) AS n FROM ledger WHERE currency = 'gold'").first('n')).toBe(30);
+        expect(await database.prepare("SELECT COUNT(*) AS n FROM ledger WHERE currency = 'score'").first('n')).toBe(30);
+        expect(await database.prepare("SELECT SUM(amount) AS n FROM ledger WHERE currency = 'score'").first('n')).toBe(30 * rules.scoreTable[0]!.points);
+        await expectBalanced(database);
+        const retry = await request('/api/bootstrap', { cookie, instance }); expect(retry.status).toBe(200);
+        expect(Number(retry.headers.get('X-Test-D1-Queries'))).toBeLessThanOrEqual(30);
+        expect(Number(retry.headers.get('X-Test-D1-Rows-Written'))).toBe(0);
+        expect((await retry.json() as BootstrapResponse).user.gold).toBe(view.user.gold);
+      } finally { await instance.dispose(); }
+    });
+
+    it('keeps capped login and password attempt buckets read-only until their windows expire', async () => {
+      const instance = runtime(workerWithD1Metrics(script));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        const now = Date.parse(`${TODAY}T00:00:00Z`);
+        const ipBucket = await database.prepare('SELECT bucket FROM login_attempts').first<string>('bucket');
+        expect(ipBucket).toBeTruthy(); // Miniflare supplies the connecting IP.
+        const buckets = [await hashToken('user:min'), ipBucket!, await hashToken('password:min')];
+        for (const [index, bucket] of buckets.entries()) await database.prepare(`INSERT INTO login_attempts (bucket, attempts, expires_at)
+          VALUES (?, ?, ?) ON CONFLICT(bucket) DO UPDATE SET attempts = excluded.attempts, expires_at = excluded.expires_at`)
+          .bind(bucket, index === 1 ? 31 : 11, now + 900000).run();
+        for (let attempt = 0; attempt < 2; attempt++) {
+          for (const [path, body, method] of [
+            ['/api/auth/login', { username: 'min', password: PASSWORD }, 'POST'],
+            ['/api/me/password', { currentPassword: PASSWORD, newPassword: 'next-valid-password-42!' }, 'PUT'],
+          ] as const) {
+            const response = await request(path, { method, body, cookie, instance }); expect(response.status).toBe(429);
+            expect(Number(response.headers.get('X-Test-D1-Rows-Written')), path).toBe(0);
+          }
+        }
+        expect((await database.prepare('SELECT attempts FROM login_attempts ORDER BY attempts').all()).results.map(row => row.attempts)).toEqual([11, 11, 31]);
+        await database.prepare('UPDATE login_attempts SET expires_at = ?').bind(now).run();
+        const reset = await request('/api/auth/login', { method: 'POST', body: { username: 'min', password: 'wrong-password' }, instance });
+        expect(reset.status).toBe(401);
+        for (const bucket of buckets.slice(0, 2)) expect(await database.prepare('SELECT attempts FROM login_attempts WHERE bucket = ?').bind(bucket).first('attempts')).toBe(1);
+        const passwordReset = await request('/api/me/password', { method: 'PUT', cookie, instance,
+          body: { currentPassword: 'wrong-password', newPassword: 'next-valid-password-42!' } });
+        expect(passwordReset.status).toBe(400);
+        expect(await database.prepare('SELECT attempts FROM login_attempts WHERE bucket = ?').bind(buckets[2]).first('attempts')).toBe(1);
+      } finally { await instance.dispose(); }
+    });
+
+    it('returns matching batched and individual game views across privacy, profiles and inactive predictors', async () => {
+      const min = await login('min'); const siwon = await login('siwon'); const yeseo = await login('yeseo');
+      await uploadProfile(siwon.cookie);
+      await seedRound({ game: 'wake', answer: '08:00:00', predictions: [['siwon', '08:01:00'], ['yeseo', '07:59:00']] });
+      await seedRound({ game: 'offwork', answer: '18:05:00', predictions: [['min', '18:00:00']] });
+      await seedRound({ game: 'luck', answer: '50', revealedAt: Date.parse(`${TODAY}T00:00:00Z`), predictions: [['min', '50'], ['siwon', '55']] });
+      const frozenRules = { ...defaultPredictionRules('luck'), firstGold: 29 };
+      await db.prepare("UPDATE game_rounds SET settings_json = ? WHERE game_id = 'luck'").bind(JSON.stringify(frozenRules)).run();
+      await db.prepare("UPDATE users SET active = 0, display_name = '쉬는시원' WHERE id = 'siwon'").run();
+      for (const viewer of [min, yeseo]) {
+        const snapshot = await bootstrap(viewer.cookie);
+        for (const game of snapshot.games) {
+          const individual = await request(`/api/games/${game.id}`, { cookie: viewer.cookie }); expect(individual.status).toBe(200);
+          expect((await individual.json() as GameResponse).game).toEqual(game);
+        }
+        expect(snapshot.players.some(player => player.id === 'siwon')).toBe(false);
+        expect(snapshot.games.find(game => game.id === 'offwork')!.authorDisplayName).toBe('쉬는시원');
+        expect(snapshot.games.find(game => game.id === 'luck')!.results.find(result => result.playerId === 'siwon'))
+          .toMatchObject({ displayName: '쉬는시원', photoVersion: 1, value: '55' });
+        expect(snapshot.games.find(game => game.id === 'luck')!.rules.firstGold).toBe(29);
+      }
+      expect((await bootstrap(min.cookie)).games.find(game => game.id === 'wake')!.answer).toBe('08:00:00');
+      expect((await bootstrap(yeseo.cookie)).games.find(game => game.id === 'wake')!.answer).toBeNull();
+    });
+
+
+    it('bounds authenticated polling queries and rows as historical ledgers grow', async () => {
+      const measurements: { clockKst: string; historicalRowsPerLedger: number; route: string; prepares: number; queries: number; bindingCalls: number; rowsRead: number; rowsWritten: number }[] = [];
+      for (const clockKst of ['09:00', '18:00']) for (const historicalRows of [100, 10_000]) {
+        const measuredScript = clockKst === '09:00' ? script : await workerAt(`${TODAY}T09:00:00Z`);
+        const instance = runtime(workerWithD1Metrics(measuredScript));
+        try {
+          const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+          // A completed daily draw isolates the 18:00 no-due settlement path.
+          if (clockKst === '18:00') await database.prepare("INSERT INTO lotto_draws (date, numbers, created_at) VALUES (?, '[1,2,3,4,5]', ?)")
+            .bind(TODAY, `${TODAY}T08:00:00.000Z`).run();
+          // Three active players, one administrator, three current rounds, six
+          // predictions and 45 current-week scores. Older data grows independently.
+          await database.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ?)
+            INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+            SELECT 'history-gold-' || x, CASE x % 3 WHEN 0 THEN 'min' WHEN 1 THEN 'siwon' ELSE 'yeseo' END,
+              'gold', 1, 'budget fixture', 'history-gold-' || x, '2026-01-01T00:00:00.000Z' FROM n`).bind(historicalRows).run();
+          await database.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ?)
+            INSERT INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at)
+            SELECT 'history-ticket-' || x, CASE x % 3 WHEN 0 THEN 'min' WHEN 1 THEN 'siwon' ELSE 'yeseo' END,
+              CASE x % 2 WHEN 0 THEN 'lotto_ticket' ELSE 'speetto_ticket' END, 1, 'budget fixture',
+              'history-ticket-' || x, '2026-01-01T00:00:00.000Z' FROM n`).bind(historicalRows).run();
+          await database.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 45)
+            INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
+            SELECT 'current-score-' || x, CASE x % 3 WHEN 0 THEN 'min' WHEN 1 THEN 'siwon' ELSE 'yeseo' END,
+              'score', 10, 'budget fixture', 'current-score-' || x, '2026-10-29T00:00:00.000Z', '2026-10-26' FROM n`).run();
+          for (const game of ['wake', 'offwork', 'luck'] as const) {
+            await database.prepare('INSERT INTO game_rounds (game_id, round_date, updated_at) VALUES (?, ?, ?)')
+              .bind(game, TODAY, Date.parse(`${TODAY}T00:00:00Z`)).run();
+            for (const player of ['min', 'siwon', 'yeseo'].filter(value => value !== ({ wake: 'min', offwork: 'siwon', luck: 'yeseo' })[game])) {
+              await database.prepare('INSERT INTO predictions (game_id, round_date, player_id, value, updated_at) VALUES (?, ?, ?, ?, ?)')
+                .bind(game, TODAY, player, game === 'luck' ? '50' : '09:00', Date.parse(`${TODAY}T00:00:00Z`)).run();
+            }
+          }
+          const { cookie } = await login('min', instance);
+          const measure = async (route: string, path: string, maxQueries: number, maxRows: number) => {
+            const response = await request(path, { cookie, instance });
+            expect(response.status).toBe(200);
+            const metrics = {
+              clockKst, historicalRowsPerLedger: historicalRows, route,
+              prepares: Number(response.headers.get('X-Test-D1-Prepares')),
+              queries: Number(response.headers.get('X-Test-D1-Queries')),
+              bindingCalls: Number(response.headers.get('X-Test-D1-Binding-Calls')),
+              rowsRead: Number(response.headers.get('X-Test-D1-Rows-Read')),
+              rowsWritten: Number(response.headers.get('X-Test-D1-Rows-Written')),
+            };
+            measurements.push(metrics);
+            expect(metrics.prepares).toBe(metrics.queries);
+            expect(metrics.queries, route).toBeLessThanOrEqual(maxQueries);
+            expect(metrics.rowsRead, route).toBeLessThanOrEqual(maxRows);
+            expect(metrics.rowsWritten, route).toBe(0);
+            await response.arrayBuffer();
+          };
+          // Ranking currently consumes bootstrap; PR 8 will add its own API.
+          await measure('bootstrap (home/ranking, idle catchmind)', '/api/bootstrap', 30, 200);
+          await measure('bootstrap (home/ranking, idle repeated)', '/api/bootstrap', 30, 200);
+          await measure('shop', '/api/shop', 3, 10);
+          await measure('catchmind (idle)', '/api/catchmind', 3, 10);
+          await database.prepare(`INSERT INTO catchmind_rounds
+            (id, number, drawer_id, word, normalized_word, word_history, status, image, round_date, published_at, created_at)
+            VALUES ('budget-open', 1, 'siwon', '사과', '사과', '["사과"]', 'open', ?, ?, ?, ?)`)
+            .bind(DRAWING_PNG, TODAY, `${TODAY}T00:00:00.000Z`, `${TODAY}T00:00:00.000Z`).run();
+          await database.prepare("UPDATE catchmind_turn SET drawer_id = 'siwon', round_id = 'budget-open' WHERE id = 1").run();
+          await measure('catchmind (open, no new guesses)', '/api/catchmind', 6, 12);
+          await measure('bootstrap (home/ranking, open catchmind)', '/api/bootstrap', 30, 200);
+        } finally { await instance.dispose(); }
+      }
+      // An opt-in artifact captures only deterministic fixture counts, never data
+      // from a remote database. The same fixture also runs against the base commit.
+      if (process.env.FREE_PLAN_MEASUREMENTS) writeFileSync(process.env.FREE_PLAN_MEASUREMENTS, `${JSON.stringify(measurements, null, 2)}\n`);
+      for (const small of measurements.filter(row => row.historicalRowsPerLedger === 100)) {
+        const large = measurements.find(row => row.historicalRowsPerLedger === 10_000 && row.route === small.route && row.clockKst === small.clockKst)!;
+        expect(large.queries).toBe(small.queries);
+        expect(large.rowsRead).toBeLessThanOrEqual(small.rowsRead + 10);
+      }
+    });
+  });
 
   describe('self-service password changes', () => {
     const nextPassword = 'new-test-password-2026!';

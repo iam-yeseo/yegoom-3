@@ -13,7 +13,7 @@ import { hashToken } from '../worker/crypto';
 
 type Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
 const root = fileURLToPath(new URL('..', import.meta.url));
-const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventory_ledger', 'shop_purchases',
+const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventory_ledger', 'user_balances', 'shop_purchases',
   'kuji_claims', 'kuji_boards', 'lotto_tickets', 'lotto_draws', 'catchmind_guesses', 'catchmind_requests',
   'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts', 'announcements', 'luck_photos'];
 const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes'];
@@ -150,6 +150,8 @@ describe('launch reset in an isolated local D1', () => {
     expect(attendanceResponse.status).toBe(200);
     expect(await attendanceResponse.json() as AttendanceClaimResponse).toMatchObject({ awarded: true, attendance: { claimed: true, streak: 1, cycleDay: 1 }, user: { gold: ATTENDANCE_RULES.dailyGold } });
     await db.prepare("INSERT INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at) VALUES ('new-ticket', 'min', 'lotto_ticket', 1, 'test', 'after-reset:ticket', '2026-11-02T00:00:00Z')").run();
+    expect(await db.prepare("SELECT gold, lotto_tickets, speetto_tickets FROM user_balances WHERE user_id = 'min'").first())
+      .toEqual({ gold: ATTENDANCE_RULES.dailyGold, lotto_tickets: 1, speetto_tickets: 0 });
     for (const table of ['ledger', 'inventory_ledger']) {
       await expect(db.prepare(`UPDATE ${table} SET amount = amount + 1`).run()).rejects.toThrow('append-only');
       await expect(db.prepare(`DELETE FROM ${table}`).run()).rejects.toThrow('append-only');

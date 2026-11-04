@@ -18,6 +18,23 @@ test.beforeEach(async ({ page }) => {
   await page.clock.pauseAt(new Date('2026-10-30T00:00:01Z'));
   await page.setViewportSize({ width: 390, height: 900 });
 });
+async function waitForMachineScreen(page: Page) {
+  // A reload starts a new lazy import, including when a failed API read or
+  // cooldown means the play button cannot become enabled.
+  await expect.poll(async () => {
+    await page.clock.runFor(50);
+    return machine(page).count();
+  }, { intervals: [50] }).toBe(1);
+}
+async function waitForMachine(page: Page, name = '코인 넣기') {
+  // React's lazy-screen retry runs on a timer; keep the controlled clock moving
+  // until the downloaded module has committed, before measuring game physics.
+  await expect.poll(async () => {
+    await page.clock.runFor(50);
+    const target = button(page, name);
+    return await target.count() > 0 && await target.isEnabled();
+  }, { intervals: [50] }).toBe(true);
+}
 async function login(page: Page, username: string) {
   await page.goto('/');
   await page.getByLabel('아이디', { exact: true }).fill(username);
@@ -25,7 +42,7 @@ async function login(page: Page, username: string) {
   await button(page, '예굼방 들어가기').click({ force: true });
   await expect(page.getByRole('heading', { name: `${username}님`, exact: true })).toBeVisible();
   await page.evaluate(() => { location.hash = '/play/claw'; });
-  await expect(button(page, '코인 넣기')).toBeEnabled();
+  await waitForMachine(page);
   await expect(canvas(page)).toHaveAccessibleName(/인형 30개/);
   await page.clock.runFor(64);
 }
@@ -188,6 +205,7 @@ test('real claw pointer controls replay the server catch, update rewards, and bu
   expect(bought.user.gold).toBe(after.user.gold - 600);
   expect(bought.ledger.filter(row => row.reason === '뽑기 코인 구매').map(row => row.amount).sort((a, b) => a - b)).toEqual([-500, -100]);
   await page.reload();
+  await waitForMachineScreen(page);
   await expect(page.getByRole('region', { name: '내 코인' })).toContainText('무료 4개 · 구매 6개');
   await expect(canvas(page)).toHaveAccessibleName(/인형 29개/);
   await page.evaluate(() => { location.hash = '/'; });
@@ -218,6 +236,7 @@ test('real claw keyboard play recovers a lost response after reload and a failed
   expect(committed!.freeCoins).toBe(4);
   await page.route('**/api/claw', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '브라우저 테스트: 기계 읽기 연결 중단' }) }));
   await page.reload();
+  await waitForMachineScreen(page);
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(button(page, '결과 확인')).toBeEnabled();
   const replayResponse = page.waitForResponse(value => value.url().endsWith('/api/claw/play') && value.status() === 200);
@@ -239,6 +258,8 @@ test('real claw keyboard play recovers a lost response after reload and a failed
   await button(page, '확인').click({ force: true });
   await expect(canvas(page)).toHaveAccessibleName(/인형 28개/);
   await page.reload();
+  await waitForMachineScreen(page);
+  await expect(page.getByRole('region', { name: '내 코인' })).toContainText('무료 4개');
   await expect(button(page, '결과 확인')).toHaveCount(0);
   expect((await readClaw(page)).freeCoins).toBe(4);
   await info.attach('lost-response-recovery', { body: JSON.stringify({ requests, committed, replay }, null, 2), contentType: 'application/json' });
@@ -277,10 +298,11 @@ test('claw preview stays serverless, preserves sound preference, and auto-drops 
   const apiRequests: string[] = [];
   await page.route('**/api/**', route => { apiRequests.push(route.request().url()); return route.abort(); });
   await page.goto('/#/preview/play/claw');
-  await expect(button(page, '코인 넣기')).toBeEnabled();
+  await waitForMachine(page);
   await expect(button(page, '소리 켜짐')).toHaveAttribute('aria-pressed', 'true');
   await button(page, '소리 켜짐').click({ force: true });
   await page.reload();
+  await waitForMachine(page);
   await expect(button(page, '소리 꺼짐')).toHaveAttribute('aria-pressed', 'false');
   await page.clock.runFor(500);
   await captures(page, 'preview', 'idle', info);
@@ -324,6 +346,7 @@ test('claw preview stays serverless, preserves sound preference, and auto-drops 
   await expect(page.locator('.solo-tile').filter({ hasText: '캐릭터 뽑기' })).toContainText('코인 5개');
   await page.reload();
   await page.evaluate(() => { location.hash = '/preview/play/claw'; });
+  await waitForMachine(page);
   await expect(page.getByRole('region', { name: '내 코인' })).toContainText('무료 5개 · 구매 0개');
   await expect(button(page, '소리 꺼짐')).toBeVisible();
   expect(apiRequests).toEqual([]);
@@ -353,6 +376,7 @@ test('claw reads on entry and visibility, never polls, and gives administrators 
   let reads = 0;
   page.on('request', request => { if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/claw') reads++; });
   await page.evaluate(() => { location.hash = '/play/claw'; });
+  await waitForMachine(page, '테스트 시작');
   await expect(page.getByRole('region', { name: '운영자 테스트' })).toContainText('무제한');
   await expect(button(page, '테스트 시작')).toBeEnabled();
   await expect(page.getByRole('checkbox', { name: '이번 판 강집게로' })).toBeVisible();
