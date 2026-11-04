@@ -178,7 +178,8 @@ test('real profile crop respects EXIF, shares nickname and photo, and deletes ba
   await login(page, 'min'); await dismissAnnouncements(page); await navigate(page, '/profile');
   await page.getByLabel('닉네임', { exact: true }).fill('  해피민  ');
   await page.getByRole('button', { name: '닉네임 저장', exact: true }).click();
-  await expect(page.locator('.profile-summary h1')).toHaveText('해피민');
+  await expect(page.locator('.profile-summary h1')).toHaveText('해피민님');
+  await expect(page.getByLabel('닉네임', { exact: true })).toHaveValue('해피민');
   expect((await snapshot(page)).user.username).toBe('min');
   const dialog = await beginCrop(page);
   for (const width of [390, 560]) await capture(page, 'authenticated', 'crop', width, info);
@@ -186,6 +187,7 @@ test('real profile crop respects EXIF, shares nickname and photo, and deletes ba
   await expect(dialog).toHaveCount(0);
   const avatar = page.locator('.profile-editor img.avatar-photo');
   await expect(avatar).toHaveAttribute('src', /\/api\/users\/e2e-min\/photo\?v=1$/);
+  await expect(avatar).toHaveAttribute('alt', '해피민님 프로필 사진');
   const url = (await avatar.getAttribute('src'))!;
   const image = await inspectImage(page, url);
   expect([image.width, image.height]).toEqual([512, 512]); expect(image.size).toBeLessThanOrEqual(260 * 1024);
@@ -198,18 +200,18 @@ test('real profile crop respects EXIF, shares nickname and photo, and deletes ba
   const other = await browser.newContext({ reducedMotion: 'reduce', viewport: { width: 390, height: 900 } });
   try {
     const viewer = await other.newPage(); await login(viewer, 'siwon'); await dismissAnnouncements(viewer);
-    const row = viewer.locator('.ranking-preview-row').filter({ hasText: '해피민' });
+    const row = viewer.locator('.ranking-preview-row').filter({ hasText: '해피민님' });
     await expect(row.locator('img.avatar-photo')).toHaveAttribute('src', url);
     for (const width of [390, 560]) await capture(viewer, 'authenticated', 'ranking', width, info);
-    await navigate(viewer, '/ranking'); await expect(viewer.locator('.podium-name').filter({ hasText: '해피민' })).toBeVisible();
+    await navigate(viewer, '/ranking'); await expect(viewer.locator('.podium-name').filter({ hasText: '해피민님' })).toBeVisible();
     await expect(viewer.locator('.podium img.avatar-photo')).toHaveCount(0);
-    await navigate(viewer, '/game/wake'); await expect(viewer.locator('.prediction-hero')).toContainText('해피민');
+    await navigate(viewer, '/game/wake'); await expect(viewer.locator('.prediction-hero')).toContainText('해피민님');
     await expect(viewer.locator('.prediction-hero img.avatar-photo')).toHaveCount(0);
     await mutate(page, '/games/offwork/prediction', { roundDate: '2026-10-30', value: '18:12:30' });
     await mutate(viewer, '/games/offwork/answer', { roundDate: '2026-10-30', value: '18:12:30', hint: '' });
     await mutate(viewer, '/games/offwork/reveal', { roundDate: '2026-10-30' });
     await page.reload(); await navigate(page, '/game/offwork');
-    const result = page.locator('.result-list .result-card').filter({ hasText: '해피민' });
+    const result = page.locator('.result-list .result-card').filter({ hasText: '해피민님' });
     await expect(result.locator('img.avatar-photo')).toHaveAttribute('src', url);
     for (const width of [390, 560]) await capture(page, 'authenticated', 'result', width, info);
     expect(JSON.stringify(await snapshot(page))).not.toContain('data:image/');
@@ -232,7 +234,7 @@ test('real profile crop respects EXIF, shares nickname and photo, and deletes ba
     await expect.poll(async () => {
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       return page.locator('.profile-summary h1').textContent();
-    }).toBe('siwon');
+    }).toBe('siwon님');
     await expect(staleDraft).toHaveCount(0);
     expect((await snapshot(page)).user.photoVersion).toBeNull();
   } finally { await other.close(); }
@@ -249,7 +251,8 @@ test('preview profile supports drag, pinch and keyboard zoom without API calls a
       await page.goto(`${ORIGIN}/#/preview/profile`);
       await page.getByLabel('닉네임', { exact: true }).fill('사진예서');
       await page.getByRole('button', { name: '닉네임 저장', exact: true }).click();
-      await expect(page.locator('.profile-summary h1')).toHaveText('사진예서');
+      await expect(page.locator('.profile-summary h1')).toHaveText('사진예서님');
+      await expect(page.getByLabel('닉네임', { exact: true })).toHaveValue('사진예서');
       const dialog = await beginCrop(page); const canvas = dialog.locator('canvas'); const range = dialog.getByRole('slider', { name: '확대 정도' });
       const original = await canvas.evaluate((node: HTMLCanvasElement) => node.toDataURL());
       const box = (await canvas.boundingBox())!;
@@ -273,10 +276,10 @@ test('preview profile supports drag, pinch and keyboard zoom without API calls a
       expect([image.width, image.height]).toEqual([512, 512]); expect(image.size).toBeLessThanOrEqual(260 * 1024);
       await capture(page, 'preview', 'profile', width, info);
       await navigate(page, '/preview');
-      await expect(page.locator('.ranking-preview-row').filter({ hasText: '사진예서' }).locator('img.avatar-photo')).toHaveAttribute('src', url);
+      await expect(page.locator('.ranking-preview-row').filter({ hasText: '사진예서님' }).locator('img.avatar-photo')).toHaveAttribute('src', url);
       await capture(page, 'preview', 'ranking', width, info);
       await navigate(page, '/preview/game/offwork');
-      await expect(page.locator('.result-list .result-card').filter({ hasText: '사진예서' }).locator('img.avatar-photo')).toHaveAttribute('src', url);
+      await expect(page.locator('.result-list .result-card').filter({ hasText: '사진예서님' }).locator('img.avatar-photo')).toHaveAttribute('src', url);
       await capture(page, 'preview', 'result', width, info);
       await navigate(page, '/preview/profile'); await page.getByRole('button', { name: '사진 삭제', exact: true }).click();
       await expect(page.locator('.profile-editor img.avatar-photo')).toHaveCount(0);

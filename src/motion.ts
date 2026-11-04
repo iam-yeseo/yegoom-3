@@ -112,6 +112,73 @@ export const rise = (el: Element | null | undefined, o: Opts = {}) =>
 export const fadeIn = (el: Element | null | undefined, o: Opts = {}) =>
   anim(el, [{ opacity: 0 }, { opacity: 1 }], { dur: dur.s, ...o });
 
+const openSheets = new Map<HTMLDialogElement, () => void>();
+let unlockPageScroll: (() => void) | null = null;
+
+function lockPageScroll() {
+  const root = document.documentElement;
+  const body = document.body;
+  const scrollX = window.scrollX, scrollY = window.scrollY;
+  const pageUrl = window.location.href;
+  const overflowY = root.style.overflowY;
+  const previous = {
+    position: body.style.position, top: body.style.top, left: body.style.left,
+    width: body.style.width, overflow: body.style.overflow,
+  };
+  // A stable gutter preserves layout, but hiding a classic root scrollbar still
+  // changes clientWidth. Keep that scrollbar and freeze the body in its place.
+  root.style.overflowY = root.clientWidth < window.innerWidth ? "scroll" : "hidden";
+  Object.assign(body.style, {
+    position: "fixed", top: `${-scrollY}px`, left: `${-scrollX}px`, width: "100%", overflow: "hidden",
+  });
+  return () => {
+    Object.assign(body.style, previous);
+    root.style.overflowY = overflowY;
+    // Route navigation scrolls the new screen to the top. A sheet unmounting
+    // during that transition must not restore the previous screen's position.
+    const samePage = window.location.href === pageUrl;
+    window.scrollTo({ left: samePage ? scrollX : 0, top: samePage ? scrollY : 0, behavior: "instant" });
+  };
+}
+
+/** Native dialog lifecycle shared by sheets and modals. Animate the dialog,
+ * not its scrolling children, so entrance motion cannot create a scrollbar. */
+export function openSheet(dialog: HTMLDialogElement): () => void {
+  const existing = openSheets.get(dialog);
+  if (existing) return existing;
+  const previousFocus = document.activeElement;
+  if (openSheets.size === 0) unlockPageScroll = lockPageScroll();
+  try {
+    dialog.showModal();
+  } catch (error) {
+    if (openSheets.size === 0) { unlockPageScroll?.(); unlockPageScroll = null; }
+    throw error;
+  }
+  const entrance = anim(dialog, [{ translate: "0 30px", opacity: 0 }, { translate: "0 0", opacity: 1 }], {
+    dur: dur.l, ease: "out", fill: "none",
+  });
+  let closed = false;
+  // A close event is queued: React StrictMode can already have reopened this
+  // element by the time an earlier close is dispatched.
+  const onClose = () => { if (!dialog.open) close(); };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    dialog.removeEventListener("close", onClose);
+    entrance?.cancel();
+    openSheets.delete(dialog);
+    if (dialog.open) dialog.close();
+    if (openSheets.size === 0) { unlockPageScroll?.(); unlockPageScroll = null; }
+    const topDialog = Array.from(openSheets.keys()).at(-1);
+    if (previousFocus instanceof HTMLElement && previousFocus.isConnected && (!topDialog || topDialog.contains(previousFocus))) {
+      previousFocus.focus({ preventScroll: true });
+    }
+  };
+  openSheets.set(dialog, close);
+  dialog.addEventListener("close", onClose);
+  return close;
+}
+
 // Characters: static images, transform only, pivoting at the feet.
 function feet(el: Element | null | undefined) {
   if (el instanceof HTMLElement || el instanceof SVGElement) el.style.transformOrigin = "50% 100%";

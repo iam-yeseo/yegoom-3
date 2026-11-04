@@ -1,25 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CatchmindGalleryResponse, CatchmindGalleryRound, CatchmindPlayer } from "../../shared/types";
 import { useCatchmind } from "../catchmind";
-import { Avatar, Chevron, Toolbar, useDisplayNameLookup } from "../components/UI";
+import { honorific, Avatar, Chevron, Toolbar, useDisplayNameLookup } from "../components/UI";
+import { formatDateTime } from "../format";
+import { openSheet } from "../motion";
 import "../preview.css";
 
 const emptyMessage = "아직 완성된 그림이 없어요. 첫 그림의 주인공이 되어 보세요!";
-const endedTime = (value: string) => new Intl.DateTimeFormat("ko-KR", {
-  timeZone: "Asia/Seoul", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-}).format(new Date(value));
 
 function Person({ player, demo }: { player: CatchmindPlayer; demo: boolean }) {
   const displayNameOf = useDisplayNameLookup();
   return <span className="cm-history-person"><Avatar username={player.username} userId={player.id} photoVersion={player.photoVersion}
-    artKey={demo ? undefined : player.character} size={28} /><span>{displayNameOf(player.username, player.displayName)}</span></span>;
+    artKey={demo ? undefined : player.character} size={28} /><span>{honorific(displayNameOf(player.username, player.displayName))}</span></span>;
 }
 function Details({ round, demo }: { round: CatchmindGalleryRound; demo: boolean }) {
   return <dl className="cm-history-details">
     <div><dt>정답</dt><dd><strong>{round.answer}</strong></dd></div>
     <div><dt>그린 사람</dt><dd><Person player={round.drawer} demo={demo} /></dd></div>
     <div><dt>맞힌 사람</dt><dd>{round.winner ? <Person player={round.winner} demo={demo} /> : "아무도 못 맞혔어요"}</dd></div>
-    <div><dt>끝난 시각</dt><dd><time dateTime={round.endedAt}>{endedTime(round.endedAt)}</time></dd></div>
+    <div><dt>끝난 시각</dt><dd><time dateTime={round.endedAt}>{formatDateTime(round.endedAt)}</time></dd></div>
   </dl>;
 }
 
@@ -67,8 +66,7 @@ function GalleryModal({ selected, rounds, gallery, demo, onSelect, onClose }: {
   const newer = index > 0 ? rounds[index - 1] : undefined;
   useEffect(() => {
     const element = dialog.current!;
-    element.showModal();
-    return () => element.close();
+    return openSheet(element);
   }, []);
   async function previous() {
     if (navigating.current || gallery.loading) return;
@@ -91,7 +89,7 @@ function GalleryModal({ selected, rounds, gallery, demo, onSelect, onClose }: {
     document.addEventListener("keydown", keydown);
     return () => document.removeEventListener("keydown", keydown);
   });
-  return <dialog ref={dialog} className="cm-gallery-modal" aria-labelledby="cm-gallery-title" onClose={onClose}
+  return <dialog ref={dialog} className="cm-gallery-modal" aria-labelledby="cm-gallery-title" onClose={event => { if (!event.currentTarget.open) onClose(); }}
     onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}>
     <div className="cm-gallery-modal-head"><h2 id="cm-gallery-title">제 {selected.number}판</h2><button className="text-button" onClick={() => dialog.current?.close()} autoFocus>닫기</button></div>
     <img className="cm-gallery-picture" src={selected.image} width={512} height={512} alt={`제 ${selected.number}판 그림`} />

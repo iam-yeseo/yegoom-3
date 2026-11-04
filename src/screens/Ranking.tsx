@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Avatar, CharacterSprite, Toolbar, preloadSprites, useCharacter, useDisplayNameLookup } from "../components/UI";
+import { honorific, Avatar, CharacterSprite, Toolbar, preloadSprites, useCharacter, useDisplayNameLookup } from "../components/UI";
 import { kstParts, weekdayNames } from "../sample";
 import { anim, confetti, dropIn, reduced, tween } from "../motion";
 import { standings, type HomePlayer } from "./Home";
@@ -144,7 +144,7 @@ export function Ranking({
                   <span className="podium-rank" style={{ color: style.fg }}>
                     {player.rank}
                   </span>
-                  <span className="podium-name">{displayNameOf(player.username, player.displayName)}</span>
+                  <span className="podium-name">{honorific(displayNameOf(player.username, player.displayName))}</span>
                   <strong>
                     <CountFrom value={player.weeklyScore} delay={(3 - Math.min(player.rank, 3)) * 160 + 500} />
                   </strong>
@@ -158,7 +158,7 @@ export function Ranking({
         <section className="card daily-card">
           <div className="card-head">
             <h2>요일별 점수</h2>
-            <span>{me}</span>
+            <span>{honorific(me)}</span>
           </div>
           <div className="daily-bars">
             {weekdayNames.map((name, i) => {
@@ -194,7 +194,7 @@ export function Ranking({
                   {i + 1}
                 </span>
                 <Avatar username={row.username} size={40} />
-                <strong>{displayNameOf(row.username)}</strong>
+                <strong>{honorific(displayNameOf(row.username))}</strong>
                 <b>{row.score}점</b>
               </div>
             ))}

@@ -141,7 +141,7 @@ for (const mode of ['authenticated', 'preview'] as const) for (const width of [3
     const previous = page.getByRole('region', { name: '지난 판', exact: true });
     await expect(previous).toContainText(`제 ${previousNumber}판`);
     if (previousRound) {
-      await expect(previous).toContainText(previousRound.drawer.displayName);
+      await expect(previous).toContainText(`${previousRound.drawer.displayName}님`);
       if (previousRound.drawer.photoVersion !== null) {
         await expect(previous.locator(`img[src="/api/users/${previousRound.drawer.id}/photo?v=${previousRound.drawer.photoVersion}"]`)).toBeVisible();
       }

@@ -3,7 +3,7 @@ import { LAUNCH_GIFT } from "../shared/balance";
 import type { LaunchGiftResponse, LaunchGiftState, Role } from "../shared/types";
 import { useAttendance } from "./attendance";
 import { useShop } from "./shop";
-import { anim, pop, toast, useOnChange } from "./motion";
+import { openSheet, pop, toast, useOnChange } from "./motion";
 import "./launch.css";
 
 /** Later coin arrivals start new target pops after the first coin's callback. */
@@ -21,11 +21,7 @@ function LaunchDialog({ title, onClose, children, className = "" }: { title: str
   const titleId = useId();
   useEffect(() => {
     const node = dialog.current!;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    node.showModal();
-    const entrance = anim(node, [{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "translateY(0)" }], { dur: 200 });
-    return () => { entrance?.cancel(); node.close(); document.body.style.overflow = overflow; };
+    return openSheet(node);
   }, []);
   return <dialog ref={dialog} className={`launch-dialog ${className}`} aria-labelledby={titleId}
     onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) onClose(); }}>

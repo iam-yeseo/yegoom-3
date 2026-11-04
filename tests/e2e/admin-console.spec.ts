@@ -134,7 +134,7 @@ async function editOffwork(page: Page, preview: boolean, width: number, info: Te
   }
   await capture(page, preview ? 'preview' : 'authenticated', 'prediction-settings', width, info);
   await form.getByRole('button', { name: '퇴근시간 설정 저장', exact: true }).click();
-  await expect(form.locator('.admin-form-success')).toContainText('00:00부터 적용');
+  await expect(form.locator('.admin-form-success')).toContainText('00시 00분부터 적용');
   await expect(card).toContainText('내일 변경 예정');
   await expect(page.getByRole('region', { name: '최근 변경 기록', exact: true })).toContainText('참여 100G → 125G');
   return form;

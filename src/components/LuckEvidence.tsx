@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type ChangeEvent } from "react";
 import type { PhotoMetadata } from "../../shared/types";
 import { shrinkPhoto } from "../image-processing";
-import { anim } from "../motion";
+import { openSheet } from "../motion";
 import "../luck-evidence.css";
 
 function EnlargedPhoto({ photo, label, onClose }: { photo: PhotoMetadata; label: string; onClose: () => void }) {
@@ -9,17 +9,7 @@ function EnlargedPhoto({ photo, label, onClose }: { photo: PhotoMetadata; label:
   const titleId = useId();
   useEffect(() => {
     const node = dialog.current!;
-    const previousFocus = document.activeElement;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    node.showModal();
-    const entrance = anim(node, [{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "translateY(0)" }], { dur: 200 });
-    return () => {
-      entrance?.cancel();
-      node.close();
-      document.body.style.overflow = overflow;
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
-    };
+    return openSheet(node);
   }, []);
   return <dialog className="luck-photo-dialog" ref={dialog} aria-labelledby={titleId}
     onCancel={event => { event.preventDefault(); onClose(); }}

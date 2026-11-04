@@ -3,6 +3,9 @@ import { ART_KEYS, defaultCharacter, isArtKey, type ArtKey } from "../../shared/
 import { anim, useOnChange } from "../motion";
 import "../profile-photo.css";
 
+/** Display-only suffix; keep stored nicknames and form values unchanged. */
+export const honorific = (name: string): string => `${name}님`;
+
 export interface ProfileDirectoryEntry {
   id: string;
   username: string;
@@ -322,7 +325,7 @@ export function Avatar({
       }}
     >
       {source && source !== failedSource
-        ? <img className="avatar-photo" src={source} alt={profile ? `${profile.displayName} 프로필 사진` : "프로필 사진"} onError={() => setFailedSource(source)} />
+        ? <img className="avatar-photo" src={source} alt={profile ? `${honorific(profile.displayName)} 프로필 사진` : "프로필 사진"} onError={() => setFailedSource(source)} />
         : <Character artKey={key} />}
     </span>
   );

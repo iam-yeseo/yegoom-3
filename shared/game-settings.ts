@@ -32,9 +32,9 @@ export function validatePredictionRules(id: GameId, input: unknown): { rules: Pr
   if (!integerBetween(value.firstGold, ADMIN_LIMITS.firstGold)) return { error: `1등 골드는 ${ADMIN_LIMITS.firstGold[0]}~${ADMIN_LIMITS.firstGold[1].toLocaleString('ko-KR')} 정수로 입력해 주세요.` };
   if (typeof value.deadline !== 'string' || !clock.test(value.deadline)) return { error: '마감 시각을 HH:MM:SS로 입력해 주세요.' };
   const defaults = defaultPredictionRules(id);
-  if (id === 'wake' && value.deadline !== defaults.deadline) return { error: `기상시간 마감은 ${defaults.deadline}으로 고정되어 있어요.` };
+  if (id === 'wake' && value.deadline !== defaults.deadline) return { error: '기상시간 마감은 고정되어 있어요.' };
   if (value.revealTime !== defaults.revealTime) return { error: '자동 공개 방식은 변경할 수 없어요.' };
-  if (id === 'luck' && value.deadline >= defaults.revealTime!) return { error: `행운 점수 마감은 ${defaults.revealTime}보다 앞이어야 해요.` };
+  if (id === 'luck' && value.deadline >= defaults.revealTime!) return { error: '행운 점수 마감은 자동 공개 시각보다 앞이어야 해요.' };
   return { rules: { enabled: value.enabled, scoreTable, participationGold: value.participationGold,
     firstGold: value.firstGold, deadline: value.deadline, revealTime: defaults.revealTime } };
 }
