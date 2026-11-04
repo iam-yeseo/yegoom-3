@@ -729,6 +729,75 @@ describe('Worker and D1 integration', () => {
     }, 30000);
   });
 
+
+  describe('claw authenticated request budgets', () => {
+    it('keeps authenticated machine reads, play receipts and bootstrap within the PR 4 main costs', async () => {
+      const instance = runtime(workerWithD1Metrics(script));
+      const measurements: { label: string; prepares: number; queries: number; bindingCalls: number; rowsRead: number; rowsWritten: number }[] = [];
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        const { cookie } = await login('min', instance);
+        const measure = async <T,>(label: string, path: string, body?: unknown): Promise<T> => {
+          const response = await request(path, { cookie, instance, ...(body ? { method: 'POST', body } : {}) });
+          expect(response.status, label).toBe(200);
+          measurements.push({ label,
+            prepares: Number(response.headers.get('X-Test-D1-Prepares')),
+            queries: Number(response.headers.get('X-Test-D1-Queries')),
+            bindingCalls: Number(response.headers.get('X-Test-D1-Binding-Calls')),
+            rowsRead: Number(response.headers.get('X-Test-D1-Rows-Read')),
+            rowsWritten: Number(response.headers.get('X-Test-D1-Rows-Written')) });
+          return response.json() as Promise<T>;
+        };
+        const before = await measure<BootstrapResponse>('bootstrap before machine', '/api/bootstrap');
+        expect(before.claw.coins).toBe(5);
+        const fresh = await measure<ClawResponse>('GET initial machine', '/api/claw');
+        const existing = await measure<ClawResponse>('GET existing machine', '/api/claw');
+        expect(existing.board).toEqual(fresh.board);
+        await measure<BootstrapResponse>('bootstrap existing machine', '/api/bootstrap');
+
+        // A known pile and guaranteed strong grip exercise the reward writes,
+        // independent of crypto random seeds or weak-grip jitter. No rule changes.
+        const board = createBoard(1, 1);
+        await seedClawBoard(database, board);
+        await database.prepare('UPDATE claw_config SET payout_every = 1 WHERE id = 1').run();
+        const input = { requestId: 'budget-claw-play', version: fresh.version, x: .23, stop: null };
+        const played = await measure<ClawResponse>('POST rewarded play', '/api/claw/play', input);
+        const expected = simulateAttempt(board, { x: input.x, stop: input.stop, pickup: 1, carry: 1 });
+        expect(expected.prizes.length).toBeGreaterThan(0);
+        expect(expected.board.length).toBeGreaterThan(0); // Not the separate clear-bonus path.
+        expect(played.board).toEqual(expected.board);
+        expect(played.result).toMatchObject({ reason: expected.reason, prizes: expected.prizes,
+          grip: { pickup: 1, carry: 1, strong: true }, points: expected.prizes.length, gold: expected.prizes.length * 10 });
+        expect(played).toMatchObject({ freeCoins: 4, version: fresh.version + 1, replayed: false });
+        const retry = await measure<ClawResponse>('POST saved play retry', '/api/claw/play', input);
+        expect(retry).toMatchObject({ board: played.board, result: played.result, freeCoins: 4, version: played.version, replayed: true });
+        expect((await measure<ClawResponse>('GET after play', '/api/claw')).board).toEqual(played.board);
+        const after = await measure<BootstrapResponse>('bootstrap after play', '/api/bootstrap');
+        expect(after.user.gold).toBe(before.user.gold + played.result!.gold);
+        expect(after.user.weeklyScore).toBe(before.user.weeklyScore + played.result!.points);
+        expect(await database.prepare('SELECT COUNT(*) AS count FROM claw_plays').first('count')).toBe(1);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+      for (const row of measurements) {
+        expect(row.bindingCalls, row.label).toBeLessThanOrEqual(50);
+        if (row.label !== 'GET initial machine' && row.label !== 'POST rewarded play') expect(row.rowsWritten, row.label).toBe(0);
+      }
+      if (process.env.FREE_PLAN_CLAW_MEASUREMENTS) {
+        writeFileSync(process.env.FREE_PLAN_CLAW_MEASUREMENTS, `${JSON.stringify(measurements, null, 2)}\n`);
+      } else {
+        const previous = JSON.parse(readFileSync(new URL('../docs/free-plan-pr5-measurements.json', import.meta.url), 'utf8')) as { before: typeof measurements };
+        expect(measurements.map(row => row.label)).toEqual(previous.before.map(row => row.label));
+        for (const row of measurements) {
+          const prior = previous.before.find(candidate => candidate.label === row.label)!;
+          for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsRead', 'rowsWritten'] as const) {
+            expect(row[field], `${row.label}: ${field}`).toBeLessThanOrEqual(prior[field]);
+          }
+        }
+      }
+      console.log(`Claw authenticated request metrics: ${JSON.stringify(measurements)}`);
+    }, 30000);
+  });
+
   describe('self-service password changes', () => {
     const nextPassword = 'new-test-password-2026!';
     const bucketFor = (userId = 'min') => hashToken(`password:${userId}`);
