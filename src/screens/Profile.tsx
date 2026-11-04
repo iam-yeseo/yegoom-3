@@ -24,6 +24,7 @@ import { PhotoPicker } from "../components/PhotoPicker";
 import { PasswordSheet } from "../components/PasswordSheet";
 import { HistoryRow, reasonIcon } from "../components/HistoryRow";
 import { TagCollection } from "../components/TagCollection";
+import { FONT_SIZES, readFontSize, saveFontSize, type FontSize } from "../font-size";
 
 function dateLabel(iso: string) {
   const parts = Object.fromEntries(
@@ -86,6 +87,7 @@ export function Profile({
   const [profileMessage, setProfileMessage] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [fontSize, setFontSize] = useState<FontSize>(readFontSize);
   const photoInput = useRef<HTMLInputElement>(null);
   const editing = useRef(false);
   useEffect(() => { setNickname(displayName); }, [displayName]);
@@ -211,6 +213,12 @@ export function Profile({
           {profileMessage && <p className="profile-edit-success" role="status">{profileMessage}</p>}
         </section>
         <TagCollection shopHref={tagShopHref} />
+        <section className="card font-size-setting" aria-label="글자 크기">
+          <h2>글자 크기</h2>
+          <Segmented label="글자 크기" options={FONT_SIZES.map(({ value, label }) => ({ value, label }))} value={fontSize}
+            onChange={next => { setFontSize(next); saveFontSize(next); }} />
+          <p>이 기기에만 적용돼요. 글자만 작아지고 화면 배치는 그대로예요.</p>
+        </section>
         <section className="card profile-password">
           <button type="button" disabled={!onPasswordChange || profileBusy || busy} onClick={() => setPasswordOpen(true)}>비밀번호 변경</button>
           {!onPasswordChange && <p>미리보기에서는 비밀번호를 바꿀 수 없어요. 로그인 후 이용해 주세요.</p>}
