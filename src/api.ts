@@ -14,6 +14,7 @@ import type {
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse,
 } from "../shared/types";
 import type { RankingPeriod } from "../shared/ranking-periods";
+import type { StockDetailView, StockMarketView, StockNewsPage, StockTradeInput, StockTradeResponse, StockUnchanged } from "../shared/stock-types";
 import type { ArtKey } from "../shared/characters";
 import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/admin";
 
@@ -92,6 +93,12 @@ export const api = {
   spinSlot: (input: SlotSpinInput) => request<SlotResponse>("/shop/slot", { method: "POST", body: JSON.stringify(input) }),
   drawTag: (input: TagDrawInput) => request<TagResponse>("/shop/tag", { method: "POST", body: JSON.stringify(input) }),
   equipTag: (tagId: string | null) => request<TagResponse>("/me/nickname-tag", { method: "PUT", body: JSON.stringify({ tagId }) }),
+  stock: (since?: string) => request<StockMarketView | StockUnchanged>(`/stock${since ? `?since=${encodeURIComponent(since)}` : ""}`),
+  stockDetail: (ticker: string) => request<StockDetailView>(`/stock/${ticker}`),
+  stockNews: (before?: string) => request<StockNewsPage>(`/stock/news${before ? `?before=${encodeURIComponent(before)}` : ""}`),
+  tradeStock: (input: StockTradeInput) => request<StockTradeResponse>("/stock/trade", { method: "POST", body: JSON.stringify(input) }),
+  addMarketHoliday: (date: string, reason: string, expectedUserId: string) => request<AdminState>("/admin/market-holidays", { method: "POST", body: JSON.stringify({ date, reason, expectedUserId }) }),
+  removeMarketHoliday: (date: string) => request<AdminState>(`/admin/market-holidays/${date}`, { method: "DELETE" }),
   history: (id: GameId) => request<HistoryResponse>(`/games/${id}/history`),
   wake: (roundDate: string) => request<GameResponse>("/games/wake/wake", {
     method: "POST",

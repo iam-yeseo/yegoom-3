@@ -21,6 +21,8 @@ const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
 config.main = './worker.js';
 config.assets.directory = '../../dist';
 for (const database of config.d1_databases) database.migrations_dir = '../../migrations';
+// A fixed, test-only stock seed; production reads its own Worker secret.
+config.vars = { ...config.vars, STOCK_SEED_SECRET: 'e2e-only-stock-seed-secret-2026' };
 writeFileSync(configPath, JSON.stringify(config));
 
 // Freeze time only in the compiled test artifact, just like integration tests.
@@ -60,6 +62,9 @@ for (const username of ['min', 'siwon', 'yeseo']) {
     statements.push(`INSERT INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at) VALUES ('fixture-${item}-${username}', 'e2e-${username}', '${item}', 2, '브라우저 테스트 이용권', 'fixture:${item}:${username}', '2026-10-23T00:00:00.000Z');`);
   }
 }
+// The migration seeds the stock cursor at the real clock; start it at the
+// frozen fixture's previous close so prices replay deterministically.
+statements.push(`UPDATE stock_state SET last_tick_at = ${Date.parse('2026-10-29T18:00:00+09:00')};`);
 // Real, untouched physics boards provide repeatable single/multiple catches.
 // Only this isolated fixture selects the board and the tenth (strong) attempt;
 // production has no seed endpoint, forced outcome, or browser-only physics.

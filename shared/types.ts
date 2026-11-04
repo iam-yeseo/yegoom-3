@@ -1,3 +1,4 @@
+import type { StockHomeSummary } from './stock-types';
 import type { ArtKey } from './characters';
 import type { KUJI_RULES, SPEETTO_RULES, SLOT_RULES } from './balance';
 import type { Board, Doll, AttemptResult } from './claw-physics';
@@ -94,6 +95,8 @@ export interface BootstrapResponse {
   claw: ClawSummary;
   launchGift: LaunchGiftState;
   announcements: Announcement[];
+  /** Home tile summary; null while the stock market is not open to players. */
+  stock: StockHomeSummary | null;
   serverTime: string;
   timeZone: 'Asia/Seoul';
 }

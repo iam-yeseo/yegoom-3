@@ -99,3 +99,49 @@
   .admin-card-title > span { font-size: 12px; }
 }
 .admin-word-warning { padding: 16px; border: 2px solid #e7b85b; background: #fff4cc; color: #75530a; line-height: 1.6; }
+.admin-holiday-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.admin-holiday-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8f4f0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.admin-holiday-form .admin-fieldset {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  border: 0;
+  padding: 0;
+  margin: 0 0 10px;
+}
+.admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #7c7383;
+  min-width: 0;
+}
+.admin-field input {
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1.5px solid #ece6e0;
+  background: #fff;
+  font: inherit;
+  font-size: 15px;
+  color: #3a3340;
+  min-width: 0;
+}

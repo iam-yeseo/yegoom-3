@@ -454,7 +454,7 @@ describe('Worker and D1 integration', () => {
       expect(await db.prepare('SELECT COUNT(*) AS n FROM inventory_ledger').first('n')).toBe(1);
       const observed = measuredDatabase(db, now.getTime());
       await maintainDatabase(observed.binding, now);
-      expect(observed.queries).toHaveLength(3);
+      expect(observed.queries).toHaveLength(4);
       expect(observed.queries.every(query => query.rowsWritten === 0)).toBe(true);
     });
   });

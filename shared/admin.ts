@@ -1,3 +1,4 @@
+import type { MarketHoliday } from './stock-types';
 import type { GameId } from './types';
 
 export interface PredictionRules {
@@ -37,5 +38,7 @@ export interface AdminState {
   claw: AdminClawConfig;
   changes: AdminChange[];
   catchmindWordsRemaining: number;
+  /** Administrator-added market holidays from today on. */
+  marketHolidays: MarketHoliday[];
   serverTime: string;
 }
