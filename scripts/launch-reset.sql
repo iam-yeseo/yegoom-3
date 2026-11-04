@@ -10,9 +10,10 @@ DROP TRIGGER inventory_no_delete;
 DELETE FROM announcements;
 DELETE FROM luck_photos;
 
-UPDATE catchmind_turn SET drawer_id = NULL, round_id = NULL;
+UPDATE catchmind_turn SET drawer_id = NULL, round_id = NULL, version = version + 1;
 DELETE FROM catchmind_guesses;
 DELETE FROM catchmind_requests;
+DELETE FROM catchmind_used_words;
 DELETE FROM catchmind_rounds;
 DELETE FROM kuji_claims;
 DELETE FROM lotto_tickets;
@@ -53,6 +54,7 @@ SELECT 'lotto_tickets' AS cleared_table, COUNT(*) AS remaining FROM lotto_ticket
 SELECT 'lotto_draws' AS cleared_table, COUNT(*) AS remaining FROM lotto_draws;
 SELECT 'catchmind_guesses' AS cleared_table, COUNT(*) AS remaining FROM catchmind_guesses;
 SELECT 'catchmind_requests' AS cleared_table, COUNT(*) AS remaining FROM catchmind_requests;
+SELECT 'catchmind_used_words' AS cleared_table, COUNT(*) AS remaining FROM catchmind_used_words;
 SELECT 'catchmind_rounds' AS cleared_table, COUNT(*) AS remaining FROM catchmind_rounds;
 SELECT 'claw_plays' AS cleared_table, COUNT(*) AS remaining FROM claw_plays;
 SELECT 'claw_coin_purchases' AS cleared_table, COUNT(*) AS remaining FROM claw_coin_purchases;

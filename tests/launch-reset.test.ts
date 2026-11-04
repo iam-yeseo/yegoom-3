@@ -14,7 +14,7 @@ import { hashToken } from '../worker/crypto';
 type Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
 const root = fileURLToPath(new URL('..', import.meta.url));
 const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventory_ledger', 'user_balances', 'shop_purchases',
-  'kuji_claims', 'kuji_boards', 'lotto_tickets', 'lotto_draws', 'catchmind_guesses', 'catchmind_requests',
+  'kuji_claims', 'kuji_boards', 'lotto_tickets', 'lotto_draws', 'catchmind_guesses', 'catchmind_requests', 'catchmind_used_words',
   'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts', 'announcements', 'luck_photos'];
 const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];

@@ -230,7 +230,7 @@ test('real profile crop respects EXIF, shares nickname and photo, and deletes ba
     // Another tab can replace the session cookie while a crop is still open.
     // A real bootstrap refresh must discard the old account's unsaved editor.
     const staleDraft = await beginCrop(page);
-    const switched = await page.request.post(`${ORIGIN}/api/auth/login`, { data: { username: 'siwon', password: PASSWORD }, headers: { Origin: ORIGIN } });
+    const switched = await page.request.post(`${ORIGIN}/api/auth/login`, { data: { username: 'siwon', password: PASSWORD }, headers: { Origin: ORIGIN, 'CF-Connecting-IP': '192.0.2.12' } });
     expect(switched.status()).toBe(200);
     // Visibility refreshes reuse a successful bootstrap for ten seconds. The
     // fixed wall clock must cross that window before simulating the return.
@@ -376,7 +376,7 @@ test('real announcements queue for four seconds, exclude self and expired events
   test.setTimeout(60000);
   // Authenticate via the real endpoint before freezing timers, so pointer effects
   // from the login button cannot interfere with precise banner deadlines.
-  const response = await page.request.post(`${ORIGIN}/api/auth/login`, { data: { username: 'min', password: PASSWORD }, headers: { Origin: ORIGIN } });
+  const response = await page.request.post(`${ORIGIN}/api/auth/login`, { data: { username: 'min', password: PASSWORD }, headers: { Origin: ORIGIN, 'CF-Connecting-IP': '192.0.2.12' } });
   expect(response.status()).toBe(200);
   await page.clock.install({ time: new Date(NOW) }); await page.clock.pauseAt(new Date(Date.parse(NOW) + 1000));
   await page.goto(`${ORIGIN}/`);

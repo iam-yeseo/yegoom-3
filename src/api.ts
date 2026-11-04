@@ -9,7 +9,7 @@ import type {
   AttendanceClaimResponse,
   ShopState, KujiResponse, KujiPurchaseInput, LottoResponse, LottoPurchaseInput,
   SpeettoResponse, SpeettoPurchaseInput,
-  CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindGalleryResponse,
+  CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput,
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput,
 } from "../shared/types";
@@ -20,6 +20,7 @@ export class ApiFailure extends Error {
   constructor(
     public status: number,
     message: string,
+    public code?: string,
   ) {
     super(message);
   }
@@ -50,6 +51,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       response.status,
       (body as ApiError | null)?.error?.message ??
         "요청을 처리하지 못했어요. 다시 시도해 주세요.",
+      (body as ApiError | null)?.error?.code,
     );
   return body as T;
 }
@@ -69,7 +71,7 @@ export const api = {
   claw: () => request<ClawResponse>("/claw"),
   buyClawCoins: (input: ClawCoinInput) => request<ClawResponse>("/claw/coins", { method: "POST", body: JSON.stringify(input) }),
   playClaw: (input: ClawPlayInput) => request<ClawResponse>("/claw/play", { method: "POST", body: JSON.stringify(input) }),
-  catchmind: () => request<CatchmindResponse>("/catchmind"),
+  catchmind: (since?: number) => request<CatchmindPollResponse>(`/catchmind${since === undefined ? "" : `?since=${since}`}`),
   catchmindGallery: (before?: number) => request<CatchmindGalleryResponse>(`/catchmind/gallery${before === undefined ? "" : `?before=${before}`}`),
   catchmindAction: (action: CatchmindAction, input: CatchmindInput) => request<CatchmindResponse>(`/catchmind/${action}`, { method: "POST", body: JSON.stringify(input) }),
   attendance: (month: string) => request<{ attendance: AttendanceState }>(`/me/attendance?month=${encodeURIComponent(month)}`),

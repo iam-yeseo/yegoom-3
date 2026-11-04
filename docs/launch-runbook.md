@@ -30,12 +30,12 @@ npm run launch:profiles:preflight:remote
 
 3. 출력된 확인 결과를 읽는다. 원격 `--file`은 import 요약만 출력하므로 스크립트가 파일 끝의 읽기 전용 SELECT를 다시 실행해 보여 준다.
 
-   - `cleared_table`의 20개 행에서 `remaining`이 모두 **0**이어야 한다. PR 2의 `user_balances`는 원장에서 파생한 잔액 캐시이므로 원장과 함께 비운다. 이후 첫 지급부터 원장 INSERT 트리거가 다시 채운다.
+   - `cleared_table`의 21개 행에서 `remaining`이 모두 **0**이어야 한다. `user_balances`는 원장에서 파생한 잔액 캐시이므로 원장과 함께 비운다. 이후 첫 지급부터 원장 INSERT 트리거가 다시 채운다. `catchmind_used_words`도 그림 기록과 함께 비워 새 제시어 묶음을 시작한다.
    - `users`, `sessions`, `d1_migrations`, `claw_config`, `user_photos`의 `rows_kept`는 초기화 전과 같아야 한다. 스크립트는 이 다섯 테이블의 행·컬럼을 수정하지 않는다.
-   - `catchmind_turn`은 `id = 1` 행이 남고 `drawer_id`, `round_id`가 모두 `NULL`이어야 한다.
+   - `catchmind_turn`은 `id = 1` 행이 남고 `drawer_id`, `round_id`가 모두 `NULL`이어야 한다. `version`은 증가해 기존 화면의 버전을 무효화한다.
    - `restored_append_only_triggers`는 **4**여야 한다. 뒤에 출력되는 `ledger_no_update`, `ledger_no_delete`, `inventory_no_update`, `inventory_no_delete` 정의가 각각 수정·삭제를 `RAISE(ABORT, ...)`로 거절해야 한다.
 
-   검증 후 기존 로그인으로 홈을 열면 캐릭터 뽑기 지갑이 다시 만들어지고, 쿠지에 들어가면 첫 판이 생성된다. 새 출석은 1일째부터 시작한다. 앱 조회가 다시 생성하는 정상 기록 때문에 검증 전에는 앱을 열지 않는다.
+   검증 후 기존 로그인으로 뽑기 기계에 들어가면 지갑이 다시 만들어지고, 쿠지에 들어가면 첫 판이 생성된다. 새 출석은 1일째부터 시작한다. 앱 조회가 다시 생성하는 정상 기록 때문에 검증 전에는 앱을 열지 않는다.
 
 4. 오류나 예상과 다른 결과가 있으면 앱을 열지 않고 백업 bookmark로 복구한다. 실패한 import는 원상 복구되지만, 연결이 끊겼거나 확인 SELECT만 실패한 경우에는 초기화 성공 여부를 먼저 확인해야 한다. 완료 여부를 모른 채 초기화 명령을 반복하지 않는다.
 

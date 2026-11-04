@@ -98,9 +98,16 @@ test('seventh-day attendance shows 500G with coupons; gallery loads more and sur
   await expect(page.locator('.cm-gallery-tile')).toHaveCount(12);
   const response = await page.request.post(`${ORIGIN}/api/catchmind/end`, { headers: { Origin: ORIGIN }, data: { requestId: crypto.randomUUID(), roundId: 'fixture-gallery-13' } });
   expect(response.status()).toBe(200);
+  const ended = await response.json() as CatchmindResponse;
+  expect(ended.catchmind.turn).toMatchObject({ username: 'siwon', displayName: '시원' });
   await navigate(page, '/play/catchmind');
   await expect(page.locator('.pg-result-picture')).toContainText('비공개제시어');
   await expect(page.getByRole('region', { name: '지난 판' })).toContainText('제 12판');
+  await expect(page.getByRole('button', { name: '다음 그림 그리기', exact: true })).toHaveCount(0);
+  await expect(page.locator('.pg-next-player')).toContainText(`${ended.catchmind.turn!.displayName}님`);
+  await page.request.post(`${ORIGIN}/api/auth/logout`, { data: {}, headers: { Origin: ORIGIN } });
+  await login(page, 'siwon');
+  await navigate(page, '/play/catchmind');
   await page.getByRole('button', { name: '다음 그림 그리기', exact: true }).click();
   await expect(page.getByRole('region', { name: '지난 판' })).toContainText('제 13판');
 });
@@ -146,9 +153,19 @@ for (const mode of ['authenticated', 'preview'] as const) for (const width of [3
         await expect(previous.locator(`img[src="/api/users/${previousRound.drawer.id}/photo?v=${previousRound.drawer.photoVersion}"]`)).toBeVisible();
       }
       const active = current!.catchmind.round;
-      // These viewers do not own the current draft: its answer remains private,
-      // even when the previous public answer happens to use the same text.
-      if (active && active.status !== 'ended') expect(active.word).toBeNull();
+      // A full run rotates the new draft to siwon; a focused run retains min's
+      // seeded round. The authenticated drawer may see its own prompt, while
+      // every other viewer must receive null and have no private prompt UI.
+      if (active && active.status !== 'ended') {
+        if (current!.viewerId === active.drawer.id) {
+          expect(active.word).toEqual(expect.any(String));
+          expect(active.word!.length).toBeGreaterThan(0);
+          await expect(page.locator('.pg-prompt strong')).toHaveText(active.word!);
+        } else {
+          expect(active.word).toBeNull();
+          await expect(page.locator('.pg-prompt')).toHaveCount(0);
+        }
+      }
     }
     await capture(page, mode, 'previous-round', width, info);
     const previousButton = previous.getByRole('button', { name: `지난 판 제 ${previousNumber}판 크게 보기` });

@@ -53,4 +53,26 @@ describe("connected scanline fill", () => {
     expect(pixel(image, 0, 0)).toEqual(coral);
     expect(pixel(image, 1, 0)).toEqual([255, 255, 255, 0]);
   });
+
+  it("compares all color channels and includes the exact tolerance boundary", () => {
+    const data = new Uint8ClampedArray([
+      10, 80, 160, 255, 42, 48, 192, 255, 43, 80, 160, 255,
+      10, 80, 160, 255, 10, 80, 160, 222, 10, 80, 160, 255,
+    ]);
+    const image = { width: 3, height: 2, data };
+    expect(floodFill(image, .5, .5, coral)).toBe(3);
+    expect(pixel(image, 1, 0)).toEqual(coral);
+    expect(pixel(image, 2, 0)).toEqual([43, 80, 160, 255]);
+    expect(pixel(image, 1, 1)).toEqual([10, 80, 160, 222]);
+    expect(pixel(image, 2, 1)).toEqual([10, 80, 160, 255]);
+  });
+
+  it("fills the complete 640px drawing surface without recursion or unvisited gaps", () => {
+    const image = { width: 640, height: 640, data: new Uint8ClampedArray(640 * 640 * 4).fill(255) };
+    expect(floodFill(image, 639, 639, coral)).toBe(640 * 640);
+    expect(pixel(image, 0, 0)).toEqual(coral);
+    expect(pixel(image, 639, 639)).toEqual(coral);
+    expect(floodFill(image, 0, 0, coral)).toBe(0);
+  });
+
 });

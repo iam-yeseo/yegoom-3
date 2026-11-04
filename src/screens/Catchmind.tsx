@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { CATCHMIND_RULES } from "../../shared/balance";
 import type { CatchmindAction, CatchmindInput, CatchmindRound, CatchmindState, User } from "../../shared/types";
 import { useCatchmind } from "../catchmind";
@@ -15,7 +15,7 @@ function HintTiles({ hint }: { hint: NonNullable<CatchmindRound["hint"]> }) {
     {Array.from({ length: hint.length }, (_, i) => <span key={i} ref={i === 0 ? first : undefined}>{i === 0 ? hint.firstCharacter : ""}</span>)}
   </div>;
 }
-function GuessLog({ round }: { round: CatchmindRound }) {
+const GuessLog = memo(function GuessLog({ round }: { round: CatchmindRound }) {
   const displayNameOf = useDisplayNameLookup();
   const words = useRef<HTMLUListElement>(null);
   useOnChange(round.guesses.length, before => {
@@ -24,7 +24,7 @@ function GuessLog({ round }: { round: CatchmindRound }) {
   return <ul className="pg-wrong-words" ref={words} aria-label="모두의 답">
     {round.guesses.map(guess => <li key={guess.id}><span className={guess.correct ? "correct" : ""}>{honorific(displayNameOf(guess.player.username, guess.player.displayName))} · {guess.answer}{guess.correct ? " · 정답" : ""}</span></li>)}
   </ul>;
-}
+}, (before, after) => before.round.id === after.round.id && JSON.stringify(before.round.guesses) === JSON.stringify(after.round.guesses));
 function FailCount({ round }: { round: CatchmindRound }) {
   const nodes = useRef<HTMLDivElement>(null);
   const ended = round.status === "ended";
@@ -43,7 +43,7 @@ function FailCount({ round }: { round: CatchmindRound }) {
     </div>
   </div>;
 }
-function Picture({ round, result = false, demo }: { round: CatchmindRound; result?: boolean; demo: boolean }) {
+const Picture = memo(function Picture({ round, result = false, demo }: { round: CatchmindRound; result?: boolean; demo: boolean }) {
   const displayNameOf = useDisplayNameLookup();
   return <div className={`pg-card ${result ? "pg-result-picture" : "pg-drawing-card"}`}>
     {!result && <div className="pg-author">
@@ -52,11 +52,16 @@ function Picture({ round, result = false, demo }: { round: CatchmindRound; resul
       {round.publishedAt && <span className="pg-muted">{formatTime(round.publishedAt)}</span>}
       <span className="pg-chip coral">{CATCHMIND_RULES.score}점 · {CATCHMIND_RULES.gold}G</span>
     </div>}
-    <div className="pg-picture">{round.image ? <img src={round.image} alt={`${honorific(displayNameOf(round.drawer.username, round.drawer.displayName))}이 그린 그림`} /> : <p className="pg-muted">공개된 그림이 없어요.</p>}</div>
+    <div className="pg-picture">{round.image ? <img src={round.image} decoding="async" alt={`${honorific(displayNameOf(round.drawer.username, round.drawer.displayName))}이 그린 그림`} /> : <p className="pg-muted">공개된 그림이 없어요.</p>}</div>
     {result && <span>{round.word}</span>}
   </div>;
-}
-function Result({ state, user, locked, onNext, demo }: { state: CatchmindState; user: User; locked: boolean; onNext: () => void; demo: boolean }) {
+}, (before, after) => before.demo === after.demo && before.result === after.result
+  && before.round.id === after.round.id && before.round.image === after.round.image
+  && before.round.word === after.round.word && before.round.publishedAt === after.round.publishedAt
+  && JSON.stringify(before.round.drawer) === JSON.stringify(after.round.drawer));
+function Result({ state, user, locked, onNext, onSkip, canSkip, demo }: {
+  state: CatchmindState; user: User; locked: boolean; onNext: () => void; onSkip: () => void; canSkip: boolean; demo: boolean;
+}) {
   const displayNameOf = useDisplayNameLookup();
   const round = state.round!;
   const winner = useRef<HTMLDivElement>(null);
@@ -69,7 +74,7 @@ function Result({ state, user, locked, onNext, demo }: { state: CatchmindState; 
   const nextPlayer = <>
     {state.turn && <Avatar username={state.turn.username} userId={state.turn.id} photoVersion={state.turn.photoVersion} artKey={demo ? undefined : state.turn.character} size={42} />}
     <div><small>다음 출제</small><strong>{state.turn ? honorific(displayNameOf(state.turn.username, state.turn.displayName)) : "차례를 기다리고 있어요"}</strong></div>
-    {state.canNext ? <><span>다음 그림 그리기</span><Chevron direction="right" size={20} color="#ADA4B3" /></> : <span>다음 그림을 기다려 주세요</span>}
+    {state.canNext ? <><span>다음 그림 그리기</span><Chevron direction="right" size={20} color="#ADA4B3" /></> : <span>{state.turn ? `${honorific(displayNameOf(state.turn.username, state.turn.displayName))}의 차례를 기다리고 있어요` : "다음 출제자를 기다리고 있어요"}</span>}
   </>;
   return <>
     <Picture round={round} result demo={demo} />
@@ -77,10 +82,11 @@ function Result({ state, user, locked, onNext, demo }: { state: CatchmindState; 
       <Avatar username={round.winner.username} userId={round.winner.id} photoVersion={round.winner.photoVersion} artKey={demo ? undefined : round.winner.character} size={64} />
       <div><small>{round.winner.id === user.id ? "내가 맞힘" : "맞힌 사람"}</small><strong>{honorific(displayNameOf(round.winner.username, round.winner.displayName))}</strong></div>
       <div className="pg-winner-points"><b>+{CATCHMIND_RULES.score}점</b><b>+{CATCHMIND_RULES.gold}G</b></div>
-    </div> : <div className="pg-ended" role="status"><strong>{round.endReason === "manual" ? "출제자가 판을 마쳤어요" : "아무도 맞히지 못했어요"}</strong><span>보상 없이 판이 끝났어요. 출제자가 다음 그림을 그려요.</span></div>}
+    </div> : <div className="pg-ended" role="status"><strong>{round.endReason === "manual" ? "출제자가 판을 마쳤어요" : "아무도 맞히지 못했어요"}</strong><span>보상 없이 판이 끝났어요. {state.turn ? `다음은 ${honorific(displayNameOf(state.turn.username, state.turn.displayName))}이 그려요.` : "다음 출제자를 기다리고 있어요."}</span></div>}
     <FailCount round={round} />
     <GuessLog round={round} />
     {state.canNext ? <button className="pg-card pg-next-player" aria-label="다음 그림 그리기" disabled={locked} onClick={onNext}>{nextPlayer}</button> : <div className="pg-card pg-next-player">{nextPlayer}</div>}
+    {canSkip && <button className="secondary-button cm-skip-button" disabled={locked} onClick={onSkip}>차례 넘기기</button>}
   </>;
 }
 
@@ -98,20 +104,35 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
   const round = game.state?.round ?? null;
   const locked = acting || game.busy || Boolean(game.pending);
   const isDrawer = round?.drawer.id === user.id && user.role === "player";
+  const pollInterval = round?.status === "draft" && isDrawer ? null
+    : round?.status === "open" ? CATCHMIND_RULES.pollIntervalMs : CATCHMIND_RULES.idlePollIntervalMs;
+  useEffect(() => {
+    if (document.visibilityState === "visible" && navigator.onLine) void latest.current.refresh().catch(() => {});
+  }, []);
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState === "visible") void latest.current.refresh().catch(() => {});
+      if (document.visibilityState === "visible" && navigator.onLine) void latest.current.refresh().catch(() => {});
     };
-    refresh();
-    const timer = window.setInterval(refresh, CATCHMIND_RULES.pollIntervalMs);
+    // Drawing has no interval. A visibility/online return still verifies the
+    // session so a cookie switch cannot leave another account's private prompt.
+    const timer = pollInterval === null ? undefined : window.setInterval(refresh, pollInterval);
     document.addEventListener("visibilitychange", refresh);
     window.addEventListener("online", refresh);
     return () => {
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearInterval(timer);
       document.removeEventListener("visibilitychange", refresh);
       window.removeEventListener("online", refresh);
     };
-  }, []);
+  }, [pollInterval]);
+  const [skipReady, setSkipReady] = useState(false);
+  useEffect(() => {
+    setSkipReady(false);
+    if (!game.state?.skipAvailableAt) return;
+    const wait = Date.parse(game.state.skipAvailableAt) - game.serverNow();
+    if (wait <= 0) { setSkipReady(true); return; }
+    const timer = window.setTimeout(() => setSkipReady(true), wait);
+    return () => window.clearTimeout(timer);
+  }, [game.state?.skipAvailableAt, game.state?.turn?.id, game.serverNow]);
   useEffect(() => { setAnswer(""); }, [round?.id]);
   useEffect(() => { if (!game.state?.canEnd) confirmation.current?.close(); }, [game.state?.canEnd]);
   useEffect(() => {
@@ -137,12 +158,15 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
     if (!game.state?.canGuess || locked || !answer.replace(/\s/g, "")) return;
     if (await run("guess", { ...mutation(), answer })) setAnswer("");
   }
-  async function publish(image: string) {
-    if (!round || !game.state?.canPublish || locked) throw new Error("그림을 올릴 차례인지 확인해 주세요.");
+  const publish = useCallback(async (image: string) => {
+    const current = latest.current;
+    const shown = current.state?.round;
+    if (!shown || shown.id !== round?.id || shown.wordVersion !== round.wordVersion || !current.state?.canPublish
+      || actionInFlight.current || current.busy || current.pending) throw new Error("그림을 올릴 차례인지 확인해 주세요.");
     // Preserve the round and prompt shown by this canvas, even if polling finds a new one.
-    await game.mutate("publish", { ...mutation(), wordVersion: round.wordVersion, image });
+    await current.mutate("publish", { requestId: crypto.randomUUID(), roundId: shown.id, wordVersion: shown.wordVersion, image });
     toast("그림을 올렸어요");
-  }
+  }, [round?.id, round?.wordVersion]);
   const state = game.state;
   const galleryHref = `#${demo ? "/preview" : ""}/play/catchmind/gallery`;
   return <section className="preview-game pg-catchmind">
@@ -166,7 +190,8 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
         <DrawingCanvas key={`${round.id}:${round.wordVersion}`} disabled={locked || !state.canPublish} publishing={game.busy && game.pending?.action === "publish"} onPublish={publish} />
       </> : <div className="pg-card cm-waiting">
         <Avatar username={round.drawer.username} userId={round.drawer.id} photoVersion={round.drawer.photoVersion} artKey={demo ? undefined : round.drawer.character} size={64} />
-        <h2>{honorific(displayNameOf(round.drawer.username, round.drawer.displayName))}이 그림을 그리고 있어요</h2><p>그림이 올라오면 함께 맞혀 보세요.</p>
+        {state.canNext ? <><h2>출제자가 자리를 비웠어요</h2><p>차례를 이어서 새 그림을 그려 주세요.</p><button className="primary-button" disabled={locked} onClick={() => void run("next", mutation())}>다음 그림 그리기</button></>
+          : <><h2>{honorific(displayNameOf(round.drawer.username, round.drawer.displayName))}이 그림을 그리고 있어요</h2><p>그림이 올라오면 함께 맞혀 보세요.</p></>}
       </div>)}
       {state && round?.status === "open" && <>
         {isDrawer && <div className="pg-prompt"><span>제시어</span><strong>{round.word}</strong></div>}
@@ -179,12 +204,22 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
           <button type="submit" disabled={locked || !state.canGuess || !answer.replace(/\s/g, "")}>{acting || game.busy ? "확인 중…" : "정답"}</button>
         </form> : isDrawer && <p className="subtle-note">내가 낸 그림에는 답할 수 없어요. 친구들의 답을 기다려 주세요.</p>}
       </>}
-      {state && round?.status === "ended" && <Result key={round.id} state={state} user={user} locked={locked} demo={demo} onNext={() => void run("next", mutation())} />}
+      {state && round?.status === "ended" && <Result key={round.id} state={state} user={user} locked={locked} demo={demo}
+        canSkip={Boolean(user.role === 'player' && state.turn && state.turn.id !== user.id && (state.canSkip || skipReady))}
+        onSkip={() => { if (state.turn) void run("skip", { ...mutation(), expectedTurnId: state.turn.id }); }}
+        onNext={() => void run("next", mutation())} />}
       {state?.canEnd && <button className="text-button cm-end-button" disabled={locked} onClick={() => setConfirming(true)}>이번 판 끝내기</button>}
       <PreviousCatchmindRound round={state?.previousRound ?? null} demo={demo} galleryHref={galleryHref} loading={!state && game.loading} />
+      <details className="pg-card cm-help"><summary>게임 방법</summary><ul>
+        <li>{CATCHMIND_RULES.hintAfter}번째 오답에 첫 글자 힌트가 나오고, {CATCHMIND_RULES.endAfter}번째 오답이면 보상 없이 즉시 끝나요.</li>
+        <li>첫 정답자는 {CATCHMIND_RULES.score}점과 {CATCHMIND_RULES.gold}G를 받아요.</li>
+        <li>정답·오답·수동 종료 모두 활성 플레이어의 로그인 아이디 순서대로 다음 출제를 맡아요.</li>
+        <li>다음 출제자가 {CATCHMIND_RULES.skipAfterMs / 60000}분 안에 시작하지 않으면 다른 플레이어가 차례를 넘길 수 있어요.</li>
+        <li>보여 준 제시어와 바꾸기 전 단어는 다시 나오지 않아요. 전체 제시어를 다 쓰면 새로 시작해요.</li>
+      </ul></details>
     </div>
     <dialog className="cm-confirmation" ref={confirmation} aria-labelledby="cm-end-title" aria-describedby="cm-end-description" onClose={event => { if (!event.currentTarget.open) setConfirming(false); }} onClick={event => { if (event.target === event.currentTarget && !locked) event.currentTarget.close(); }}>
-      <h2 id="cm-end-title">이번 판을 끝낼까요?</h2><p id="cm-end-description">정답을 공개하고 보상 없이 판을 끝내요. 다음 그리기 차례는 나에게 남아요.</p>
+      <h2 id="cm-end-title">이번 판을 끝낼까요?</h2><p id="cm-end-description">정답을 공개하고 보상 없이 판을 끝내요. {state?.nextDrawer ? `다음 그리기 차례는 ${honorific(displayNameOf(state.nextDrawer.username, state.nextDrawer.displayName))}에게 넘어가요.` : "다음 출제자를 기다려요."}</p>
       <button className="primary-button" disabled={locked || !state?.canEnd} onClick={() => { confirmation.current?.close(); void run("end", mutation()); }}>판 종료</button>
       <button className="text-button" onClick={() => confirmation.current?.close()}>취소</button>
     </dialog>

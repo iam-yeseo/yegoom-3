@@ -176,6 +176,9 @@ export interface CatchmindRound {
 }
 export interface CatchmindState {
   round: CatchmindRound | null; turn: CatchmindPlayer | null;
+  /** Successor of the current drawer, used before an end confirmation. */
+  nextDrawer: CatchmindPlayer | null;
+  canSkip: boolean; skipAvailableAt: string | null;
   previousRound: CatchmindGalleryRound | null;
   canClaim: boolean; canReroll: boolean; canPublish: boolean; canGuess: boolean; canEnd: boolean; canNext: boolean;
 }
@@ -191,13 +194,16 @@ export interface CatchmindSummary {
   drawer: CatchmindPlayer | null; turn: CatchmindPlayer | null; wrongCount: number;
   winner: CatchmindPlayer | null; answer: string | null;
 }
-export interface CatchmindResponse { catchmind: CatchmindState; serverTime: string }
-export type CatchmindAction = 'claim' | 'reroll' | 'publish' | 'guess' | 'end' | 'next';
-export interface CatchmindMutationInput { requestId: string; roundId: string | null }
+export interface CatchmindResponse { catchmind: CatchmindState; version: number; viewerId: string; serverTime: string }
+export interface CatchmindUnchanged { unchanged: true; version: number; viewerId: string; serverTime: string }
+export type CatchmindPollResponse = CatchmindResponse | CatchmindUnchanged;
+export type CatchmindAction = 'claim' | 'reroll' | 'publish' | 'guess' | 'end' | 'next' | 'skip';
+export interface CatchmindMutationInput { requestId: string; roundId: string | null; expectedUserId?: string }
 export interface CatchmindRerollInput extends CatchmindMutationInput { wordVersion: number }
 export interface CatchmindPublishInput extends CatchmindRerollInput { image: string }
 export interface CatchmindGuessInput extends CatchmindMutationInput { answer: string }
-export type CatchmindInput = CatchmindMutationInput | CatchmindRerollInput | CatchmindPublishInput | CatchmindGuessInput;
+export interface CatchmindSkipInput extends CatchmindMutationInput { expectedTurnId: string }
+export type CatchmindInput = CatchmindMutationInput | CatchmindRerollInput | CatchmindPublishInput | CatchmindGuessInput | CatchmindSkipInput;
 
 export interface ClawSummary {
   coins: number; freeCoins: number; purchasedCoins: number;

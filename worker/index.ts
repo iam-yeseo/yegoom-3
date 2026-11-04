@@ -8,7 +8,7 @@ import { DUMMY_HASH, hashPassword, hashToken, randomToken, verifyPassword } from
 import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readKujiSummary, settleDueLotto, ShopError, shopRoute } from './shop';
-import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary } from './catchmind';
+import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary, readRemainingWords } from './catchmind';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
 import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
@@ -569,8 +569,8 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
   return json({ game: await readGame(env.DB, user, id, refreshedAt) });
 }
 async function adminState(db: D1Database, now: Date): Promise<AdminState> {
-  const [games, claw, changes] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db)]);
-  return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, serverTime: now.toISOString() };
+  const [games, claw, changes, catchmindWordsRemaining] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db), readRemainingWords(db)]);
+  return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, catchmindWordsRemaining, serverTime: now.toISOString() };
 }
 async function api(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -691,7 +691,11 @@ async function api(request: Request, env: Env): Promise<Response> {
     if (request.method === 'POST' && user.role !== 'player') throw new HttpError(403, 'CANNOT_PLAY', '플레이어만 캐치마인드에 참여할 수 있어요.');
     const maxBytes = catchmindMatch[1] === 'publish' ? Math.ceil(CATCHMIND_RULES.maxImageBytes / 3) * 4 + 4096 : 4096;
     const input = request.method === 'POST' ? await body(request, maxBytes) : undefined;
-    return json(await catchmindRoute(env.DB, user, catchmindMatch[1], request.method, input, new Date()));
+    const rawSince = request.method === 'GET' && !catchmindMatch[1] ? url.searchParams.get('since') : null;
+    if (rawSince !== null && (!/^\d{1,16}$/.test(rawSince) || !Number.isSafeInteger(Number(rawSince)))) {
+      throw new HttpError(400, 'INVALID_VERSION', '판 버전을 확인해 주세요.');
+    }
+    return json(await catchmindRoute(env.DB, user, catchmindMatch[1], request.method, input, new Date(), rawSince === null ? undefined : Number(rawSince)));
   }
   if (url.pathname === '/api/shop' || url.pathname.startsWith('/api/shop/')) {
     if (request.method === 'POST' && user.role !== 'player') throw new HttpError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');

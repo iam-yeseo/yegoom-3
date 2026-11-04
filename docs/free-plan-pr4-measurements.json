@@ -1,0 +1,550 @@
+{
+  "measuredOn": "2026-11-04",
+  "baseCommit": "4ccc82d",
+  "source": "tests/integration.test.ts: catchmind request costs / records authenticated read and mutation costs across a complete drawing round",
+  "environment": {
+    "node": "v24.19.0",
+    "miniflare": "4.20260730.0",
+    "database": "local D1/workerd; not remote production measurements"
+  },
+  "commands": {
+    "smallFixture": "FREE_PLAN_CATCHMIND_MEASUREMENTS=/tmp/yegoom-pr4-after.json npm test -- tests/integration.test.ts -t \"records authenticated read and mutation costs\"",
+    "growthFixture": "FREE_PLAN_MEASUREMENTS=/tmp/yegoom-pr4-bootstrap-after.json npm test -- tests/integration.test.ts -t \"bounds authenticated polling\""
+  },
+  "fixture": {
+    "frozenKstDate": "2026-10-30",
+    "clockKst": "09:00",
+    "activePlayers": 3,
+    "administrators": 1,
+    "priorLedgers": "empty",
+    "description": "Same sequence: idle, claim, reroll, publish, one wrong guess, saved retry, manual end and next draft. All requests include authentication. Next uses the authoritative returned turn: min before, siwon after because rotation changed. Word pool is initially empty; reroll and next costs here represent the start of a cycle. Choosing a word near exhaustion additionally reads up to 400 consumed-word rows.",
+    "beforeArtifact": "Isolated base commit4ccc82d with identical test instrumentation and fixture only. Baseline ignores since and returns full state.",
+    "afterProtocol": "since from full response version; unchanged is checked at <=2 SQL statements including auth and zero writes."
+  },
+  "counting": {
+    "prepares": "DB.prepare calls",
+    "queries": "Executed SQL statements including each batch statement",
+    "bindingCalls": "One all/first/run call or one batch call",
+    "rowsRead": "Sum of actual D1 meta.rows_read",
+    "rowsWritten": "Sum of D1 meta.rows_written, including trigger/index effects"
+  },
+  "before": [
+    {
+      "label": "bootstrap idle",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 23,
+      "rowsWritten": 0
+    },
+    {
+      "label": "GET idle",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST claim",
+      "prepares": 12,
+      "queries": 12,
+      "bindingCalls": 10,
+      "rowsRead": 19,
+      "rowsWritten": 9
+    },
+    {
+      "label": "GET draft peer",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST reroll",
+      "prepares": 11,
+      "queries": 11,
+      "bindingCalls": 10,
+      "rowsRead": 15,
+      "rowsWritten": 5
+    },
+    {
+      "label": "POST publish",
+      "prepares": 11,
+      "queries": 11,
+      "bindingCalls": 10,
+      "rowsRead": 16,
+      "rowsWritten": 6
+    },
+    {
+      "label": "GET open peer",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "label": "GET unchanged open peer",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 7,
+      "rowsWritten": 0
+    },
+    {
+      "label": "bootstrap open",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 26,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST wrong guess",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 10,
+      "rowsRead": 35,
+      "rowsWritten": 10
+    },
+    {
+      "label": "POST saved guess retry",
+      "prepares": 7,
+      "queries": 7,
+      "bindingCalls": 7,
+      "rowsRead": 10,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST manual end",
+      "prepares": 11,
+      "queries": 11,
+      "bindingCalls": 10,
+      "rowsRead": 19,
+      "rowsWritten": 6
+    },
+    {
+      "label": "GET ended peer",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 9,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST next",
+      "prepares": 13,
+      "queries": 13,
+      "bindingCalls": 11,
+      "rowsRead": 23,
+      "rowsWritten": 9
+    },
+    {
+      "label": "GET next draft peer",
+      "prepares": 7,
+      "queries": 7,
+      "bindingCalls": 7,
+      "rowsRead": 9,
+      "rowsWritten": 0
+    }
+  ],
+  "after": [
+    {
+      "label": "bootstrap idle",
+      "prepares": 15,
+      "queries": 15,
+      "bindingCalls": 15,
+      "rowsRead": 23,
+      "rowsWritten": 0
+    },
+    {
+      "label": "GET idle",
+      "prepares": 3,
+      "queries": 3,
+      "bindingCalls": 3,
+      "rowsRead": 6,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST claim",
+      "prepares": 13,
+      "queries": 13,
+      "bindingCalls": 10,
+      "rowsRead": 32,
+      "rowsWritten": 12
+    },
+    {
+      "label": "GET draft peer",
+      "prepares": 5,
+      "queries": 5,
+      "bindingCalls": 5,
+      "rowsRead": 13,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST reroll",
+      "prepares": 12,
+      "queries": 12,
+      "bindingCalls": 10,
+      "rowsRead": 29,
+      "rowsWritten": 8
+    },
+    {
+      "label": "POST publish",
+      "prepares": 10,
+      "queries": 10,
+      "bindingCalls": 9,
+      "rowsRead": 28,
+      "rowsWritten": 7
+    },
+    {
+      "label": "GET open peer",
+      "prepares": 5,
+      "queries": 5,
+      "bindingCalls": 5,
+      "rowsRead": 13,
+      "rowsWritten": 0
+    },
+    {
+      "label": "GET unchanged open peer",
+      "prepares": 2,
+      "queries": 2,
+      "bindingCalls": 2,
+      "rowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "label": "bootstrap open",
+      "prepares": 17,
+      "queries": 17,
+      "bindingCalls": 17,
+      "rowsRead": 26,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST wrong guess",
+      "prepares": 13,
+      "queries": 13,
+      "bindingCalls": 9,
+      "rowsRead": 44,
+      "rowsWritten": 10
+    },
+    {
+      "label": "POST saved guess retry",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 16,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST manual end",
+      "prepares": 10,
+      "queries": 10,
+      "bindingCalls": 9,
+      "rowsRead": 39,
+      "rowsWritten": 8
+    },
+    {
+      "label": "GET ended peer",
+      "prepares": 5,
+      "queries": 5,
+      "bindingCalls": 5,
+      "rowsRead": 15,
+      "rowsWritten": 0
+    },
+    {
+      "label": "POST next",
+      "prepares": 14,
+      "queries": 14,
+      "bindingCalls": 11,
+      "rowsRead": 39,
+      "rowsWritten": 12
+    },
+    {
+      "label": "GET next draft peer",
+      "prepares": 6,
+      "queries": 6,
+      "bindingCalls": 6,
+      "rowsRead": 15,
+      "rowsWritten": 0
+    }
+  ],
+  "bootstrapGrowth": {
+    "baselineSource": "docs/free-plan-pr3-measurements.json: after",
+    "fixture": {
+      "frozenKstDate": "2026-10-30",
+      "clockKst": [
+        "09:00",
+        "18:00"
+      ],
+      "activePlayers": 3,
+      "administrators": 1,
+      "currentRounds": 3,
+      "currentPredictions": 6,
+      "currentWeekScoreRows": 45,
+      "historicalRowsPerLedger": [
+        100,
+        10000
+      ],
+      "historicalLedgers": [
+        "ledger gold",
+        "inventory_ledger tickets"
+      ],
+      "historicalDate": "2026-01-01",
+      "lateDraw": "18:00 fixture has already created current lotto_draws row; no payments due",
+      "authentication": "included in every request",
+      "catchmindOpen": "one published round, no guesses"
+    },
+    "comparison": {
+      "samples": 12,
+      "allCountersEqual": true
+    },
+    "before": [
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 159,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 159,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 161,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 161,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 164,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 160,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 160,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 163,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 165,
+        "rowsWritten": 0
+      }
+    ],
+    "after": [
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 159,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 159,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 161,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 161,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "09:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 164,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 160,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 160,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 100,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 163,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle catchmind)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, idle repeated)",
+        "prepares": 15,
+        "queries": 15,
+        "bindingCalls": 15,
+        "rowsRead": 162,
+        "rowsWritten": 0
+      },
+      {
+        "clockKst": "18:00",
+        "historicalRowsPerLedger": 10000,
+        "route": "bootstrap (home/ranking, open catchmind)",
+        "prepares": 17,
+        "queries": 17,
+        "bindingCalls": 17,
+        "rowsRead": 165,
+        "rowsWritten": 0
+      }
+    ]
+  }
+}

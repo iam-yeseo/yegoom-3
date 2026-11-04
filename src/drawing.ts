@@ -8,32 +8,43 @@ export function floodFill(image: PixelImage, startX: number, startY: number, col
   const x = Math.floor(startX), y = Math.floor(startY);
   if (x < 0 || x >= width || y < 0 || y >= height) return 0;
   const start = (y * width + x) * 4;
-  const target = Array.from(data.slice(start, start + 4));
-  if (color.every((channel, index) => channel === target[index])) return 0;
+  const red = data[start], green = data[start + 1], blue = data[start + 2], alpha = data[start + 3];
+  const [r, g, b, a] = color;
+  if (r === red && g === green && b === blue && a === alpha) return 0;
+  const redLow = red - tolerance, redHigh = red + tolerance;
+  const greenLow = green - tolerance, greenHigh = green + tolerance;
+  const blueLow = blue - tolerance, blueHigh = blue + tolerance;
+  const alphaLow = alpha - tolerance, alphaHigh = alpha + tolerance;
   const visited = new Uint8Array(width * height);
-  const matches = (px: number, py: number) => {
-    const pixel = py * width + px, offset = pixel * 4;
-    return !visited[pixel] && target.every((channel, index) => Math.abs(data[offset + index] - channel) <= tolerance);
+  const matches = (pixel: number) => {
+    const offset = pixel * 4;
+    return !visited[pixel]
+      && data[offset] >= redLow && data[offset] <= redHigh
+      && data[offset + 1] >= greenLow && data[offset + 1] <= greenHigh
+      && data[offset + 2] >= blueLow && data[offset + 2] <= blueHigh
+      && data[offset + 3] >= alphaLow && data[offset + 3] <= alphaHigh;
   };
-  const stack: [number, number][] = [[x, y]];
+  // Flat pixel indices avoid allocating coordinate/channel arrays in the loop.
+  const stack: number[] = [y * width + x];
   let changed = 0;
   while (stack.length) {
-    const [seedX, row] = stack.pop()!;
-    if (!matches(seedX, row)) continue;
-    let left = seedX;
-    while (left > 0 && matches(left - 1, row)) left--;
+    const seed = stack.pop()!;
+    if (!matches(seed)) continue;
+    const row = Math.floor(seed / width), rowStart = row * width, rowEnd = rowStart + width;
+    let left = seed;
+    while (left > rowStart && matches(left - 1)) left--;
     let above = false, below = false;
-    for (let col = left; col < width && matches(col, row); col++) {
-      const pixel = row * width + col, offset = pixel * 4;
-      visited[pixel] = 1;
-      if (color.some((channel, index) => channel !== data[offset + index])) {
-        data.set(color, offset);
+    for (let current = left; current < rowEnd && matches(current); current++) {
+      const offset = current * 4;
+      visited[current] = 1;
+      if (data[offset] !== r || data[offset + 1] !== g || data[offset + 2] !== b || data[offset + 3] !== a) {
+        data[offset] = r; data[offset + 1] = g; data[offset + 2] = b; data[offset + 3] = a;
         changed++;
       }
-      const nextAbove = row > 0 && matches(col, row - 1);
-      const nextBelow = row < height - 1 && matches(col, row + 1);
-      if (nextAbove && !above) stack.push([col, row - 1]);
-      if (nextBelow && !below) stack.push([col, row + 1]);
+      const nextAbove = row > 0 && matches(current - width);
+      const nextBelow = row + 1 < height && matches(current + width);
+      if (nextAbove && !above) stack.push(current - width);
+      if (nextBelow && !below) stack.push(current + width);
       above = nextAbove;
       below = nextBelow;
     }

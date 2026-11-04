@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { CatchmindGalleryResponse, CatchmindGalleryRound, CatchmindPlayer } from "../../shared/types";
 import { useCatchmind } from "../catchmind";
 import { honorific, Avatar, Chevron, Toolbar, useDisplayNameLookup } from "../components/UI";
@@ -111,7 +111,7 @@ function PreviousRoundModal({ initial, demo, onClose }: { initial: CatchmindGall
   return <GalleryModal selected={selected} rounds={rounds} gallery={gallery} demo={demo} onSelect={setSelected} onClose={onClose} />;
 }
 
-export function PreviousCatchmindRound({ round, demo, galleryHref, loading }: {
+export const PreviousCatchmindRound = memo(function PreviousCatchmindRound({ round, demo, galleryHref, loading }: {
   round: CatchmindGalleryRound | null; demo: boolean; galleryHref: string; loading: boolean;
 }) {
   const [selected, setSelected] = useState<CatchmindGalleryRound | null>(null);
@@ -119,14 +119,14 @@ export function PreviousCatchmindRound({ round, demo, galleryHref, loading }: {
     <div className="cm-history-head"><h2>지난 판</h2><a className="text-button" href={galleryHref}>갤러리 보기</a></div>
     {round ? <>
       <button className="cm-previous-open" aria-label={`지난 판 제 ${round.number}판 크게 보기`} onClick={() => setSelected(round)}>
-        <img src={round.image} width={100} height={100} loading="lazy" alt={`제 ${round.number}판 그림`} />
+        <img src={round.image} width={100} height={100} loading="lazy" decoding="async" alt={`제 ${round.number}판 그림`} />
         <span><strong>제 {round.number}판</strong><span>{round.answer}</span><small>그림 크게 보기 <Chevron direction="right" size={14} /></small></span>
       </button>
       <Details round={round} demo={demo} />
     </> : <p className="cm-gallery-empty" role="status">{loading ? "지난 판을 불러오는 중…" : emptyMessage}</p>}
     {selected && <PreviousRoundModal initial={selected} demo={demo} onClose={() => setSelected(null)} />}
   </section>;
-}
+});
 
 export function CatchmindGallery({ demo, gold, onBack }: { demo: boolean; gold: number; onBack: () => void }) {
   const gallery = useGallery();
@@ -137,7 +137,7 @@ export function CatchmindGallery({ demo, gold, onBack }: { demo: boolean; gold: 
       <p className="cm-gallery-intro">함께 그린 그림과 정답을 모았어요.</p>
       <div className="cm-gallery-grid" aria-label="완성된 그림">
         {gallery.rounds.map(round => <button key={round.id} className="cm-gallery-tile" onClick={() => setSelected(round)} aria-label={`${round.number}판 · ${round.winner ? "맞힌 판" : "못 맞힌 판"} 크게 보기`}>
-          <img src={round.image} alt={`제 ${round.number}판 그림`} width={160} height={160} loading="lazy" />
+          <img src={round.image} alt={`제 ${round.number}판 그림`} width={160} height={160} loading="lazy" decoding="async" />
           <span className="cm-gallery-number">{round.number}판</span>
           <span className={`cm-gallery-outcome ${round.winner ? "correct" : "missed"}`} aria-hidden="true">{round.winner ? "✓ 맞힘" : "− 못 맞힘"}</span>
         </button>)}
