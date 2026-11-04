@@ -2,6 +2,7 @@ import type { ArtKey } from './characters';
 import type { KUJI_RULES, SPEETTO_RULES, SLOT_RULES } from './balance';
 import type { Board, Doll, AttemptResult } from './claw-physics';
 import type { PredictionRules } from './admin';
+import type { RankingPeriod, ScoreGame } from './ranking-periods';
 
 export type GameId = 'wake' | 'offwork' | 'luck';
 export type Role = 'player' | 'admin';
@@ -237,4 +238,24 @@ export interface ClawResult {
 export interface ClawResponse extends ClawState {
   result?: ClawResult; replayed?: boolean;
   purchase?: { requestId: string; quantity: 1 | 5; cost: number };
+}
+
+export interface RankingStanding {
+  userId: string; username: string; displayName: string;
+  photoVersion: number | null; character: ArtKey; score: number;
+}
+/** The viewer's own points, grouped by weekday (week), week of month (month) or game (day). */
+export interface RankingBucket { key: string; label: string; score: number; current: boolean; future: boolean }
+export interface RankingHistoryEntry {
+  id: string; userId: string; username: string; displayName: string; game: ScoreGame; label: string;
+  amount: number; createdAt: string; gameDate: string;
+}
+export interface RankingResponse {
+  period: RankingPeriod;
+  range: { start: string; end: string };
+  standings: RankingStanding[];
+  buckets: RankingBucket[];
+  history: RankingHistoryEntry[];
+  nextBefore: string | null;
+  serverTime: string;
 }

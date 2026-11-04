@@ -990,6 +990,12 @@
 .ranking-hero {
   background: linear-gradient(180deg, #fff1c2 0%, #f6edfb 70%, #fff9ee 100%);
 }
+.ranking-period {
+  padding: 0 20px 12px;
+}
+.ranking-period .segmented {
+  background: rgba(255, 255, 255, 0.7);
+}
 .ranking-week {
   display: flex;
   justify-content: center;
@@ -1066,6 +1072,22 @@
   font-size: 14px;
   font-weight: 700;
   margin-top: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 4px;
+}
+.podium-name > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.podium-name .avatar {
+  flex: none;
 }
 .podium-block strong {
   font-size: 24px;
@@ -1131,8 +1153,36 @@
   font-weight: 800;
   color: #3a3340;
 }
-.last-week {
+.last-week, .ranking-table {
   padding: 16px 18px 8px;
+}
+.ranking-table .card-head {
+  padding-bottom: 6px;
+}
+.ranking-table .list-row > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ranking-history {
+  padding: 16px 18px 10px;
+}
+.ranking-history .history-row .avatar {
+  flex: none;
+}
+.ranking-history-game {
+  font-weight: 600;
+  color: #7c7383;
+}
+.ranking-history .history-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ranking-more {
+  display: block;
+  margin: 6px auto 4px;
 }
 .last-week .card-head {
   padding-bottom: 6px;

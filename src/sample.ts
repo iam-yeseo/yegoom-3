@@ -91,7 +91,6 @@ export const previewLastWeek = [
   { username: "yeseo", score: 470 },
   { username: "min", score: 401 },
 ];
-export const previewDaily = [62, 88, 45, 105, 155, 0, 0];
 export const previewGold = 12480;
 
 /** The preview's player also demonstrates the luck author's photo upload. */

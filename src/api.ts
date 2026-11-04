@@ -11,8 +11,9 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput,
-  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput,
+  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse,
 } from "../shared/types";
+import type { RankingPeriod } from "../shared/ranking-periods";
 import type { ArtKey } from "../shared/characters";
 import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/admin";
 
@@ -94,6 +95,7 @@ export const api = {
     body: JSON.stringify({ roundDate }),
   }),
   bootstrap: () => request<BootstrapResponse>("/bootstrap"),
+  ranking: (period: RankingPeriod, before?: string) => request<RankingResponse>(`/ranking?period=${period}${before ? `&before=${encodeURIComponent(before)}` : ""}`),
   changePassword: (input: PasswordChangeInput) => request<{ ok: true }>("/me/password", {
     method: "PUT", body: JSON.stringify(input),
   }),

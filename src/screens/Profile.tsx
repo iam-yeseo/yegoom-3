@@ -21,17 +21,8 @@ import { anim, pop, reduced, useOnChange } from "../motion";
 import { formatTime } from "../format";
 import { PhotoPicker } from "../components/PhotoPicker";
 import { PasswordSheet } from "../components/PasswordSheet";
+import { HistoryRow, reasonIcon } from "../components/HistoryRow";
 
-/** Picks an icon for a ledger reason by the game it mentions. */
-function reasonIcon(reason: string): ArtKey {
-  if (reason.includes("기상")) return "moon";
-  if (reason.includes("퇴근")) return "manta";
-  if (reason.includes("행운") || reason.includes("주식")) return "monkey";
-  if (reason.includes("캐치") || reason.includes("로또")) return "bread";
-  if (reason.includes("쿠지") || reason.includes("스피또")) return "drop";
-  if (reason.includes("뽑기")) return "cat";
-  return "axolotl";
-}
 function dateLabel(iso: string) {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-US", {
@@ -265,20 +256,8 @@ export function Profile({
               return (
                 <div key={entry.id}>
                   {header && <h3 className="history-date">{date}</h3>}
-                  <div className="history-row">
-                    <span className="history-icon" style={{ background: art[icon].tint }}>
-                      <img className="character" src={artSrc(icon)} alt="" />
-                    </span>
-                    <span className="history-text">
-                      <strong>{entry.reason}</strong>
-                      <small>{formatTime(entry.createdAt)}</small>
-                    </span>
-                    <b className={entry.amount > 0 ? "gain" : "loss"}>
-                      {entry.amount > 0 ? "+" : "−"}
-                      {Math.abs(entry.amount).toLocaleString("ko-KR")}
-                      {currency === "gold" ? "G" : "점"}
-                    </b>
-                  </div>
+                  <HistoryRow icon={icon} title={entry.reason} detail={formatTime(entry.createdAt)}
+                    amount={entry.amount} unit={currency === "gold" ? "G" : "점"} />
                 </div>
               );
             })
