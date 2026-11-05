@@ -45,12 +45,25 @@ export function notifyPrize(db: D1Database, kind: 'lotto' | 'speetto', payoutRef
       `notification:${payoutReference}`, payoutReference);
 }
 
-/** Bell badge and toast queue in one indexed read. The count stops at the cap so
- * a long absence costs the same as a short one. */
-export async function readNotificationSummary(db: D1Database, userId: string): Promise<NotificationSummary> {
-  const rows = (await db.prepare(listQuery('')).bind(...listBindings(userId), NOTIFICATION_RULES.recentLimit)
-    .all<ListRow>()).results;
-  return { unread: rows[0]?.unread ?? 0, recent: rows.map(row => view(row, row.seen_at)) };
+/** Bell badge and toast queue in one indexed read, and always one row: the
+ * capped unread count plus the notices the toast may actually show (another
+ * player's prize or an administrator's notice, from the last ten minutes).
+ * Carrying only those keeps a busy day of game and market news from pushing a
+ * win out of the window, and keeps this read the size it was before. */
+export async function readNotificationSummary(db: D1Database, userId: string, now: Date): Promise<NotificationSummary> {
+  const row = await db.prepare(`SELECT
+    (SELECT COUNT(*) FROM (SELECT 1 FROM notifications n WHERE ${VISIBLE} AND n.created_at > ${WATERMARK} LIMIT ?)) AS unread,
+    (SELECT json_group_array(json_object('id', id, 'actorId', actor_id, 'payload', json(payload_json),
+        'createdAt', created_at, 'unread', json(CASE WHEN created_at > ${WATERMARK} THEN 'true' ELSE 'false' END)))
+      FROM (SELECT n.id, n.actor_id, n.payload_json, n.created_at FROM notifications n
+        WHERE ${VISIBLE} AND n.kind IN ('lotto', 'speetto', 'admin')
+          AND n.created_at > ? AND n.created_at <= ? AND (n.actor_id IS NULL OR n.actor_id != ?)
+        ORDER BY n.created_at DESC, n.id DESC LIMIT ?)) AS recent`)
+    .bind(userId, userId, NOTIFICATION_RULES.unreadCap, userId,
+      userId, new Date(now.getTime() - NOTIFICATION_RULES.toastMs).toISOString(), now.toISOString(), userId,
+      NOTIFICATION_RULES.recentLimit)
+    .first<{ unread: number; recent: string }>();
+  return { unread: row?.unread ?? 0, recent: JSON.parse(row?.recent ?? '[]') as AppNotification[] };
 }
 
 /** Cursor `createdAt|id`, newest first, from a previous page. */

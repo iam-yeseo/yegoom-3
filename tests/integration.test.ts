@@ -1874,9 +1874,12 @@ describe('Worker and D1 integration', () => {
           expect(seen.unread).toBe(1);
           expect(seen.recent[0]).toMatchObject({ actorId: 'min', unread: true, payload: { kind: 'speetto', prize: 1500 } });
         }
-        // My own win is kept too; only the toast skips it, not the centre.
+        // bootstrap only carries what the toast may show, so my own win is not
+        // in it; the centre below still lists it.
         const own = (await (await request('/api/bootstrap', { cookie: min.cookie, instance })).json() as BootstrapResponse).notifications;
-        expect(own.recent).toHaveLength(roll === 0 ? 1 : 0);
+        expect(own.recent).toEqual([]);
+        const centre = await (await request('/api/notifications', { cookie: min.cookie, instance })).json() as NotificationsResponse;
+        expect(centre.notifications).toHaveLength(roll === 0 ? 1 : 0);
       } finally { await instance.dispose(); }
     });
 
@@ -1956,11 +1959,14 @@ describe('Worker and D1 integration', () => {
       expect(opened.notifications.every(notice => notice.unread)).toBe(true);
       expect(opened.unread).toBe(0);
       expect((await bootstrap(min.cookie)).notifications.unread).toBe(0);
-      // A new notice after the visit counts again, and the old ones stay read.
+      // A notice stamped after the visit counts again; the frozen clock keeps it
+      // out of the toast list, which only carries what has already happened.
       await addNotice('notice-after', 'siwon', now + 1000);
       const after = (await bootstrap(min.cookie)).notifications;
       expect(after.unread).toBe(1);
-      expect(after.recent.filter(notice => notice.unread).map(notice => notice.payload.kind)).toEqual(['speetto']);
+      expect(after.recent.every(notice => Date.parse(notice.createdAt) <= now)).toBe(true);
+      expect((await (await request('/api/notifications', { cookie: min.cookie })).json() as NotificationsResponse)
+        .notifications[0]).toMatchObject({ unread: true });
     });
 
     it('pages the centre oldest-ward and keeps personal notices to their owner', async () => {
@@ -2007,13 +2013,13 @@ describe('Worker and D1 integration', () => {
         VALUES ('speetto', 'all', NULL, 'siwon', '{"kind":"speetto","prize":1500}', ?, ?)`)
         .bind(new Date(now.getTime() - index * 1000).toISOString(), `recent-fixture:${index}`)));
       const observed = measuredDatabase(db, now.getTime());
-      expect((await readNotificationSummary(observed.binding, 'min')).recent).toHaveLength(5);
+      expect((await readNotificationSummary(observed.binding, 'min', now)).recent).toHaveLength(5);
       const before = observed.rowsRead(); observed.reset();
       await db.batch(Array.from({ length: 200 }, (_, index) => db.prepare(`INSERT INTO notifications
         (kind, audience, user_id, actor_id, payload_json, created_at, reference)
         VALUES ('speetto', 'all', NULL, 'siwon', '{"kind":"speetto","prize":1500}', ?, ?)`)
         .bind(new Date(now.getTime() - 600000 - index * 1000).toISOString(), `old-fixture:${index}`)));
-      const summary = await readNotificationSummary(observed.binding, 'min');
+      const summary = await readNotificationSummary(observed.binding, 'min', now);
       expect(summary.recent).toHaveLength(5);
       expect(summary.unread).toBe(99);
       expect(observed.rowsRead()).toBeLessThanOrEqual(before + 100);

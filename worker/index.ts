@@ -476,7 +476,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     readCatchmindSummary(env.DB),
     getClawSummary(env.DB, user, now.getTime()),
     getLaunchGiftState(env.DB, user, now),
-    readNotificationSummary(env.DB, user.id),
+    readNotificationSummary(env.DB, user.id, now),
     readLottoNotice(env.DB, user.id, now),
     // Until the seed secret is configured the market cannot run; the tile says "준비 중".
     FEATURES.stock && env.STOCK_SEED_SECRET ? readStockHome(env.DB, user, now.getTime()) : null,
@@ -636,7 +636,7 @@ async function api(request: Request, env: Env): Promise<Response> {
     if (url.pathname === '/api/admin/notifications') {
       if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
       await sendAdminNotification(env.DB, await body(request), now);
-      return json(await readNotificationSummary(env.DB, user.id));
+      return json(await readNotificationSummary(env.DB, user.id, now));
     }
     if (url.pathname === '/api/admin/stock/ai') {
       if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
