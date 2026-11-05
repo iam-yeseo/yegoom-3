@@ -5,6 +5,7 @@ import { STOCKS, stockInfo, type Ticker } from '../shared/stocks';
 import { kstTimestamp, tickTimes, tradesOn } from '../shared/market-calendar';
 import { dayItems, type DayItem, type StockRow } from '../shared/stock-market';
 import { subjectParticle } from '../shared/stock-news-templates';
+import { PHASES } from '../shared/stock-lifecycle';
 
 /** AI news (docs/plan-stock.md §8). The server decides every event first; the AI
  * only writes its headline and body. Anything missing, refused, malformed, over
@@ -148,6 +149,12 @@ ${STOCKS.map(stock => `- ${stock.name} (${stock.ticker}, ${stock.sector}): ${sto
 - denied: 앞의 찌라시가 사실이 아니라는 후속 보도. relatedTo의 찌라시와 이야기가 이어지게.
 - mosquito: 예굼 사냥팀의 모기 사냥 결과(성공 up / 실패 down).
 - game: 멤버의 게임 결과(facts에 사실이 있다). facts의 시각·점수는 그대로 써도 된다.
+- feature: 주가와 상관없는 회사 분위기 기사(direction은 flat). 사내 풍경, 직원들 이야기처럼 가볍게 쓴다.
+
+## 회사 국면(phase)
+- 각 회사는 성장기 → 전성기 → 정체기 → 위기 → 회복기 → 신사업 도전 같은 국면을 며칠~2주씩 지난다.
+- 사건마다 그 회사의 지금 국면이 주어진다. 국면에 맞는 분위기로, 최근 기사와 이야기가 이어지게 쓴다(예: 위기에는 수습하는 이야기, 회복기에는 다시 살아나는 이야기).
+- 국면 이름("성장기", "위기" 등)이나 앞으로의 전망을 기사에 직접 쓰지 않는다. 독자는 기사 흐름으로만 짐작해야 한다.
 
 ## 예시
 {"eventId":"news:2026-11-05:0","headline":"SW전자, 130번 접히는 휴대폰 공개","body":"129번의 벽이 드디어 깨졌다. 다 접으면 각설탕만 해져서 주머니가 남는다는 평가다."}
@@ -200,26 +207,26 @@ async function callAi(db: D1Database, writers: AiWriters, date: string, system: 
 }
 
 const sizeOf = (bp: number) => Math.abs(bp) >= 600 ? '크게' : Math.abs(bp) >= 300 ? '보통' : '작게';
-interface MorningEvent { id: string; newsId: string; ticker: Ticker; kind: string; effectBp: number; publishAt: number; facts?: unknown; relatedTo?: string }
+interface MorningEvent { id: string; newsId: string; ticker: Ticker; kind: string; effectBp: number; publishAt: number; facts?: unknown; relatedTo?: string; phase?: string }
 
 /** 08:50 on a trading day: write today's scheduled articles (and the overnight game
  * results that move prices at 09:00) in one call. Rows are stored with their
  * future publish time; every read filters publish_at <= now, so nobody (the
  * administrator included) sees them early. Template rows fill anything missing. */
-export async function writeMorningNews(db: D1Database, writers: AiWriters, seed: string, date: string, rows: readonly StockRow[], now: number): Promise<number> {
+export async function writeMorningNews(db: D1Database, writers: AiWriters, seed: string, date: string, rows: readonly StockRow[], now: number, phaseSeed = 'phase'): Promise<number> {
   if (!await claimRun(db, `morning:${date}`, now)) return 0;
   const times = tickTimes();
   const listed = (ticker: Ticker) => {
     const row = rows.find(item => item.ticker === ticker)!;
     return tradesOn(ticker, date) && (row.status !== 'delisted' || (!!row.relistOn && row.relistOn <= date));
   };
-  const scheduled = dayItems(seed, date).filter(item => listed(item.ticker));
+  const scheduled = dayItems(seed, date, phaseSeed).filter(item => listed(item.ticker));
   const overnight = (await db.prepare(`SELECT id, ticker, effect_bp, context_json FROM stock_events
     WHERE applied_at IS NULL AND kind = 'game' AND apply_at <= ?`).bind(kstTimestamp(date, '09:00')).all<{ id: string; ticker: Ticker; effect_bp: number; context_json: string }>()).results
     .filter(event => listed(event.ticker));
   const events: MorningEvent[] = [
     ...scheduled.map((item: DayItem) => ({ id: item.id, newsId: item.id, ticker: item.ticker, kind: item.kind, effectBp: item.effectBp,
-      publishAt: kstTimestamp(date, times[item.index]!), relatedTo: item.relatedId })),
+      publishAt: kstTimestamp(date, times[item.index]!), relatedTo: item.relatedId, phase: PHASES[item.phase].label })),
     ...overnight.map(event => {
       const { headline: _h, body: _b, ...facts } = JSON.parse(event.context_json) as Record<string, unknown>;
       return { id: event.id, newsId: `event:${event.id}`, ticker: event.ticker, kind: 'game', effectBp: event.effect_bp, publishAt: kstTimestamp(date, '09:00'), facts };
@@ -236,6 +243,7 @@ export async function writeMorningNews(db: D1Database, writers: AiWriters, seed:
 사건 목록:
 ${events.map(event => JSON.stringify({ eventId: event.id, company: stockInfo(event.ticker)!.name, kind: event.kind,
     direction: event.effectBp > 0 ? 'up' : event.effectBp < 0 ? 'down' : 'flat', size: sizeOf(event.effectBp),
+    ...(event.phase ? { phase: event.phase } : {}),
     ...(event.relatedTo ? { relatedTo: event.relatedTo } : {}), ...(event.facts ? { facts: event.facts } : {}) })).join('\n')}`;
   const output = await callAi(db, writers, date, SYSTEM_PROMPT, prompt, ARTICLES_SCHEMA) as { items?: { eventId?: unknown; headline?: unknown; body?: unknown }[] } | null;
   const written = new Map<string, { headline: string; body: string }>();

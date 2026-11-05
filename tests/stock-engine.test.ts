@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { STOCKS, STOCK_RULES, tradeFee } from '../shared/stocks';
 import { addTradingDays, holidayName, isTradingDay, kstTimestamp, marketStatus, tickTimes, tradesOn, TICKS_PER_DAY } from '../shared/market-calendar';
 import { clampToLimit, stepPrice } from '../shared/stock-engine';
-import { advanceMarket, advanceStart, initialRows, marketSteps, nextTickAt, pendingTicks, scheduledMosquito, scheduledNews, type StockRow } from '../shared/stock-market';
+import { advanceMarket, advanceStart, dayItems, initialRows, marketSteps, NEWS_SLOTS, nextTickAt, pendingTicks, type StockRow } from '../shared/stock-market';
+import { companyPhase, featureArticle, PHASES, type Phase } from '../shared/stock-lifecycle';
 import { gameArticle, gameEffectBp, usualTime } from '../shared/stock-games';
 import { applyEffect } from '../shared/stock-engine';
 import { newsArticle, NEWS_TEMPLATES, subjectParticle } from '../shared/stock-news-templates';
@@ -163,17 +164,61 @@ describe('delisting', () => {
 });
 
 describe('template news', () => {
-  it('schedules 4–7 items between 09:10 and 17:50 with effects inside the class range', () => {
-    for (let day = 1; day <= 30; day++) {
-      const items = scheduledNews(`seed${day}`, '2026-11-05');
-      expect(items.length).toBeGreaterThanOrEqual(STOCK_RULES.newsPerDay[0]);
-      expect(items.length).toBeLessThanOrEqual(STOCK_RULES.newsPerDay[1]);
-      for (const item of items) {
-        expect(item.index).toBeGreaterThanOrEqual(1);
-        expect(item.index).toBeLessThanOrEqual(TICKS_PER_DAY - 2);
+  it('publishes exactly one article every 30 minutes from 09:00 to 17:30, with the usual number of price-moving items', () => {
+    expect(NEWS_SLOTS.map(index => tickTimes()[index])).toEqual(['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00',
+      '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30']);
+    for (let day = 1; day <= 60; day++) {
+      const items = dayItems(`seed${day}`, '2026-11-05', `phase${day}`);
+      expect(items.map(item => item.index)).toEqual(NEWS_SLOTS);
+      const news = items.filter(item => item.kind === 'news');
+      expect(news.length).toBeGreaterThanOrEqual(STOCK_RULES.newsPerDay[0]);
+      expect(news.length).toBeLessThanOrEqual(STOCK_RULES.newsPerDay[1]);
+      for (const item of items.filter(item => item.kind === 'feature')) expect(item.effectBp).toBe(0);
+      for (const item of news) {
         const [low, high] = STOCK_RULES.newsEffect[STOCKS.find(stock => stock.ticker === item.ticker)!.volatility];
-        expect(Math.abs(item.effectBp)).toBeGreaterThanOrEqual(Math.floor(low * 10_000));
-        expect(Math.abs(item.effectBp)).toBeLessThanOrEqual(Math.ceil(high * 10_000));
+        expect(Math.abs(item.effectBp)).toBeGreaterThanOrEqual(Math.floor(low * 0.7 * 10_000));
+        expect(Math.abs(item.effectBp)).toBeLessThanOrEqual(Math.ceil(high * 1.25 * 10_000));
+      }
+      // A rumor's confirmation or denial comes 2–4 hours later.
+      for (const outcome of items.filter(item => item.relatedId)) {
+        const rumor = items.find(item => item.id === outcome.relatedId)!;
+        expect(outcome.index - rumor.index).toBeGreaterThanOrEqual(12);
+        expect(outcome.index - rumor.index).toBeLessThanOrEqual(24);
+      }
+      expect(items.every(item => item.headline.length <= 40 && item.body.length <= 200)).toBe(true);
+    }
+    // YEGM is never in the news on a winter Thursday.
+    expect(dayItems('x', '2026-12-03').some(item => item.ticker === 'YEGM')).toBe(false);
+  });
+  it('moves each company through hidden 5–15 day phases that shape its news', () => {
+    for (const stock of STOCKS) {
+      let previous: Phase | null = null, run = 0;
+      const lengths: number[] = [];
+      for (let d = 0; d < 365; d++) {
+        const date = new Date(Date.parse('2026-01-01T00:00:00Z') + d * 86_400_000).toISOString().slice(0, 10);
+        const phase = companyPhase('secret', stock.ticker, date);
+        expect(companyPhase('secret', stock.ticker, date)).toBe(phase);
+        if (phase === previous) run++;
+        else { if (previous) lengths.push(run); previous = phase; run = 1; }
+      }
+      expect(lengths.length).toBeGreaterThan(15);
+    }
+    // Crisis news leans bad and growth news leans good across many days.
+    const tally: Record<string, [number, number]> = {};
+    for (let day = 0; day < 400; day++) {
+      const date = new Date(Date.parse('2027-03-01T00:00:00Z') + day * 86_400_000).toISOString().slice(0, 10);
+      for (const item of dayItems(`d${day}`, date, 'phases').filter(item => item.kind === 'news')) {
+        const entry = tally[item.phase] ??= [0, 0];
+        entry[item.effectBp > 0 ? 0 : 1]++;
+      }
+    }
+    const upShare = (phase: Phase) => tally[phase]![0] / (tally[phase]![0] + tally[phase]![1]);
+    expect(upShare('crisis')).toBeLessThan(upShare('growth'));
+    for (const phase of Object.keys(PHASES) as Phase[]) {
+      for (let variant = 0; variant < 3; variant++) {
+        const article = featureArticle('YEDO', phase, variant);
+        expect(article.headline.length).toBeLessThanOrEqual(40);
+        expect(article.body).not.toContain('이(가)');
       }
     }
   });
@@ -234,17 +279,16 @@ describe('game linkage (PR 11)', () => {
   it('hunts mosquitoes 0–2 times on YEGM trading days, succeeding about 55% of the time', () => {
     let hunts = 0, wins = 0;
     for (let day = 0; day < 2000; day++) {
-      const items = scheduledMosquito(`m${day}`, '2026-11-05');
+      const items = dayItems(`m${day}`, '2026-11-05').filter(item => item.kind === 'mosquito');
       expect(items.length).toBeLessThanOrEqual(2);
       for (const item of items) {
-        hunts++; if (item.success) wins++;
+        hunts++; if (item.effectBp > 0) wins++;
         expect(Math.abs(item.effectBp)).toBeGreaterThanOrEqual(500);
         expect(Math.abs(item.effectBp)).toBeLessThanOrEqual(1200);
-        expect(item.success).toBe(item.effectBp > 0);
       }
     }
     expect(wins / hunts).toBeGreaterThan(0.5);
     expect(wins / hunts).toBeLessThan(0.6);
-    expect(scheduledMosquito('x', '2026-12-03')).toEqual([]); // winter Thursday: YEGM is halted
+    expect(dayItems('x', '2026-12-03').filter(item => item.kind === 'mosquito')).toEqual([]); // winter Thursday: YEGM is halted
   });
 });

@@ -117,8 +117,9 @@ export async function advanceStocks(db: D1Database, secret: string, now: number)
   const lastTickAt = Math.min(...rows.map(row => row.lastTickAt));
   const ticks = marketSteps(advanceStart(lastTickAt, now), now, holidays, events);
   if (!ticks.length) return { rows, holidays };
-  const seeds = await daySeeds(secret, [...new Set(ticks.map(tick => tick.date))]);
-  const result = advanceMarket(rows, ticks, date => seeds.get(date)!, events, holidays);
+  // 'phase' seeds the hidden company life cycles (HMAC of "stock|phase").
+  const seeds = await daySeeds(secret, [...new Set(ticks.map(tick => tick.date)), 'phase']);
+  const result = advanceMarket(rows, ticks, date => seeds.get(date)!, events, holidays, seeds.get('phase')!);
   const token = crypto.randomUUID();
   const createdAt = new Date(now).toISOString();
   const won = 'EXISTS (SELECT 1 FROM stock_state WHERE writer = ?)';
@@ -444,7 +445,10 @@ export async function runStockCron(db: D1Database, secret: string, writers: AiWr
   const date = kstDateOf(now);
   if (!isTradingDay(date, holidays)) return;
   const time = new Date(now + 9 * 3_600_000).toISOString().slice(11, 16);
-  if (time === '08:50') await writeMorningNews(db, writers, (await daySeeds(secret, [date])).get(date)!, date, rows, now);
+  if (time === '08:50') {
+    const seeds = await daySeeds(secret, [date, 'phase']);
+    await writeMorningNews(db, writers, seeds.get(date)!, date, rows, now, seeds.get('phase')!);
+  }
   if (time === '18:00') await writeCloseNews(db, writers, date, rows, now);
 }
 
