@@ -123,7 +123,7 @@ test('home identity uses the current profile photo and truncates a long nickname
   try {
     const latest = await (await page.request.get('/api/bootstrap')).json() as BootstrapResponse;
     const longName = '가나다라마바사아자차';
-    const payload = { ...latest, announcements: [], user: { ...latest.user, displayName: longName, gold: 123456789 },
+    const payload = { ...latest, user: { ...latest.user, displayName: longName, gold: 123456789 },
       players: latest.players.map(player => player.id === latest.user.id ? { ...player, displayName: longName } : player) };
     await page.route('**/api/bootstrap', route => route.fulfill({ json: payload }));
     for (const now of [MORNING, EVENING]) {
@@ -139,13 +139,17 @@ test('home identity uses the current profile photo and truncates a long nickname
           const identity = top.querySelector('.room-identity')!.getBoundingClientRect();
           const name = top.querySelector('.room-name')!;
           const gold = top.querySelector('.gold')!.getBoundingClientRect();
+          const bell = top.querySelector('.room-bell')!.getBoundingClientRect();
           const avatar = top.querySelector('.avatar')!.getBoundingClientRect();
           const style = getComputedStyle(name);
-          return { separated: identity.right <= gold.left, avatarWidth: avatar.width,
+          // The balance now sits under the nickname; the bell keeps the corner.
+          return { separated: identity.right <= bell.left, goldInside: gold.right <= identity.right + 1,
+            avatarWidth: avatar.width,
             overflow: style.overflow, ellipsis: style.textOverflow, noWrap: style.whiteSpace,
             documentOverflow: document.documentElement.scrollWidth > innerWidth };
         });
         expect(layout.separated).toBe(true);
+        expect(layout.goldInside).toBe(true);
         expect(layout.avatarWidth).toBeGreaterThanOrEqual(28);
         expect(layout.avatarWidth).toBeLessThanOrEqual(32);
         expect(layout).toMatchObject({ overflow: 'hidden', ellipsis: 'ellipsis', noWrap: 'nowrap', documentOverflow: false });
