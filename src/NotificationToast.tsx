@@ -40,6 +40,9 @@ function ToastQueue({ notifications, userId, serverTime }: Omit<Props, 'preview'
       const queued = new Set(kept.map(item => item.id));
       const added = fresh.filter(item => !queued.has(item.id))
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+      // Every refreshed bootstrap runs this effect. Keeping the same array when
+      // nothing joined or expired spares the app a render on quiet screens.
+      if (!added.length && kept.length === previous.length) return previous;
       return [...kept, ...added];
     });
   }, [notifications, serverTime, userId, seen]);

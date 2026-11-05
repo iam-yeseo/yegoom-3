@@ -22,7 +22,9 @@ let bootstrap;
 try {
   const login = await fixture.post('/api/auth/login', { headers: { Origin: fixtureUrl, 'CF-Connecting-IP': '192.0.2.29' }, data: { username: 'min', password: 'e2e-only-password-2026' } });
   if (login.status() !== 200) throw new Error(`Local measurement fixture login: ${login.status()}`);
-  bootstrap = { ...await (await fixture.get('/api/bootstrap')).json(), announcements: [] };
+  // No notices in the fixture: a toast appearing or expiring mid-measurement is
+  // a render of its own and would be counted against the claw machine.
+  bootstrap = { ...await (await fixture.get('/api/bootstrap')).json(), notifications: { unread: 0, recent: [] } };
 } finally { await fixture.dispose(); }
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
 let measuredPage = null;
