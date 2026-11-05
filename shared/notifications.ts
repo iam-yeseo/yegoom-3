@@ -94,8 +94,13 @@ export function notificationText(notification: AppNotification, name: (userId: s
   }
 }
 
-/** The toast only shows other people's fresh news, exactly as it did before. */
+/** Only news worth interrupting someone for pops up: a prize another player
+ * just won and an administrator's notice. Everything else — a revealed answer,
+ * a market event, a reward or a turn that is already mine — waits in the centre
+ * behind the bell, so the toast stays as rare as it was before. */
+const TOAST_KINDS: ReadonlySet<NotificationPayload['kind']> = new Set(['lotto', 'speetto', 'admin']);
 export function isToastWorthy(notification: AppNotification, viewerId: string, serverNow: number): boolean {
   const age = serverNow - Date.parse(notification.createdAt);
-  return notification.actorId !== viewerId && age >= 0 && age < NOTIFICATION_RULES.toastMs;
+  return TOAST_KINDS.has(notification.payload.kind)
+    && notification.actorId !== viewerId && age >= 0 && age < NOTIFICATION_RULES.toastMs;
 }
