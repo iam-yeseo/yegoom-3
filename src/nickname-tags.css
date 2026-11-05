@@ -1,60 +1,87 @@
-/* Nickname tags — ported from iam-yeseo/yegoom public/css/arcade.css (.nick-tag),
-   with colors adjusted to this app's tokens. The S-grade hologram image is not
-   carried over; S uses the original gradient fallback and a moving sheen. */
+/* Nickname tags — grades from iam-yeseo/yegoom (.nick-tag), drawn in the 예굼방 tone of
+   Claude Design "Yegoom Stock and Shop" (.tg): no outline, pastel fills, a moving holo
+   for S and a sheen on S/A. C keeps a soft inset ring instead of the dark border. */
 .nick-tag {
-  position: relative; display: inline-block; max-width: 11em; padding: .08em .45em; overflow: hidden;
-  border: 1.5px solid #3a3340; border-radius: 6px; font-size: .74em; font-weight: 800; line-height: 1.4;
-  letter-spacing: -.02em; white-space: nowrap; text-overflow: ellipsis; color: #3a3340; background: #fff;
-  vertical-align: .08em;
+  position: relative; display: inline-block; max-width: 11em; padding: .12em .6em; overflow: hidden;
+  border-radius: .62em; font-size: .74em; font-weight: 800; line-height: 1.45;
+  letter-spacing: -.02em; white-space: nowrap; text-overflow: ellipsis; color: #7c7383; background: #fff;
+  box-shadow: inset 0 0 0 1.5px #ede5dd; vertical-align: .08em;
 }
-.nick-tag--b, .nick-tag--a, .nick-tag--s { color: #20201f; border-color: #20201f; }
-.nick-tag--b { background: linear-gradient(135deg, #fbfbfc 0%, #cfd4db 42%, #f3f4f6 55%, #b7bdc6 100%); }
-.nick-tag--a { background: linear-gradient(135deg, #fff6c2 0%, #f5c84c 42%, #fff1a8 55%, #dca523 100%); }
+.nick-tag--a { color: #7a5a00; background: linear-gradient(180deg, #fff3c4, #ffdd7a); box-shadow: none; }
+.nick-tag--b { color: #5c5162; background: linear-gradient(180deg, #f7f5f9, #e2dee8); box-shadow: none; }
 .nick-tag--s {
-  background: linear-gradient(110deg, #ffb8dc, #ffe68f, #aef2d4, #aecbff, #dbb8ff, #ffb8dc) 0 0 / 200% 100%;
+  color: #6a4fb8; box-shadow: none;
+  background: linear-gradient(110deg, #ffd3e6, #fff0b8, #cdf3e2, #cfe0ff, #e6d6ff, #ffd3e6) 0 0 / 200% 100%;
   animation: nick-holo 4s linear infinite;
 }
 .nick-tag--s::after, .nick-tag--a::after {
   content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .85) 50%, transparent 65%);
-  background-size: 250% 100%; background-repeat: no-repeat; animation: nick-sheen 2.4s ease-in-out infinite;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .8) 50%, transparent 65%);
+  background-size: 250% 100%; background-repeat: no-repeat; animation: nick-sheen 2.6s ease-in-out infinite;
 }
-.nick-tag--a::after { animation-duration: 3.6s; opacity: .7; }
-/* Tag + name: vertically centered; on a narrow row the tag shrinks first. */
+.nick-tag--a::after { animation-duration: 3.8s; opacity: .7; }
 .tagged-name { display: inline-flex; align-items: center; gap: .32em; max-width: 100%; min-width: 0; vertical-align: middle; }
 .tagged-name .nick-tag { flex: 0 1 auto; min-width: 2.6em; margin: 0; vertical-align: 0; }
 .tagged-name__text { flex: 0 0 auto; }
 @keyframes nick-holo { to { background-position: 200% 0; } }
-@keyframes nick-sheen { 0% { background-position: 115% 0; } 60%, 100% { background-position: -15% 0; } }
+@keyframes nick-sheen { 0% { background-position: 120% 0; } 60%, 100% { background-position: -20% 0; } }
 @media (prefers-reduced-motion: reduce) { .nick-tag--s, .nick-tag::after { animation: none; } }
 
-/* 내 정보 — collected tags; pressing one wears it. */
-.tag-collection-card { padding: 18px; }
-.tag-collection-card h2 { font-size: 17px; margin-bottom: 8px; }
-.tag-collection { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 12px; padding: 0; list-style: none; }
+/* 내 정보 — collected tags; pressing one wears it (Claude Design "Ranking and Me" 4c). */
+.tag-collection-card { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.tag-collection-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px; }
+.tag-collection-head h2 { font-size: 17px; margin: 0; }
+.tag-collection-head small { font-size: 12px; font-weight: 600; color: #ada4b3; white-space: nowrap; }
+.tag-collection { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .tag-collection button {
-  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 10px; font: inherit; font-size: 15px;
-  color: #3a3340; background: #fff; border: 2px solid #f0e9e2; border-radius: 12px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 10px; font: inherit; font-size: 15px;
+  color: #3a3340; background: #fff9ee; border: 0; border-radius: 14px; box-shadow: inset 0 0 0 1.5px #f1e8de; cursor: pointer;
+  transition: box-shadow .2s, background-color .2s;
 }
 .tag-collection button .nick-tag { max-width: 14em; }
-.tag-collection button small { font-size: 11px; font-weight: 800; color: #7556c4; }
-.tag-collection button[aria-pressed="true"] { border-color: #b9a3f0; background: #f4effd; }
+.tag-collection button small { font-size: 10.5px; font-weight: 800; color: #ada4b3; }
+.tag-collection button small.grade-s { color: #6a4fb8; }
+.tag-collection button small.grade-a { color: #94700a; }
+.tag-collection button small.grade-b { color: #7c7383; }
+.tag-collection button[aria-pressed="true"] { background: #fff0ea; box-shadow: 0 0 0 2px #ff8e7a; }
+.tag-collection button[aria-pressed="true"] small { color: #d9604a; }
 .tag-collection button:disabled { opacity: .6; cursor: default; }
-.tag-note { font-size: 13px; color: #7c7383; margin: 0 0 8px; line-height: 1.6; word-break: keep-all; }
+.tag-collection-actions { display: flex; gap: 8px; }
+.tag-collection-actions > * { flex: 1; height: 44px; border-radius: 15px; font-size: 15px; }
+.tag-collection-actions .tag-untag { color: #7c7383; background: #f3eee8; box-shadow: none; }
+.tag-note { font-size: 13px; color: #7c7383; margin: 0; line-height: 1.6; word-break: keep-all; }
 
-/* 상점 — 별명 태그 뽑기 */
-.tag-shop-hero { padding: 22px 20px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
-.tag-shop-sample { font-size: 22px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-.tag-shop-hero p { margin: 0; font-size: 13px; color: #7c7383; line-height: 1.7; word-break: keep-all; }
+/* 상점 — 별명 태그 뽑기 (Claude Design "Stock and Shop" 3k) */
+.tag-shop { min-height: 100%; background: linear-gradient(180deg, #eee8fc 0, #fff9ee 420px); }
+.tag-shop-hero { border-radius: 28px; padding: 22px 18px 18px; display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; }
+.tag-shop-sample { font-size: 19px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.tag-shop-hero p { margin: 0; font-size: 13px; color: #7c7383; line-height: 1.55; word-break: keep-all; }
 .tag-shop-odds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; width: 100%; }
-.tag-shop-odds div { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; color: #7c7383; }
-.tag-shop-odds strong { font-size: 15px; color: #3a3340; }
-.tag-draw-sheet { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 26px 22px calc(24px + env(safe-area-inset-bottom)); text-align: center; background: var(--cream); }
-.tag-draw-sheet .nick-tag { font-size: 26px; max-width: 100%; }
-.tag-draw-sheet small { font-size: 13px; font-weight: 800; color: #7556c4; }
-.tag-draw-sheet .primary-button, .tag-draw-sheet .secondary-button { width: 100%; }
-.tag-tile-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 52px; height: 52px; border-radius: 16px; background: #f4effd; flex: none; }
-.tag-tile-icon .nick-tag { font-size: 13px; }
+.tag-shop-odds div { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; border-radius: 16px; background: #fbf8f4; font-size: 11.5px; font-weight: 700; color: #7c7383; }
+.tag-shop-odds strong { font-size: 15px; color: #7c7383; }
+.tag-shop-odds small { font-size: 11.5px; font-weight: 800; color: #ada4b3; }
+.tag-shop-odds .grade-s { background: #f3eefd; } .tag-shop-odds .grade-s strong { color: #6a4fb8; }
+.tag-shop-odds .grade-a { background: #fff4cc; } .tag-shop-odds .grade-a strong { color: #94700a; }
+.tag-shop-odds .grade-b { background: #f3f1f6; } .tag-shop-odds .grade-b strong { color: #5c5162; }
+.tag-shop .subtle-note { text-align: center; }
+.tag-shop .text-button { color: #d9604a; font-weight: 800; }
+.tag-draw-sheet { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 10px 20px calc(28px + env(safe-area-inset-bottom)); text-align: center; background: var(--cream); }
+.tag-draw-sheet .sheet-handle { width: 40px; height: 5px; border-radius: 3px; background: #e6ded6; }
+.tag-draw-grade { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px; font-size: 13px; font-weight: 800; color: #7c7383; background: #fbf8f4; }
+.grade-s .tag-draw-grade { color: #6a4fb8; background: #f3eefd; }
+.grade-a .tag-draw-grade { color: #94700a; background: #fff4cc; }
+.grade-b .tag-draw-grade { color: #5c5162; background: #f3f1f6; }
+.tag-draw-card { display: flex; align-items: center; gap: 10px; max-width: 100%; padding: 22px 18px; border-radius: 24px; background: #fff; box-shadow: 0 8px 24px rgba(120, 90, 60, .08); }
+.tag-draw-card .nick-tag { font-size: 20px; min-width: 0; padding: .3em .8em; border-radius: .65em; }
+.tag-draw-card strong { flex: none; font-size: 22px; font-weight: 800; }
+.tag-draw-meta { margin: 0; font-size: 13px; font-weight: 600; color: #ada4b3; }
+.tag-draw-actions { display: flex; gap: 10px; width: 100%; }
+.tag-draw-actions .secondary-button { flex: 1; color: #7c7383; background: #f1ece6; box-shadow: none; }
+.tag-draw-actions .primary-button { flex: 1.5; }
+/* Shop tile: a little holo tag on lavender (Claude Design 3i). */
+.tag-tile-icon { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 16px; background: #eee8fc; flex: none; }
+.tag-tile-icon i { display: flex; align-items: center; width: 36px; height: 17px; padding-left: 7px; box-sizing: border-box; border-radius: 6px; background: linear-gradient(90deg, #ffd3e6, #cdf3e2 50%, #e6d6ff); }
+.tag-tile-icon i::after { content: ""; width: 16px; height: 4px; border-radius: 2px; background: #6a4fb8; opacity: .55; }
 
 /* The podium column is too narrow for photo + tag + nickname; the full ranking
    card right below shows each tag, so the podium keeps the nickname whole. */

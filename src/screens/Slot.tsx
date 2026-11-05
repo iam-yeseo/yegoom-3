@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { SHOP_HISTORY_DAYS, SLOT_RULES } from "../../shared/balance";
 import type { SlotSpin, SlotSpinInput, SlotSymbol } from "../../shared/types";
 import { ApiFailure } from "../api";
@@ -42,7 +42,7 @@ const SlotHistory = memo(function SlotHistory({ spins, loading }: { spins: SlotS
         <span className="shop-ticket-order" aria-hidden="true">{index + 1}</span>
         <time dateTime={spin.createdAt}>{formatTime(spin.createdAt)}</time>
         <span className="slot-history-symbols" role="img" aria-label={spin.reels.map(symbol => labels[symbol]).join(" · ")}>
-          {spin.reels.map((symbol, i) => <img key={i} src={`/slot/${symbol}.svg`} alt="" width="24" height="24" />)}
+          {spin.reels.map((symbol, i) => <span key={i}><img src={`/slot/${symbol}.svg`} alt="" width="20" height="20" /></span>)}
         </span>
         <strong className={spin.prize > 0 ? "gain" : "none"}>{spin.prize > 0 ? `+${spin.prize.toLocaleString("ko-KR")}G` : "낙첨"}</strong>
       </li>)}</ol>
@@ -222,34 +222,35 @@ export function Slot({ onBack }: { onBack: () => void }) {
     <div className="screen-body stack">
       <p className="slot-intro">과일 사이에 숨어 있는 오늘의 행운</p>
       <section ref={machine} className="slot-machine" data-phase={phase} data-anticipating={anticipating} aria-label="슬롯머신">
-        <div className="slot-bulbs" aria-hidden="true">{Array.from({ length: 9 }, (_, index) => <i key={index} />)}</div>
-        <div className="slot-marquee"><span>예굼 슬롯</span><small>LUCKY FRUITS</small></div>
-        <div className="slot-jackpot"><span>7 · 7 · 7</span><strong>+{SLOT_RULES.jackpotPrize.toLocaleString("ko-KR")}G</strong></div>
-        <div className="slot-reels" aria-label="슬롯 결과">
-          {symbols.map((symbol, index) => <div className="slot-reel" key={index} data-symbol={symbol} data-spinning={spinning[index]}
-            role="img" aria-label={`${index + 1}번째 릴: ${spinning[index] ? "회전 중" : labels[symbol]}`}>
-            <div className="slot-reel-face" ref={element => { faces.current[index] = element; }}><img src={`/slot/${symbol}.svg`} alt="" width="80" height="80" /></div>
-            <div className="slot-strip" ref={element => { strips.current[index] = element; }} aria-hidden="true">
-              {stripSymbols.map((entry, i) => <div className="slot-strip-cell" key={i}><img src={`/slot/${entry}.svg`} alt="" width="80" height="80" /></div>)}
-            </div>
-          </div>)}
+        <div className="slot-bulbs" aria-hidden="true">{Array.from({ length: 9 }, (_, index) => <i key={index} style={{ "--i": index } as CSSProperties} />)}</div>
+        <div className="slot-marquee"><strong>예굼 슬롯</strong><span className="slot-jackpot">7 · 7 · 7 = +{SLOT_RULES.jackpotPrize.toLocaleString("ko-KR")}G</span></div>
+        <div className="slot-cabinet">
+          <div className="slot-reels" aria-label="슬롯 결과">
+            {symbols.map((symbol, index) => <div className="slot-reel" key={index} data-symbol={symbol} data-spinning={spinning[index]}
+              role="img" aria-label={`${index + 1}번째 릴: ${spinning[index] ? "회전 중" : labels[symbol]}`}>
+              <div className="slot-reel-face" ref={element => { faces.current[index] = element; }}><img src={`/slot/${symbol}.svg`} alt="" width="80" height="80" /></div>
+              <div className="slot-strip" ref={element => { strips.current[index] = element; }} aria-hidden="true">
+                {stripSymbols.map((entry, i) => <div className="slot-strip-cell" key={i}><img src={`/slot/${entry}.svg`} alt="" width="80" height="80" /></div>)}
+              </div>
+            </div>)}
+          </div>
+          <button className="slot-lever-button" type="button" aria-label="슬롯머신 레버 당기기" onClick={() => void spin()} disabled={disabled} data-nopress data-notouchfx>
+            <span className="slot-lever" ref={lever} aria-hidden="true"><i /><b /></span>
+            <span className="slot-lever-base" aria-hidden="true" />
+          </button>
         </div>
-        <button className="slot-lever-button" type="button" aria-label="슬롯머신 레버 당기기" onClick={() => void spin()} disabled={disabled} data-nopress data-notouchfx>
-          <span className="slot-lever" ref={lever} aria-hidden="true"><i /></span>
-        </button>
         <div ref={resultLine} className="slot-result" role="status" aria-live="polite" aria-atomic="true">
-          {phase === "won" ? <><small>7 · 7 · 7 당첨!</small><strong>+{prize.toLocaleString("ko-KR")}G</strong></>
-            : phase === "lost" ? <strong>아쉬워요</strong>
-            : phase === "checking" ? <strong>결과 확인 중</strong>
-            : phase === "spinning" ? <strong>{anticipating ? "마지막 한 칸, 두근두근" : "행운이 돌아가는 중…"}</strong>
-            : <span>레버를 당겨 행운을 만나 보세요</span>}
+          {phase === "won" ? `7 7 7! +${prize.toLocaleString("ko-KR")}G`
+            : phase === "lost" ? "아쉬워요, 다음 기회에!"
+            : phase === "checking" ? "결과 확인 중"
+            : phase === "spinning" ? anticipating ? "마지막 한 칸, 두근두근" : "두근두근…"
+            : "레버를 당겨 행운을 만나 보세요"}
         </div>
-        <div className="slot-machine-feet" aria-hidden="true"><i /><i /></div>
       </section>
       <button type="button" className="primary-button slot-spin-button" onClick={() => void spin()} disabled={disabled} aria-label={buttonLabel}>
         {busy ? phase === "checking" ? "결과 확인 중…" : "돌아가는 중…" : buttonLabel}
       </button>
-      <p className="slot-rule"><strong>7 7 7이 나오면 {SLOT_RULES.jackpotPrize.toLocaleString("ko-KR")}G</strong><span>당첨 확률 {SLOT_RULES.jackpotPercent}% · 1회 {SLOT_RULES.price.toLocaleString("ko-KR")}G</span></p>
+      <p className="slot-rule"><strong>7 7 7이 나오면 {SLOT_RULES.jackpotPrize.toLocaleString("ko-KR")}G</strong><span>당첨 확률 {SLOT_RULES.jackpotPercent}% · 1회 {SLOT_RULES.price.toLocaleString("ko-KR")}G{SLOT_RULES.dailyLimit === null ? " · 횟수 제한 없음" : ""}</span></p>
       {!shop.canPurchase && !shop.loading && <p className="subtle-note">운영자 계정은 구매에 참여하지 않아요.</p>}
       {!pending && shop.gold < SLOT_RULES.price && shop.canPurchase && <p className="subtle-note">골드가 부족해요</p>}
       {shop.loading && !busy && <p className="subtle-note" role="status">상점 정보를 불러오는 중…</p>}

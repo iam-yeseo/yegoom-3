@@ -1,10 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <title>수박</title>
-  <g stroke="#493f46" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M9 25h62c-3 27-16 42-31 42S12 52 9 25Z" fill="#B2D7AA"/>
-    <path d="M15 25h50c-3 22-13 35-25 35S18 47 15 25Z" fill="#FFF4D4"/>
-    <path d="M20 25h40c-3 18-10 29-20 29S23 43 20 25Z" fill="#FFA1A0"/>
-    <path d="m29 33 2 3m18-3-2 3m-7 3v4"/>
-    <path d="M16 34c2 8 5 13 8 17" stroke="#D9ECC7" stroke-width="3"/>
-  </g>
+  <path d="M8 26h48a24 24 0 0 1-48 0z" fill="#8FD9C0"/><path d="M13 26h38a19 19 0 0 1-38 0z" fill="#FF8E7A"/><circle cx="24" cy="33" r="2" fill="#5C5162"/><circle cx="32" cy="38" r="2" fill="#5C5162"/><circle cx="40" cy="33" r="2" fill="#5C5162"/>
 </svg>

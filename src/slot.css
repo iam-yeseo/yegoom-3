@@ -1,58 +1,63 @@
-.slot .screen-body { padding-top: 3px; padding-bottom: 28px; gap: 16px; }
-.slot-intro { margin: 0 0 2px; color: #8b7b86; text-align: center; font-size: 12px; }
-.slot-machine { position: relative; margin-right: 11px; padding: 17px 17px 20px; border: 2px solid #493f46; border-radius: 30px; background: #ffd9cc; box-shadow: 0 7px 0 #f4b6a6, 0 14px 25px #a3654d18; }
-.slot-bulbs { display: flex; justify-content: space-between; gap: 6px; padding: 0 3px; }
-.slot-bulbs i { display: block; width: 10px; height: 10px; border: 2px solid #65525a; border-radius: 50%; background: #fff5b9; box-shadow: 0 0 0 3px #fff2dc66; }
-.slot-bulbs i:nth-child(even) { background: #fffdf2; }
-.slot-marquee { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 16px 1px 11px; color: #493f46; }
-.slot-marquee > span { font-size: 21px; font-weight: 900; letter-spacing: -.6px; }
-.slot-marquee > small { font-size: 9px; font-weight: 800; letter-spacing: 1.4px; }
-.slot-jackpot { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 13px; padding: 7px 12px; border: 1px solid #e3aa97; border-radius: 30px; color: #724839; background: #fff0d4; }
-.slot-jackpot > span { font-size: 14px; font-weight: 900; letter-spacing: 1.6px; }
-.slot-jackpot > strong { padding-left: 12px; border-left: 1px solid #e3c19e; font-size: 12px; }
-.slot-reels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; border: 2px solid #493f46; border-radius: 18px; padding: 7px; background: #ad8a86; box-shadow: inset 0 3px 0 #493f4626; }
-.slot-reel { --slot-cell: clamp(82px, 23vw, 114px); position: relative; min-width: 0; height: var(--slot-cell); overflow: hidden; border: 1px solid #66545b; border-radius: 10px; background: #fffcf1; }
-.slot-reel::after { content: ""; position: absolute; z-index: 2; inset: 0; pointer-events: none; border-radius: inherit; background: linear-gradient(#4d35451c, transparent 23%, transparent 77%, #4d354511); }
-.slot-reel-face, .slot-strip-cell { display: flex; align-items: center; justify-content: center; height: var(--slot-cell); }
-.slot-reel img { display: block; width: 92%; height: 92%; max-width: 106px; object-fit: contain; }
-.slot-strip { position: absolute; inset: 0 0 auto; visibility: hidden; will-change: auto; }
-.slot-reel[data-spinning="true"] .slot-strip { visibility: visible; filter: blur(1px); will-change: transform; }
-.slot-reel[data-spinning="true"] .slot-reel-face { visibility: hidden; }
-.slot-lever-button { position: absolute; z-index: 3; top: 119px; right: -21px; width: 34px; height: 105px; border: 0; border-radius: 20px; background: transparent; cursor: pointer; }
-.slot-lever-button::after { content: ""; position: absolute; bottom: 3px; left: 1px; width: 23px; height: 24px; border: 2px solid #493f46; border-radius: 8px; background: #b8a6ce; }
-.slot-lever { position: absolute; bottom: 15px; left: 11px; width: 9px; height: 77px; border: 2px solid #493f46; border-radius: 6px; background: #fff3db; transform-origin: center 73px; }
-.slot-lever > i { position: absolute; top: -7px; left: -9px; width: 24px; height: 24px; border: 2px solid #493f46; border-radius: 50%; background: #f58878; box-shadow: inset 4px 3px 0 #ffd0b8; }
-.slot-lever-button:focus-visible { outline: 3px solid #7556c4; outline-offset: 2px; }
-.slot-lever-button:disabled { cursor: default; }
-.slot-result { display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 67px; margin-top: 15px; padding: 9px 8px; border: 1px solid #d3a893; border-radius: 13px; color: #765f66; background: #fff7e7; text-align: center; }
-.slot-result > span { font-size: 12px; }
-.slot-result > strong { font-size: 15px; font-weight: 800; }
-.slot-result > small { margin-bottom: 1px; font-size: 10px; font-weight: 700; letter-spacing: .8px; }
-.slot-machine[data-phase="won"] .slot-result { border-color: #d2a947; color: #7c5709; background: #ffe497; }
-.slot-machine[data-phase="won"] .slot-result > strong { font-size: 24px; }
-.slot-machine[data-phase="won"] .slot-bulbs i { animation: slot-bulb-flash .32s ease-in-out 6 alternate; }
-.slot-machine[data-phase="won"] .slot-bulbs i:nth-child(even) { animation-delay: .16s; }
-.slot-machine[data-anticipating="true"] .slot-reel:last-child { box-shadow: 0 0 0 2px #ffe49c; }
-.slot-machine-feet { position: absolute; bottom: -10px; left: 22px; right: 22px; display: flex; justify-content: space-between; pointer-events: none; }
-.slot-machine-feet > i { display: block; width: 33px; height: 8px; border: 2px solid #493f46; border-top: 0; border-radius: 0 0 5px 5px; background: #b79895; }
-.slot-spin-button { width: 100%; min-height: 54px; margin-top: 5px; font-size: 15px; }
-.slot-rule { display: flex; flex-direction: column; align-items: center; gap: 5px; margin: 0 0 2px; text-align: center; }
-.slot-rule > strong { color: #6e5969; font-size: 12px; }
-.slot-rule > span { color: #948794; font-size: 11px; }
-.slot-history .slot-history-row { display: grid; grid-template-columns: 14px minmax(48px, 1fr) auto auto; align-items: center; gap: 8px; min-height: 40px; padding: 7px 4px; font-size: 11px; }
-.slot-history-row time { color: #7c7383; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.slot-history-symbols { display: flex; align-items: center; gap: 1px; }
-.slot-history-symbols img { width: 24px; height: 24px; }
-.slot-history-row > strong { min-width: 58px; text-align: right; white-space: nowrap; }
-@keyframes slot-bulb-flash { from { background: #fffdf2; box-shadow: 0 0 2px #fff5b9; } to { background: #ffd05e; box-shadow: 0 0 10px #ffcf58; } }
-@media (min-width: 480px) {
-  .slot-machine { padding: 21px 24px 22px; }
-  .slot-marquee { margin-top: 18px; }
-  .slot-reels { gap: 10px; padding: 9px; }
-  .slot-lever-button { top: 136px; }
-  .slot-history .slot-history-row { font-size: 12px; }
+/* 슬롯머신 — Claude Design "Yegoom Stock and Shop" 3j: the 예굼방 tone
+   (borderless pastel, soft shadows) instead of the earlier outlined retro cabinet. */
+.slot { min-height: 100%; background: linear-gradient(180deg, #fff1c2 0, #fff9ee 480px); }
+.slot .screen-body { padding-top: 2px; padding-bottom: 28px; gap: 14px; }
+.slot-intro { margin: 0; color: #7c7383; text-align: center; font-size: 14px; font-weight: 600; }
+.slot-machine {
+  position: relative; display: flex; flex-direction: column; gap: 14px; padding: 18px 16px 16px;
+  border-radius: 32px; background: #fff; box-shadow: 0 12px 32px rgba(224, 160, 40, .16);
 }
+.slot-bulbs { display: flex; justify-content: center; gap: 9px; }
+.slot-bulbs i { display: block; width: 9px; height: 9px; border-radius: 50%; background: #ff8e7a; }
+.slot-bulbs i:nth-child(even) { background: #ffd866; }
+.slot-machine[data-phase="spinning"] .slot-bulbs i,
+.slot-machine[data-phase="won"] .slot-bulbs i { animation: slot-bulb-blink .4s calc(var(--i) * 60ms) infinite; }
+.slot-marquee { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px; }
+.slot-marquee > strong { font-size: 22px; font-weight: 800; letter-spacing: -.4px; }
+.slot-jackpot {
+  display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border-radius: 999px;
+  color: #94700a; background: #fff4cc; font-size: 12.5px; font-weight: 800; white-space: nowrap;
+}
+.slot-cabinet { display: flex; align-items: center; gap: 6px; }
+.slot-reels { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px; border-radius: 24px; background: #fff4e6; }
+.slot-reel { --slot-cell: clamp(78px, 22vw, 104px); position: relative; min-width: 0; height: var(--slot-cell); overflow: hidden; border-radius: 18px; background: #fff; box-shadow: inset 0 -6px 12px rgba(224, 160, 40, .08); }
+.slot-reel-face, .slot-strip-cell { display: flex; align-items: center; justify-content: center; height: var(--slot-cell); }
+.slot-reel img { display: block; width: 66%; height: 66%; object-fit: contain; }
+.slot-strip { position: absolute; inset: 0 0 auto; visibility: hidden; will-change: auto; }
+.slot-reel[data-spinning="true"] .slot-strip { visibility: visible; filter: blur(1.5px); will-change: transform; }
+.slot-reel[data-spinning="true"] .slot-reel-face { visibility: hidden; }
+.slot-machine[data-anticipating="true"] .slot-reel:last-child { box-shadow: inset 0 -6px 12px rgba(224, 160, 40, .08), 0 0 0 3px #ffd866; }
+/* Lever: knob + stick tilt from the base; the button keeps a 44px-tall-plus hit area. */
+.slot-lever-button { flex: none; display: flex; flex-direction: column; align-items: center; width: 36px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.slot-lever { display: flex; flex-direction: column; align-items: center; transform-origin: 50% 100%; }
+.slot-lever > i { display: block; width: 26px; height: 26px; border-radius: 50%; background: #ff8e7a; box-shadow: 0 4px 10px rgba(244, 124, 102, .35); }
+.slot-lever > b { display: block; width: 8px; height: 60px; border-radius: 4px; background: #f1e4d2; }
+.slot-lever-base { display: block; width: 22px; height: 14px; border-radius: 7px; background: #e9d9c4; }
+.slot-lever-button:focus-visible { outline: 3px solid #7556c4; outline-offset: 2px; border-radius: 12px; }
+.slot-lever-button:disabled { cursor: default; }
+.slot-result {
+  display: flex; align-items: center; justify-content: center; min-height: 52px; padding: 6px 12px; border-radius: 18px;
+  color: #ada4b3; background: #fff9ee; font-size: 16px; font-weight: 800; text-align: center;
+  transition: background-color .3s, color .3s;
+}
+.slot-machine[data-phase="spinning"] .slot-result,
+.slot-machine[data-phase="checking"] .slot-result { color: #94700a; background: #fff4e6; }
+.slot-machine[data-phase="won"] .slot-result { color: #5c4300; background: #ffd866; }
+.slot-machine[data-phase="lost"] .slot-result { color: #7c7383; background: #f6f1eb; }
+.slot-spin-button { width: 100%; }
+.slot-rule { display: flex; flex-direction: column; align-items: center; gap: 3px; margin: 0; text-align: center; }
+.slot-rule > strong { font-size: 13px; font-weight: 800; }
+.slot-rule > span { color: #ada4b3; font-size: 12px; font-weight: 600; }
+.slot-history .slot-history-row { display: grid; grid-template-columns: 14px minmax(48px, 1fr) auto auto; align-items: center; gap: 8px; min-height: 44px; padding: 7px 0; font-size: 12px; }
+.slot-history-row time { color: #ada4b3; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.slot-history-symbols { display: flex; align-items: center; gap: 3px; }
+.slot-history-symbols > span { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 8px; background: #fff9ee; }
+.slot-history-symbols img { width: 20px; height: 20px; }
+.slot-history-row > strong { min-width: 58px; font-size: 14px; text-align: right; white-space: nowrap; }
+.slot-history-row > strong.gain { color: #e0644e; }
+.slot-history-row > strong.none { color: #3b87bf; }
+@keyframes slot-bulb-blink { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) {
-  .slot-machine[data-phase="won"] .slot-bulbs i { animation: none; }
+  .slot-machine[data-phase] .slot-bulbs i { animation: none; }
   .slot-reel[data-spinning="true"] .slot-strip { filter: none; }
 }
