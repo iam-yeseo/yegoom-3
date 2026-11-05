@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SLOT_RULES } from '../shared/balance';
+import { NICKNAME_TAG_RULES, SLOT_RULES } from '../shared/balance';
 import { createShopPreview } from '../src/shop-preview';
 
 const at = (clock: string) => vi.setSystemTime(new Date(clock));
@@ -81,6 +81,6 @@ describe('offline slot preview', () => {
     result.slot.recent.length = 0;
     expect(preview.spinSlot({ requestId: 'same-id' }).spin).toEqual(original);
     expect(preview.read('slot').slot.recent).toEqual([original]);
-    expect(preview.read().inventory).toEqual({ lottoTickets: 2, speettoTickets: 1 });
+    expect(preview.read().inventory).toEqual({ lottoTickets: 2, speettoTickets: 1, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
   });
 });
