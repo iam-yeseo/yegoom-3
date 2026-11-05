@@ -1,6 +1,7 @@
 import type { MarketHoliday } from './stock-types';
 export interface AdminStockState {
-  ai: { enabled: boolean; keyConfigured: boolean; today: { calls: number; costMicroUsd: number }; month: { calls: number; costMicroUsd: number } };
+  ai: { enabled: boolean; provider: 'anthropic' | 'openai'; keys: { anthropic: boolean; openai: boolean }; keyConfigured: boolean;
+    today: { calls: number; costMicroUsd: number }; month: { calls: number; costMicroUsd: number } };
   news: { id: string; ticker: string | null; kind: string; headline: string; publishAt: string; source: 'ai' | 'template'; hidden: boolean }[];
 }
 import type { GameId } from './types';

@@ -21,10 +21,10 @@ import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, getLuckPhotoMetadata, l
 import { readAnnouncements } from './announcements';
 import { maintainDatabase } from './maintenance';
 import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockSecret, tradeStock } from './stocks';
-import { anthropicWriter, readAiStatus, setAiEnabled } from './stock-ai';
+import { aiWriters, isAiProvider, readAiStatus, saveAiSettings } from './stock-ai';
 import { FEATURES } from '../shared/balance';
 
-export interface Env { DB: D1Database; ASSETS: Fetcher; STOCK_SEED_SECRET?: string; ANTHROPIC_API_KEY?: string }
+export interface Env { DB: D1Database; ASSETS: Fetcher; STOCK_SEED_SECRET?: string; ANTHROPIC_API_KEY?: string; OPENAI_API_KEY?: string }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null; settings_json: string | null }
 interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null; photo_version: number | null }
@@ -593,7 +593,7 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
 async function adminState(env: Env, now: Date): Promise<AdminState> {
   const db = env.DB;
   const [games, claw, changes, catchmindWordsRemaining, marketHolidays, ai, stockNews] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db),
-    readRemainingWords(db), readMarketHolidays(db, now.getTime()), readAiStatus(db, kstDate(now), !!env.ANTHROPIC_API_KEY), readAdminStockNews(db, now.getTime())]);
+    readRemainingWords(db), readMarketHolidays(db, now.getTime()), readAiStatus(db, kstDate(now), { anthropic: !!env.ANTHROPIC_API_KEY, openai: !!env.OPENAI_API_KEY }), readAdminStockNews(db, now.getTime())]);
   return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, catchmindWordsRemaining, marketHolidays,
     stock: { ai, news: stockNews }, serverTime: now.toISOString() };
 }
@@ -630,8 +630,11 @@ async function api(request: Request, env: Env): Promise<Response> {
     if (url.pathname === '/api/admin/stock/ai') {
       if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
       const input = await body(request);
-      if (typeof input.enabled !== 'boolean') throw new HttpError(400, 'INVALID_SETTING', 'AI 뉴스 설정을 확인해 주세요.');
-      await setAiEnabled(env.DB, user.id, input.enabled, Date.now());
+      const enabled = input.enabled, provider = input.provider;
+      if ((enabled !== undefined && typeof enabled !== 'boolean') || (provider !== undefined && !isAiProvider(provider)) || (enabled === undefined && provider === undefined)) {
+        throw new HttpError(400, 'INVALID_SETTING', 'AI 뉴스 설정을 확인해 주세요.');
+      }
+      await saveAiSettings(env.DB, user.id, { enabled: enabled as boolean | undefined, provider: provider as 'anthropic' | 'openai' | undefined }, Date.now());
       return json(await adminState(env, new Date()));
     }
     const newsMatch = /^\/api\/admin\/stock\/news\/([^/]{1,300})$/.exec(url.pathname);
@@ -798,8 +801,8 @@ export default {
     const at = new Date(event.scheduledTime);
     if (kstTime(at) < '00:10:00') context.waitUntil(maintainDatabase(env.DB, at));
     if (FEATURES.stock && env.STOCK_SEED_SECRET && stockCronDue(at.getTime())) {
-      const writer = env.ANTHROPIC_API_KEY ? anthropicWriter(env.ANTHROPIC_API_KEY) : null;
-      context.waitUntil(runStockCron(env.DB, env.STOCK_SEED_SECRET, writer, at.getTime()).then(() => undefined, error => {
+      const writers = aiWriters({ anthropic: env.ANTHROPIC_API_KEY, openai: env.OPENAI_API_KEY });
+      context.waitUntil(runStockCron(env.DB, env.STOCK_SEED_SECRET, writers, at.getTime()).then(() => undefined, error => {
         console.error('Stock tick failed', error instanceof Error ? error.name : 'UnknownError');
       }));
     }

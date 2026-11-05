@@ -13,6 +13,12 @@ export const AI_RULES = {
   dailyCapMicroUsd: 800_000,
   microUsdPerToken: { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 },
   fallbackMicroUsdPerToken: { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
+  /** OpenAI alternative (the administrator picks the engine). gpt-6.1-sol: $2 input,
+   * $10 output per million tokens; cached input is listed at $0.10–$0.20 by different
+   * sources (checked 2026-11-05, secondary pricing pages), so the higher is charged.
+   * Prompt caching is automatic; reasoning tokens are billed as output. */
+  openai: { model: 'gpt-6.1-sol', reasoningEffort: 'medium', microUsdPerToken: { input: 2, output: 10, cacheWrite: 2, cacheRead: 0.2 } },
+  providers: ['openai', 'anthropic'],
   headlineMax: 40, bodyMax: 200, commentMax: 120, recentHeadlines: 20,
   /** Whale trades: anonymous news, no price effect, once an hour per person and stock. */
   whaleGold: 20_000, whaleShares: 100,

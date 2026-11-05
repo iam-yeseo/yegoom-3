@@ -1,5 +1,14 @@
 # 구현의 범위와 결정
 
+## 주식 AI 엔진 선택 (2026-11-05)
+
+- **요청:** 사용자가 OpenAI도 쓰고, Claude와 OpenAI 중 무엇을 쓸지 운영자 계정에서 고를 수 있게 해 달라고 했다. 기본값은 OpenAI.
+- **설정:** `stock_settings.ai_provider`(`openai`|`anthropic`). 운영 API `PUT /api/admin/stock/ai`가 `{ enabled?, provider? }`를 받는다. 매 호출 직전에 설정을 읽으므로 바꾼 즉시(다음 08:50·18:00 묶음부터) 적용된다.
+- **키 없는 엔진:** 고른 엔진의 키가 없으면 다른 엔진으로 자동 전환하지 않고 템플릿을 쓴다. 운영자가 고른 엔진과 다른 곳에 비용이 나가지 않게 하려는 것이다. 운영 탭에 엔진별 키 유무가 보인다.
+- **OpenAI 요청:** `openai` 7.50.0의 `chat.completions.create`, 모델 `gpt-6.1-sol`, `reasoning_effort: 'medium'`, `max_completion_tokens` 16,000, `response_format: { type: 'json_schema', strict: true }`. 시스템 프롬프트가 맨 앞이라 OpenAI 자동 캐시가 적용된다. `message.refusal`이 있으면 거절로 보고 템플릿을 쓴다. 사용법은 설치된 SDK 타입 정의로 확인했다.
+- **OpenAI 요금:** $2 입력, $10 출력(100만 토큰당). 캐시 입력은 자료에 따라 $0.10~$0.20이라 높은 쪽($0.20)으로 계산한다. 2026-11-05 기준 2차 가격 정리 페이지에서 확인했고 OpenAI 공식 가격표와 다를 수 있다. 호출 전 어림은 프롬프트 글자 수 × 입력 단가 + `max_tokens` × 출력 단가.
+- **예산:** 하루 $0.80 상한과 `ai_usage` 집계는 두 엔진 합계다.
+
 ## 주식 PR 12 — AI 뉴스와 시장 열기 (2026-11-05)
 
 - **AI 기사 저장 시점:** 08:50 묶음 호출 결과를 그 기사의 틱 시각(`publish_at`)과 함께 미리 `stock_news`에 넣는다. 틱이 같은 id로 템플릿 행을 `INSERT OR IGNORE`하므로 AI 글이 남고, 틱이 없던 행은 생기지 않는다. 미래 행은 DB에만 있고 어떤 API도 내려주지 않는다(§1-2).

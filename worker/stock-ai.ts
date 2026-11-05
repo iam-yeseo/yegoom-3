@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { AI_RULES } from '../shared/balance';
 import { STOCKS, stockInfo, type Ticker } from '../shared/stocks';
 import { kstTimestamp, tickTimes, tradesOn } from '../shared/market-calendar';
@@ -11,6 +12,33 @@ import { subjectParticle } from '../shared/stock-news-templates';
 export interface AiUsage { input: number; output: number; cacheWrite: number; cacheRead: number }
 export interface AiResult { text: string | null; refused: boolean; fallback: boolean; usage: AiUsage }
 export type AiWriter = (request: { system: string; prompt: string; schema: Record<string, unknown> }) => Promise<AiResult>;
+/** The engine the administrator picked: Claude (Anthropic) or OpenAI. */
+export type AiProvider = 'anthropic' | 'openai';
+export type AiWriters = Partial<Record<AiProvider, AiWriter>>;
+export const isAiProvider = (value: unknown): value is AiProvider => value === 'anthropic' || value === 'openai';
+export function aiWriters(keys: { anthropic?: string; openai?: string }): AiWriters {
+  return { ...(keys.anthropic ? { anthropic: anthropicWriter(keys.anthropic) } : {}), ...(keys.openai ? { openai: openaiWriter(keys.openai) } : {}) };
+}
+
+/** OpenAI writer: Chat Completions with a strict JSON schema, medium reasoning
+ * effort and automatic prompt caching (the stable system prompt comes first). */
+export function openaiWriter(apiKey: string): AiWriter {
+  const client = new OpenAI({ apiKey, timeout: AI_RULES.timeoutMs, maxRetries: 1 });
+  return async ({ system, prompt, schema }) => {
+    const response = await client.chat.completions.create({
+      model: AI_RULES.openai.model,
+      max_completion_tokens: AI_RULES.maxTokens,
+      reasoning_effort: AI_RULES.openai.reasoningEffort,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
+      response_format: { type: 'json_schema', json_schema: { name: 'stock_news', strict: true, schema } },
+    });
+    const cached = response.usage?.prompt_tokens_details?.cached_tokens ?? 0;
+    const usage: AiUsage = { input: (response.usage?.prompt_tokens ?? 0) - cached, output: response.usage?.completion_tokens ?? 0, cacheWrite: 0, cacheRead: cached };
+    const message = response.choices[0]?.message;
+    if (!message || message.refusal) return { text: null, refused: true, fallback: false, usage };
+    return { text: message.content, refused: false, fallback: false, usage };
+  };
+}
 
 /** The real writer: Claude Opus 5.5, medium effort, structured JSON output, the
  * server-side refusal fallback, and a cached stable system prompt. */
@@ -35,32 +63,49 @@ export function anthropicWriter(apiKey: string): AiWriter {
   };
 }
 
-export function costMicroUsd(usage: AiUsage, fallback = false): number {
-  const price = fallback ? AI_RULES.fallbackMicroUsdPerToken : AI_RULES.microUsdPerToken;
+const priceOf = (provider: AiProvider, fallback = false) =>
+  provider === 'openai' ? AI_RULES.openai.microUsdPerToken : fallback ? AI_RULES.fallbackMicroUsdPerToken : AI_RULES.microUsdPerToken;
+export function costMicroUsd(usage: AiUsage, fallback = false, provider: AiProvider = 'anthropic'): number {
+  const price = priceOf(provider, fallback);
   return Math.ceil(usage.input * price.input + usage.output * price.output + usage.cacheWrite * price.cacheWrite + usage.cacheRead * price.cacheRead);
 }
-/** Worst case before a call: every prompt character a cache-written token, plus the full output allowance. */
-export function estimateMicroUsd(system: string, prompt: string): number {
-  const price = AI_RULES.fallbackMicroUsdPerToken;
-  return Math.ceil((system.length + prompt.length) * price.cacheWrite + AI_RULES.maxTokens * price.output);
+/** Worst case before a call: every prompt character an uncached (or cache-written)
+ * token, plus the full output allowance (for Claude at the fallback rates). */
+export function estimateMicroUsd(system: string, prompt: string, provider: AiProvider = 'anthropic'): number {
+  const price = priceOf(provider, true);
+  return Math.ceil((system.length + prompt.length) * Math.max(price.input, price.cacheWrite) + AI_RULES.maxTokens * price.output);
 }
 
-export interface AiStatus { enabled: boolean; keyConfigured: boolean; today: { calls: number; costMicroUsd: number }; month: { calls: number; costMicroUsd: number } }
-export async function readAiStatus(db: D1Database, date: string, keyConfigured: boolean): Promise<AiStatus> {
-  const [setting, today, month] = await db.batch([
-    db.prepare("SELECT value FROM stock_settings WHERE key = 'ai_enabled'"),
+export interface AiStatus {
+  enabled: boolean; provider: AiProvider; keys: Record<AiProvider, boolean>; keyConfigured: boolean;
+  today: { calls: number; costMicroUsd: number }; month: { calls: number; costMicroUsd: number };
+}
+async function readAiSettings(db: D1Database): Promise<{ enabled: boolean; provider: AiProvider }> {
+  const rows = await db.prepare("SELECT key, value FROM stock_settings WHERE key IN ('ai_enabled', 'ai_provider')").all<{ key: string; value: string }>();
+  const value = (key: string) => rows.results.find(row => row.key === key)?.value;
+  const provider = value('ai_provider');
+  return { enabled: value('ai_enabled') !== '0', provider: isAiProvider(provider) ? provider : 'openai' };
+}
+export async function readAiStatus(db: D1Database, date: string, keys: Record<AiProvider, boolean>): Promise<AiStatus> {
+  const [settings, [today, month]] = await Promise.all([readAiSettings(db), db.batch([
     db.prepare('SELECT calls, cost_micro_usd AS costMicroUsd FROM ai_usage WHERE date = ?').bind(date),
     db.prepare('SELECT COALESCE(SUM(calls), 0) AS calls, COALESCE(SUM(cost_micro_usd), 0) AS costMicroUsd FROM ai_usage WHERE date >= ? AND date <= ?')
       .bind(`${date.slice(0, 7)}-01`, date),
-  ]);
-  return { enabled: (setting!.results[0] as { value: string } | undefined)?.value !== '0', keyConfigured,
+  ])]);
+  return { ...settings, keys, keyConfigured: keys[settings.provider],
     today: (today!.results[0] as AiStatus['today'] | undefined) ?? { calls: 0, costMicroUsd: 0 },
     month: month!.results[0] as AiStatus['month'] };
 }
-export async function setAiEnabled(db: D1Database, userId: string, enabled: boolean, now: number): Promise<void> {
-  await db.prepare(`INSERT INTO stock_settings (key, value, updated_by, updated_at) VALUES ('ai_enabled', ?, ?, ?)
+/** Administrator AI settings: the switch and/or the engine. */
+export async function saveAiSettings(db: D1Database, userId: string, input: { enabled?: boolean; provider?: AiProvider }, now: number): Promise<void> {
+  const write = (key: string, value: string) => db.prepare(`INSERT INTO stock_settings (key, value, updated_by, updated_at) VALUES (?, ?, ?, ?)
     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
-    .bind(enabled ? '1' : '0', userId, new Date(now).toISOString()).run();
+    .bind(key, value, userId, new Date(now).toISOString());
+  const statements = [
+    ...(input.enabled === undefined ? [] : [write('ai_enabled', input.enabled ? '1' : '0')]),
+    ...(input.provider === undefined ? [] : [write('ai_provider', input.provider)]),
+  ];
+  if (statements.length) await db.batch(statements);
 }
 
 const BANNED = ['사세요', '파세요', '사라', '팔아라', '매수하세요', '매도하세요', '매수 추천', '매도 추천', '투자하세요', '추천 종목', '씨발', '시발', '병신', '좆', '개새', '지랄'];
@@ -131,22 +176,20 @@ async function claimRun(db: D1Database, run: string, now: number): Promise<boole
   return result.meta.changes === 1;
 }
 /** Call the writer if the switch is on, a key exists and the estimate fits today's budget. */
-async function callAi(db: D1Database, writer: AiWriter | null, date: string, system: string, prompt: string, schema: Record<string, unknown>): Promise<unknown | null> {
-  if (!writer) return null;
-  const status = await db.batch([
-    db.prepare("SELECT value FROM stock_settings WHERE key = 'ai_enabled'"),
-    db.prepare('SELECT cost_micro_usd FROM ai_usage WHERE date = ?').bind(date),
-  ]);
-  if ((status[0]!.results[0] as { value: string } | undefined)?.value === '0') return null;
-  const spent = (status[1]!.results[0] as { cost_micro_usd: number } | undefined)?.cost_micro_usd ?? 0;
-  if (spent + estimateMicroUsd(system, prompt) > AI_RULES.dailyCapMicroUsd) return null;
+async function callAi(db: D1Database, writers: AiWriters, date: string, system: string, prompt: string, schema: Record<string, unknown>): Promise<unknown | null> {
+  const settings = await readAiSettings(db);
+  const writer = writers[settings.provider];
+  // Off, or the chosen engine has no key: templates (never silently switch engines).
+  if (!settings.enabled || !writer) return null;
+  const spent = await db.prepare('SELECT cost_micro_usd FROM ai_usage WHERE date = ?').bind(date).first<number>('cost_micro_usd') ?? 0;
+  if (spent + estimateMicroUsd(system, prompt, settings.provider) > AI_RULES.dailyCapMicroUsd) return null;
   let result: AiResult;
   try { result = await writer({ system, prompt, schema }); }
   catch (error) {
     console.error('AI news call failed', error instanceof Error ? error.name : 'UnknownError');
     return null;
   }
-  const cost = costMicroUsd(result.usage, result.fallback);
+  const cost = costMicroUsd(result.usage, result.fallback, settings.provider);
   await db.prepare(`INSERT INTO ai_usage (date, calls, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, cost_micro_usd)
     VALUES (?, 1, ?, ?, ?, ?, ?) ON CONFLICT (date) DO UPDATE SET calls = calls + 1, input_tokens = input_tokens + excluded.input_tokens,
       output_tokens = output_tokens + excluded.output_tokens, cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
@@ -163,7 +206,7 @@ interface MorningEvent { id: string; newsId: string; ticker: Ticker; kind: strin
  * results that move prices at 09:00) in one call. Rows are stored with their
  * future publish time; every read filters publish_at <= now, so nobody (the
  * administrator included) sees them early. Template rows fill anything missing. */
-export async function writeMorningNews(db: D1Database, writer: AiWriter | null, seed: string, date: string, rows: readonly StockRow[], now: number): Promise<number> {
+export async function writeMorningNews(db: D1Database, writers: AiWriters, seed: string, date: string, rows: readonly StockRow[], now: number): Promise<number> {
   if (!await claimRun(db, `morning:${date}`, now)) return 0;
   const times = tickTimes();
   const listed = (ticker: Ticker) => {
@@ -194,7 +237,7 @@ export async function writeMorningNews(db: D1Database, writer: AiWriter | null, 
 ${events.map(event => JSON.stringify({ eventId: event.id, company: stockInfo(event.ticker)!.name, kind: event.kind,
     direction: event.effectBp > 0 ? 'up' : event.effectBp < 0 ? 'down' : 'flat', size: sizeOf(event.effectBp),
     ...(event.relatedTo ? { relatedTo: event.relatedTo } : {}), ...(event.facts ? { facts: event.facts } : {}) })).join('\n')}`;
-  const output = await callAi(db, writer, date, SYSTEM_PROMPT, prompt, ARTICLES_SCHEMA) as { items?: { eventId?: unknown; headline?: unknown; body?: unknown }[] } | null;
+  const output = await callAi(db, writers, date, SYSTEM_PROMPT, prompt, ARTICLES_SCHEMA) as { items?: { eventId?: unknown; headline?: unknown; body?: unknown }[] } | null;
   const written = new Map<string, { headline: string; body: string }>();
   const answered = Array.isArray(output?.items) ? output!.items : [];
   for (const item of answered) {
@@ -221,7 +264,7 @@ interface Holder { userId: string; name: string; holdings: { ticker: Ticker; qua
 /** 18:00 after the close tick: the day's market summary, a one-line comment for
  * each holder (visible only to them), and on Fridays the weekly report. Template
  * articles are always written; the AI version replaces them when it succeeds. */
-export async function writeCloseNews(db: D1Database, writer: AiWriter | null, date: string, rows: readonly StockRow[], now: number): Promise<void> {
+export async function writeCloseNews(db: D1Database, writers: AiWriters, date: string, rows: readonly StockRow[], now: number): Promise<void> {
   if (!await claimRun(db, `close:${date}`, now)) return;
   const publishAt = kstTimestamp(date, '18:00');
   const traded = rows.filter(row => tradesOn(row.ticker, date) && row.status !== 'delisted' && row.dayOpen !== null);
@@ -271,7 +314,7 @@ export async function writeCloseNews(db: D1Database, writer: AiWriter | null, da
 플레이어: ${JSON.stringify([...holders.values()].map(holder => ({ userId: holder.userId, nickname: holder.name,
     holdings: holder.holdings.map(item => ({ company: stockInfo(item.ticker)!.name, shares: item.quantity, profit: goldText(item.value - item.cost) })) })))}
 ${friday ? `이번 주 등락: ${JSON.stringify(weekly.map(item => ({ company: item.name, change: percentText(item.change) })))}` : ''}`;
-  const output = (traded.length ? await callAi(db, writer, date, SYSTEM_PROMPT, prompt, CLOSE_SCHEMA) : null) as {
+  const output = (traded.length ? await callAi(db, writers, date, SYSTEM_PROMPT, prompt, CLOSE_SCHEMA) : null) as {
     summary?: { headline?: unknown; body?: unknown }; comments?: { userId?: unknown; body?: unknown }[]; weekly?: { headline?: unknown; body?: unknown } | null } | null;
   let finalSummary = summary;
   if (output?.summary && validArticle(output.summary, 'all')) {
