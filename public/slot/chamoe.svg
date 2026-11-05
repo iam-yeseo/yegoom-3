@@ -1,10 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <title>참외</title>
-  <g stroke="#493f46" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M39 18c-1-5 0-9 4-12" stroke="#9E8068" stroke-width="4"/>
-    <ellipse cx="40" cy="45" rx="25" ry="28" fill="#FFE08A"/>
-    <path d="M29 21c-9 14-9 34 0 48m11-48v48m11-48c9 14 9 34 0 48" stroke="#FFF5D5" stroke-width="5"/>
-    <path d="M38 18c5-6 10-7 15-4-3 6-8 8-15 4Z" fill="#B4D5A1"/>
-    <path d="M37 70h6"/>
-  </g>
+  <ellipse cx="32" cy="34" rx="22" ry="16" fill="#FFD866"/><path d="M18 26c4 6 4 12 0 18M28 20c3 8 3 20 0 28M38 20c-3 8-3 20 0 28M46 26c-4 6-4 12 0 18" stroke="#FFF4CC" stroke-width="3" stroke-linecap="round"/>
 </svg>

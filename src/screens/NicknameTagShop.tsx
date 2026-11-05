@@ -2,34 +2,44 @@ import { useEffect, useRef, useState } from "react";
 import { NICKNAME_TAG_RULES } from "../../shared/balance";
 import { TAG_GRADES, gradeLabel } from "../../shared/nickname-tags";
 import type { NicknameTag, TagDrawInput } from "../../shared/types";
-import { NickTag, Toolbar } from "../components/UI";
-import { confetti, openSheet, reduced, toast, useCountUp } from "../motion";
+import { NickTag, Toolbar, honorific, useDisplayName } from "../components/UI";
+import { confetti, flipY, openSheet, reduced, toast, useCountUp } from "../motion";
 import { useShop } from "../shop";
 
 /** The drawn tag, with a shortcut to wear it right away. */
-function DrawResult({ tag, busy, onEquip, onClose }: { tag: NicknameTag; busy: boolean; onEquip: () => void; onClose: () => void }) {
+function DrawResult({ tag, name, drawsToday, busy, onEquip, onClose }: {
+  tag: NicknameTag; name: string; drawsToday: number; busy: boolean; onEquip: () => void; onClose: () => void;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const chip = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const close = openSheet(dialog.current!);
+    flipY(chip.current, { delay: 300 });
     if (!reduced() && (tag.grade === "S" || tag.grade === "A")) confetti(chip.current, { spread: 140 });
     return close;
   }, [tag.grade]);
   return <dialog className="color-picker-dialog tag-draw-dialog" ref={dialog} aria-labelledby="tag-draw-title"
     onClose={event => { if (!event.currentTarget.open) onClose(); }}>
-    <div className="tag-draw-sheet">
-      <h2 id="tag-draw-title">새 별명 태그를 뽑았어요</h2>
-      <div ref={chip}><NickTag tag={tag} /></div>
-      <small>{gradeLabel(tag.grade)}</small>
-      {tag.equipped ? <p className="tag-note">지금 달고 있어요.</p>
-        : <button type="button" className="primary-button" disabled={busy} onClick={onEquip}>{busy ? "다는 중…" : "지금 달기"}</button>}
-      <button type="button" className="secondary-button" onClick={() => dialog.current?.close()}>닫기</button>
+    <div className={`tag-draw-sheet grade-${tag.grade.toLowerCase()}`}>
+      <span className="sheet-handle" aria-hidden="true" />
+      <h2 id="tag-draw-title" className="sr-only">새 별명 태그를 뽑았어요</h2>
+      <small className="tag-draw-grade">{gradeLabel(tag.grade)}</small>
+      <div className="tag-draw-card" ref={chip}><NickTag tag={tag} /><strong>{name}</strong></div>
+      <p className="tag-draw-meta">-{NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G · 오늘 {drawsToday}/{NICKNAME_TAG_RULES.dailyLimit}회</p>
+      {tag.equipped && <p className="tag-note">지금 달고 있어요.</p>}
+      <div className="tag-draw-actions">
+        <button type="button" className="secondary-button" onClick={() => dialog.current?.close()}>닫기</button>
+        {!tag.equipped && <button type="button" className="primary-button" disabled={busy} onClick={onEquip}>{busy ? "다는 중…" : "지금 달기"}</button>}
+      </div>
     </div>
   </dialog>;
 }
 
-export function NicknameTagShop({ onBack, go }: { onBack: () => void; go: (path: string) => void }) {
+export function NicknameTagShop({ username, displayName, onBack, go }: {
+  username: string; displayName?: string; onBack: () => void; go: (path: string) => void;
+}) {
   const shop = useShop();
+  const name = honorific(useDisplayName(username, displayName));
   const latest = useRef(shop);
   latest.current = shop;
   const shownGold = useCountUp(shop.gold);
@@ -73,9 +83,9 @@ export function NicknameTagShop({ onBack, go }: { onBack: () => void; go: (path:
           <NickTag tag={{ grade: "S", text: "전설적인" }} /><NickTag tag={{ grade: "A", text: "반짝이는" }} />
           <NickTag tag={{ grade: "B", text: "느긋한" }} /><NickTag tag={{ grade: "C", text: "배가 고픈" }} />
         </div>
-        <p>뽑은 태그는 내 정보에서 골라 달 수 있어요. 단 태그는 앱 어디서든 내 닉네임 앞에 보여요.</p>
+        <p>뽑은 태그는 내 정보에서 골라 달 수 있어요.<br />단 태그는 앱 어디서든 내 닉네임 앞에 보여요.</p>
         <div className="tag-shop-odds" aria-label="등급별 확률">
-          {TAG_GRADES.map(grade => <div key={grade.grade}><strong>{grade.label}</strong><span>{grade.look}</span><span>{grade.chance}%</span></div>)}
+          {TAG_GRADES.map(grade => <div key={grade.grade} className={`grade-${grade.grade.toLowerCase()}`}><strong>{grade.label}</strong><span>{grade.look}</span><small>{grade.chance}%</small></div>)}
         </div>
       </section>
       <div className="shop-purchase-actions slot-purchase-actions">
@@ -90,6 +100,6 @@ export function NicknameTagShop({ onBack, go }: { onBack: () => void; go: (path:
       {(error || shop.error) && <p className="form-message error" role="alert">{error || shop.error}</p>}
       <button type="button" className="text-button" onClick={() => go("/profile")}>내 별명 태그 보러 가기</button>
     </div>
-    {result && <DrawResult tag={result} busy={equipping} onEquip={() => void equip(result)} onClose={() => setResult(null)} />}
+    {result && <DrawResult tag={result} name={name} drawsToday={drawsToday} busy={equipping} onEquip={() => void equip(result)} onClose={() => setResult(null)} />}
   </div>;
 }

@@ -912,7 +912,7 @@ export default function App() {
   else if (path === "/shop/slot")
     content = <Slot onBack={() => go("/shop")} />;
   else if (path === "/shop/tag")
-    content = <NicknameTagShop onBack={() => go("/shop")} go={go} />;
+    content = <NicknameTagShop username={view.username} displayName={view.displayName} onBack={() => go("/shop")} go={go} />;
   else content = <Home data={view} go={go} />;
   // Sub-pages have their own back button instead of the tab bar.
   const subPage =

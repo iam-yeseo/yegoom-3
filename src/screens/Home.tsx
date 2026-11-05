@@ -10,7 +10,6 @@ import { useAttendance } from "../attendance";
 import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import {
   Avatar,
-  NickTag,
   PersonName,
   honorific,
   plainName,
@@ -284,8 +283,8 @@ export function ShopCards({ go }: { go: Go }) {
       {tiles.map(tile => <button key={tile.path} className="card shop-tile" onClick={() => go(tile.path)}>
         {tile.icon === "lotto" ? <span className="lotto-icon" aria-hidden="true"><i>7</i><i>12</i><i>21</i></span>
           : tile.icon === "speetto" ? <span className="speetto-icon" aria-hidden="true"><i><b /></i></span>
-          : tile.icon === "tag" ? <span className="tag-tile-icon" aria-hidden="true"><NickTag tag={{ grade: "A", text: "별명" }} /></span>
-          : <span className="slot-tile-icon" aria-hidden="true"><img src="/slot/seven.svg" alt="" /><img src="/slot/seven.svg" alt="" /><img src="/slot/seven.svg" alt="" /></span>}
+          : tile.icon === "tag" ? <span className="tag-tile-icon" aria-hidden="true"><i /></span>
+          : <span className="slot-tile-icon" aria-hidden="true"><i /><i /><i /></span>}
         <span className="solo-text">
           <strong>{tile.title}</strong>
           <small className={tile.icon === "lotto" ? "home-schedule" : undefined}>{tile.schedule}</small>

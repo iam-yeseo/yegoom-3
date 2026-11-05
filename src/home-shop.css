@@ -48,16 +48,27 @@
 .shop-tile-grid .shop-tile .home-schedule { white-space: nowrap; }
 /* A later third tile occupies a full last row, without a placeholder game. */
 .shop-tile-grid > .shop-tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
+/* Three little reels on a soft yellow tile (Claude Design 3i), no outline. */
 .slot-tile-icon {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 3px;
   flex-shrink: 0;
   width: 48px;
   height: 48px;
-  padding: 3px;
-  border: 2px solid #44394d;
-  border-radius: 12px;
-  background: #fff4c9;
+  border-radius: 16px;
+  background: #fff4cc;
 }
-.slot-tile-icon img { width: 12px; height: 30px; }
+.slot-tile-icon i {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 26px;
+  border-radius: 4px;
+  background: #fff;
+}
+.slot-tile-icon i::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #ff8e7a; }
+.slot-tile-icon i:nth-child(2)::after { background: #ffd866; }
+.slot-tile-icon i:nth-child(3)::after { background: #b9a3f0; }

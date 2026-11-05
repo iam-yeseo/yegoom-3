@@ -1,9 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <title>딸기</title>
-  <g stroke="#493f46" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M18 27c-9 13 4 35 17 43 3 2 7 2 10 0 13-8 26-30 17-43-8-10-36-10-44 0Z" fill="#FFA0B3"/>
-    <path d="m40 11 5 9 12-3-5 9 8 4-14 1-6 7-6-7-14-1 8-4-5-9 12 3z" fill="#AFD5A3"/>
-    <path d="M40 11V7" stroke="#83AC7E"/>
-    <path d="m27 39 1 3m12-1v3m12-5-1 3m-18 9 1 3m12-3-1 3m-5 7v2" stroke="#FFF0AE" stroke-width="3"/>
-  </g>
+  <path d="M32 56C18 46 12 34 16 26c4-6 12-6 16-2 4-4 12-4 16 2 4 8-2 20-16 30z" fill="#FF8E7A"/><path d="M22 20l10 4 10-4-4 6h-12z" fill="#8FD9C0"/><circle cx="26" cy="34" r="1.8" fill="#FFF4CC"/><circle cx="36" cy="32" r="1.8" fill="#FFF4CC"/><circle cx="31" cy="42" r="1.8" fill="#FFF4CC"/><circle cx="40" cy="40" r="1.8" fill="#FFF4CC"/>
 </svg>
