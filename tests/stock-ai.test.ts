@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { kstTimestamp, tickTimes } from '../shared/market-calendar';
 import { dayItems } from '../shared/stock-market';
 import { advanceStocks, daySeeds } from '../worker/stocks';
-import { costMicroUsd, estimateMicroUsd, readAiStatus, SYSTEM_PROMPT, validArticle, writeCloseNews, writeMorningNews, type AiResult, type AiWriter } from '../worker/stock-ai';
+import { costMicroUsd, estimateMicroUsd, readAiStatus, saveAiSettings, SYSTEM_PROMPT, validArticle, writeCloseNews, writeMorningNews, type AiResult, type AiWriter } from '../worker/stock-ai';
 
 const SECRET = 'test-only-stock-seed-secret-2026';
 const kst = (date: string, time: string) => kstTimestamp(date, time);
@@ -64,7 +64,7 @@ describe('AI morning news', () => {
   it('writes every scheduled article ahead of time, hidden until its tick, and the tick keeps the AI text', async () => {
     const writer = fake(prompt => ({ text: JSON.stringify({ items: eventIds(prompt).map((eventId, n) => ({ eventId, headline: `AI 기사 ${n}`, body: '짧은 본문이다.' })) }) }));
     const stocks = await rows();
-    const written = await writeMorningNews(db, writer, await seed(), date, stocks, morning);
+    const written = await writeMorningNews(db, { openai: writer }, await seed(), date, stocks, morning);
     const items = dayItems(await seed(), date);
     expect(written).toBe(items.length);
     expect(writer.calls).toHaveLength(1);
@@ -82,10 +82,10 @@ describe('AI morning news', () => {
     expect(published).toHaveLength(ids.length);
     expect(published.every(row => row.source === 'ai')).toBe(true);
     // The same morning never calls twice.
-    await writeMorningNews(db, writer, await seed(), date, stocks, morning);
+    await writeMorningNews(db, { openai: writer }, await seed(), date, stocks, morning);
     expect(writer.calls).toHaveLength(1);
-    const status = await readAiStatus(db, date, true);
-    expect(status.today).toEqual({ calls: 1, costMicroUsd: costMicroUsd(usage) });
+    const status = await readAiStatus(db, date, { anthropic: false, openai: true });
+    expect(status).toMatchObject({ provider: 'openai', keyConfigured: true, today: { calls: 1, costMicroUsd: costMicroUsd(usage, false, 'openai') } });
   });
 
   it('keeps templates for items that fail validation, malformed output, refusals, errors and a missing key', async () => {
@@ -97,7 +97,7 @@ describe('AI morning news', () => {
       { eventId: items[0]!.id, headline: '중복', body: '두 번째' },
       { eventId: 'news:unknown', headline: '없는 사건', body: '본문.' },
     ] }) }));
-    expect(await writeMorningNews(db, partial, await seed(), date, stocks, morning)).toBe(items.length - 2);
+    expect(await writeMorningNews(db, { openai: partial }, await seed(), date, stocks, morning)).toBe(items.length - 2);
     const ai = await aiNews();
     expect(ai.map(row => row.id)).not.toContain(items[0]!.id);
     expect(ai.map(row => row.id)).not.toContain(items[1]!.id);
@@ -115,35 +115,62 @@ describe('AI morning news', () => {
     ] as const) {
       const at = kst(day, '08:50');
       const dayRows = (await advanceStocks(db, SECRET, at)).rows;
-      expect(await writeMorningNews(db, writer, (await daySeeds(SECRET, [day])).get(day)!, day, dayRows, at)).toBe(0);
+      expect(await writeMorningNews(db, { openai: writer }, (await daySeeds(SECRET, [day])).get(day)!, day, dayRows, at)).toBe(0);
       expect(writer.calls).toHaveLength(1);
     }
     const calls = await db.prepare('SELECT date, calls FROM ai_usage ORDER BY date').all();
     // Malformed and refused calls are billed and recorded; a thrown error has no usage.
     expect(calls.results).toEqual([{ date, calls: 1 }, { date: '2026-11-09', calls: 1 }, { date: '2026-11-10', calls: 1 }]);
     const noKey = (await advanceStocks(db, SECRET, kst('2026-11-12', '08:50'))).rows;
-    expect(await writeMorningNews(db, null, (await daySeeds(SECRET, ['2026-11-12'])).get('2026-11-12')!, '2026-11-12', noKey, kst('2026-11-12', '08:50'))).toBe(0);
+    expect(await writeMorningNews(db, {}, (await daySeeds(SECRET, ['2026-11-12'])).get('2026-11-12')!, '2026-11-12', noKey, kst('2026-11-12', '08:50'))).toBe(0);
   });
 
   it('does not call when switched off or when the estimate would pass the $0.80 daily cap', async () => {
     const stocks = await rows();
     const writer = fake(() => ({ text: '{"items":[]}' }));
     await db.prepare("UPDATE stock_settings SET value = '0' WHERE key = 'ai_enabled'").run();
-    await writeMorningNews(db, writer, await seed(), date, stocks, morning);
+    await writeMorningNews(db, { openai: writer }, await seed(), date, stocks, morning);
     expect(writer.calls).toHaveLength(0);
     await db.prepare("UPDATE stock_settings SET value = '1' WHERE key = 'ai_enabled'").run();
-    await db.prepare("INSERT INTO ai_usage (date, calls, cost_micro_usd) VALUES ('2026-11-09', 2, 500000)").run();
+    await db.prepare("INSERT INTO ai_usage (date, calls, cost_micro_usd) VALUES ('2026-11-09', 2, 700000)").run();
     const monday = kst('2026-11-09', '08:50');
     const mondayRows = (await advanceStocks(db, SECRET, monday)).rows;
-    await writeMorningNews(db, writer, (await daySeeds(SECRET, ['2026-11-09'])).get('2026-11-09')!, '2026-11-09', mondayRows, monday);
+    await writeMorningNews(db, { openai: writer }, (await daySeeds(SECRET, ['2026-11-09'])).get('2026-11-09')!, '2026-11-09', mondayRows, monday);
     expect(writer.calls).toHaveLength(0);
-    expect(500_000 + estimateMicroUsd(SYSTEM_PROMPT, 'x')).toBeGreaterThan(800_000);
+    expect(700_000 + estimateMicroUsd(SYSTEM_PROMPT, 'x', 'openai')).toBeGreaterThan(800_000);
   });
 
   it('prices usage per million tokens: $4 in, $20 out, $5 cache write, $0.20 cache read', () => {
     expect(costMicroUsd({ input: 1000, output: 2000, cacheWrite: 3000, cacheRead: 10000 })).toBe(4000 + 40000 + 15000 + 2000);
     expect(costMicroUsd({ input: 1000, output: 0, cacheWrite: 0, cacheRead: 0 }, true)).toBe(5000);
     expect(estimateMicroUsd('a'.repeat(1000), 'b'.repeat(1000))).toBe(2000 * 6.25 + 16000 * 25);
+    // OpenAI gpt-6.1-sol: $2 input, $0.20 cached input, $10 output.
+    expect(costMicroUsd({ input: 1000, output: 2000, cacheWrite: 0, cacheRead: 10000 }, false, 'openai')).toBe(2000 + 20000 + 2000);
+    expect(estimateMicroUsd('a'.repeat(1000), 'b'.repeat(1000), 'openai')).toBe(2000 * 2 + 16000 * 10);
+  });
+});
+
+describe('AI engine choice', () => {
+  it('uses the engine the administrator picked, and never switches engines when its key is missing', async () => {
+    const stocks = await rows();
+    const respond = (prompt: string) => ({ text: JSON.stringify({ items: eventIds(prompt).map(eventId => ({ eventId, headline: '제목', body: '본문.' })) }) });
+    const openai = fake(respond), anthropic = fake(respond);
+    // Default engine: OpenAI.
+    await writeMorningNews(db, { openai, anthropic }, await seed(), date, stocks, morning);
+    expect([openai.calls.length, anthropic.calls.length]).toEqual([1, 0]);
+    await saveAiSettings(db, 'admin', { provider: 'anthropic' }, morning);
+    const monday = kst('2026-11-09', '08:50');
+    const mondayRows = (await advanceStocks(db, SECRET, monday)).rows;
+    await writeMorningNews(db, { openai, anthropic }, (await daySeeds(SECRET, ['2026-11-09'])).get('2026-11-09')!, '2026-11-09', mondayRows, monday);
+    expect([openai.calls.length, anthropic.calls.length]).toEqual([1, 1]);
+    // Claude chosen but only an OpenAI key: templates, no call to OpenAI.
+    const tuesday = kst('2026-11-10', '08:50');
+    const tuesdayRows = (await advanceStocks(db, SECRET, tuesday)).rows;
+    expect(await writeMorningNews(db, { openai }, (await daySeeds(SECRET, ['2026-11-10'])).get('2026-11-10')!, '2026-11-10', tuesdayRows, tuesday)).toBe(0);
+    expect(openai.calls).toHaveLength(1);
+    expect(await readAiStatus(db, '2026-11-10', { anthropic: false, openai: true })).toMatchObject({ enabled: true, provider: 'anthropic', keyConfigured: false });
+    await saveAiSettings(db, 'admin', { enabled: false, provider: 'openai' }, tuesday);
+    expect(await readAiStatus(db, '2026-11-10', { anthropic: false, openai: true })).toMatchObject({ enabled: false, provider: 'openai', keyConfigured: true });
   });
 });
 
@@ -155,7 +182,7 @@ describe('closing news', () => {
     const dayRows = (await advanceStocks(db, SECRET, close)).rows;
     const writer = fake(() => ({ text: JSON.stringify({ summary: { headline: 'AI 마감 시황', body: '오늘 시장은 조용했다.' },
       comments: [{ userId: 'min', body: '민님, 모기 사냥팀과 함께 버티는 중!' }, { userId: 'ghost', body: '없는 사람' }], weekly: { headline: 'AI 주간 실적', body: '한 주가 지났다.' } }) }));
-    await writeCloseNews(db, writer, date, dayRows, close);
+    await writeCloseNews(db, { openai: writer }, date, dayRows, close);
     const news = (await db.prepare("SELECT id, kind, headline, body, audience_user_id, source, publish_at FROM stock_news WHERE kind IN ('close', 'comment', 'weekly') ORDER BY id").all()).results;
     expect(news).toEqual([
       { id: `close:${date}`, kind: 'close', headline: 'AI 마감 시황', body: '오늘 시장은 조용했다.', audience_user_id: null, source: 'ai', publish_at: close },
@@ -165,7 +192,7 @@ describe('closing news', () => {
     // Templates when the AI is unavailable (Monday, no weekly).
     const monday = kst('2026-11-09', '18:00');
     const mondayRows = (await advanceStocks(db, SECRET, monday)).rows;
-    await writeCloseNews(db, null, '2026-11-09', mondayRows, monday);
+    await writeCloseNews(db, {}, '2026-11-09', mondayRows, monday);
     const templates = (await db.prepare("SELECT id, source, headline, body FROM stock_news WHERE kind IN ('close', 'comment', 'weekly') AND id LIKE '%2026-11-09%' ORDER BY id").all<{ id: string; source: string; headline: string; body: string }>()).results;
     expect(templates.map(row => [row.id, row.source])).toEqual([['close:2026-11-09', 'template'], ['comment:2026-11-09:min', 'template']]);
     expect(templates[0]!.headline).toMatch(/^\[마감 시황\] .+ 웃고 .+ 울고$/);

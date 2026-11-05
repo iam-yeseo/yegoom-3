@@ -66,9 +66,14 @@ test('administrators see the stock news card and cannot trade', async ({ page })
   await login(page, 'admin');
   await page.evaluate(() => { location.hash = '/admin'; });
   const card = page.getByRole('region', { name: '주식 뉴스 운영' });
-  await expect(card).toContainText('AI 키 없음 · 템플릿');
+  await expect(card).toContainText('OpenAI 키 없음 · 템플릿');
   await card.getByRole('button', { name: /주식 뉴스/ }).click();
   await expect(card.getByText('오늘', { exact: true })).toBeVisible();
+  // Switch the engine to Claude and back.
+  await card.getByRole('tab', { name: 'Claude' }).click();
+  await expect(card).toContainText('Claude 키 없음 · 템플릿');
+  await card.getByRole('tab', { name: 'OpenAI' }).click();
+  await expect(card).toContainText('OpenAI 키 없음 · 템플릿');
   await page.evaluate(() => { location.hash = '/stock/YEGM'; });
   await expect(page.getByRole('button', { name: '운영자는 거래할 수 없어요' })).toBeDisabled();
 });

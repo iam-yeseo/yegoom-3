@@ -335,7 +335,7 @@ describe('stock market API', () => {
       VALUES ('future-ai', 'YEGM', 'news', ?, '미래', '아직', 'ai', 'x'), ('news:2026-11-05:9', 'YEGM', 'news', ?, '공개됨', '본문', 'template', 'x')`).bind(now + 3_600_000, now - 60_000).run();
     const admin = await market.request<AdminState>(now, 'admin', '/api/admin');
     expect(admin.status, JSON.stringify(admin.data)).toBe(200);
-    expect(admin.data.stock.ai).toMatchObject({ enabled: true, keyConfigured: false, today: { calls: 0, costMicroUsd: 0 } });
+    expect(admin.data.stock.ai).toMatchObject({ enabled: true, provider: 'openai', keys: { anthropic: false, openai: false }, keyConfigured: false, today: { calls: 0, costMicroUsd: 0 } });
     expect(admin.data.stock.news.map(item => item.id)).not.toContain('future-ai');
     const target = admin.data.stock.news[0]!;
     const hidden = await market.request<AdminState>(now, 'admin', `/api/admin/stock/news/${encodeURIComponent(target.id)}`, 'PUT', { hidden: true });
@@ -346,6 +346,9 @@ describe('stock market API', () => {
     expect((await market.request(now, 'min', `/api/admin/stock/news/${encodeURIComponent(target.id)}`, 'PUT', { hidden: false })).status).toBe(403);
     const off = await market.request<AdminState>(now, 'admin', '/api/admin/stock/ai', 'PUT', { enabled: false });
     expect(off.data.stock.ai.enabled).toBe(false);
+    const claude = await market.request<AdminState>(now, 'admin', '/api/admin/stock/ai', 'PUT', { provider: 'anthropic' });
+    expect(claude.data.stock.ai).toMatchObject({ enabled: false, provider: 'anthropic' });
+    expect((await market.request(now, 'admin', '/api/admin/stock/ai', 'PUT', { provider: 'gemini' })).status).toBe(400);
   });
 
   it('returns 503 until the seed secret is configured', async () => {

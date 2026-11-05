@@ -98,7 +98,7 @@ export const api = {
   stockNews: (before?: string) => request<StockNewsPage>(`/stock/news${before ? `?before=${encodeURIComponent(before)}` : ""}`),
   tradeStock: (input: StockTradeInput) => request<StockTradeResponse>("/stock/trade", { method: "POST", body: JSON.stringify(input) }),
   addMarketHoliday: (date: string, reason: string, expectedUserId: string) => request<AdminState>("/admin/market-holidays", { method: "POST", body: JSON.stringify({ date, reason, expectedUserId }) }),
-  setStockAi: (enabled: boolean) => request<AdminState>("/admin/stock/ai", { method: "PUT", body: JSON.stringify({ enabled }) }),
+  setStockAi: (setting: { enabled?: boolean; provider?: "anthropic" | "openai" }) => request<AdminState>("/admin/stock/ai", { method: "PUT", body: JSON.stringify(setting) }),
   setStockNewsHidden: (id: string, hidden: boolean) => request<AdminState>(`/admin/stock/news/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ hidden }) }),
   removeMarketHoliday: (date: string) => request<AdminState>(`/admin/market-holidays/${date}`, { method: "DELETE" }),
   history: (id: GameId) => request<HistoryResponse>(`/games/${id}/history`),

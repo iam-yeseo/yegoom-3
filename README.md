@@ -195,6 +195,13 @@ PR #14의 머지를 확인한 최신 main `2e66839`에서 `codex/launch-b`로 �
 - **운영 탭:** AI 뉴스 켜기·끄기, 오늘·이번 달 호출 수와 비용, 이미 공개된 뉴스 숨기기·다시 보이기(가격 영향은 되돌리지 않음).
 - **배포 전:** `migrations/0016_stock_ai.sql` 원격 적용(시장을 여는 날 이전의 게임 결과를 "효과 0"으로 처리). Worker 비밀값 `STOCK_SEED_SECRET`(필수)와 `ANTHROPIC_API_KEY`(선택, 없으면 템플릿)를 `npx wrangler secret put`으로 넣습니다.
 
+## 주식 AI 엔진 선택 (Claude / OpenAI)
+
+- AI 뉴스는 Claude(`claude-opus-5-5`)와 OpenAI(`gpt-6.1-sol`, Chat Completions + strict JSON 스키마, reasoning effort `medium`) 둘 다 쓸 수 있습니다. 운영 탭 → 주식 뉴스 → **AI 엔진**에서 고르며 기본값은 OpenAI입니다.
+- 고른 엔진의 키가 없으면 다른 엔진으로 넘어가지 않고 템플릿을 씁니다. 하루 $0.80 상한은 두 엔진 합계에 적용됩니다.
+- 키: `npx wrangler secret put OPENAI_API_KEY --name yegoom-3`, `npx wrangler secret put ANTHROPIC_API_KEY --name yegoom-3` (또는 Cloudflare 대시보드 → Workers & Pages → yegoom-3 → Settings → Variables and Secrets).
+- 배포 전: `migrations/0017_stock_ai_provider.sql` 원격 적용(기본 엔진 OpenAI).
+
 ## 검증
 
 ```sh

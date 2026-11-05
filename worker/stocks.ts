@@ -6,7 +6,7 @@ import { GAME_RULES } from '../shared/balance';
 import type { GameId } from '../shared/types';
 import { readGameRules } from './game-settings';
 import { AI_RULES } from '../shared/balance';
-import { writeCloseNews, writeMorningNews, type AiWriter } from './stock-ai';
+import { writeCloseNews, writeMorningNews, type AiWriters } from './stock-ai';
 import type { Candle, MarketClock, MarketHoliday, StockDetailView, StockHomeSummary, StockMarketView, StockNewsItem, StockNewsKind, StockNewsPage, StockQuote, StockTradeResponse, StockTradeView, StockUnchanged } from '../shared/stock-types';
 
 export interface StockUser { id: string; role: 'player' | 'admin'; username: string }
@@ -439,13 +439,13 @@ export function stockCronDue(now: number): boolean {
 }
 
 /** The 10-minute Cron: ticks, then the AI news batches at 08:50 and 18:00. */
-export async function runStockCron(db: D1Database, secret: string, writer: AiWriter | null, now: number): Promise<void> {
+export async function runStockCron(db: D1Database, secret: string, writers: AiWriters, now: number): Promise<void> {
   const { rows, holidays } = await advanceStocks(db, secret, now);
   const date = kstDateOf(now);
   if (!isTradingDay(date, holidays)) return;
   const time = new Date(now + 9 * 3_600_000).toISOString().slice(11, 16);
-  if (time === '08:50') await writeMorningNews(db, writer, (await daySeeds(secret, [date])).get(date)!, date, rows, now);
-  if (time === '18:00') await writeCloseNews(db, writer, date, rows, now);
+  if (time === '08:50') await writeMorningNews(db, writers, (await daySeeds(secret, [date])).get(date)!, date, rows, now);
+  if (time === '18:00') await writeCloseNews(db, writers, date, rows, now);
 }
 
 // Administrator: published news only (never future), hide/show, and the AI switch.

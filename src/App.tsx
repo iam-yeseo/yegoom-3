@@ -665,13 +665,14 @@ export default function App() {
       setPreviewAdminState(next);
     } else await saveAdmin(owner => api.saveGameSettings(id, rules, effectiveFrom, owner));
   }
-  async function setStockAi(enabled: boolean) {
+  async function setStockAi(setting: { enabled?: boolean; provider?: "anthropic" | "openai" }) {
     if (adminDemo) {
       const current = previewAdminStateRef.current;
-      const next = { ...current, stock: { ...current.stock, ai: { ...current.stock.ai, enabled } } };
+      const ai = { ...current.stock.ai, ...setting };
+      const next = { ...current, stock: { ...current.stock, ai: { ...ai, keyConfigured: ai.keys[ai.provider] } } };
       previewAdminStateRef.current = next;
       setPreviewAdminState(next);
-    } else await saveAdmin(() => api.setStockAi(enabled));
+    } else await saveAdmin(() => api.setStockAi(setting));
   }
   async function hideStockNews(id: string, hidden: boolean) {
     if (!adminDemo) await saveAdmin(() => api.setStockNewsHidden(id, hidden));

@@ -4,7 +4,7 @@ import { CATCHMIND_RULES } from "../../shared/balance";
 import { GAME_RULES } from "../../shared/balance";
 import { scoreThresholdLabel, validatePredictionRules } from "../../shared/game-settings";
 import type { GameId } from "../../shared/types";
-import { Character, honorific } from "../components/UI";
+import { Character, Segmented, honorific } from "../components/UI";
 import { formatDateTime, formatTime, formatTimeSeconds } from "../format";
 import "../admin.css";
 
@@ -17,7 +17,7 @@ interface Props {
   onSaveClaw: (config: AdminClawConfig) => Promise<void>;
   /** reason null removes the holiday. */
   onSaveHoliday: (date: string, reason: string | null) => Promise<void>;
-  onSetStockAi: (enabled: boolean) => Promise<void>;
+  onSetStockAi: (setting: { enabled?: boolean; provider?: "anthropic" | "openai" }) => Promise<void>;
   onHideStockNews: (id: string, hidden: boolean) => Promise<void>;
   onPlayClaw: () => void;
   preview?: boolean;
@@ -293,6 +293,7 @@ function MarketHolidayCard({ state, disabled, onSave }: { state: AdminState; dis
   </section>;
 }
 
+const engineName = { openai: "OpenAI", anthropic: "Claude" } as const;
 const dollars = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
 /** AI news switch, spend, and hiding already-published articles (§8-6). */
 function StockNewsCard({ state, disabled, onSetAi, onHide }: { state: AdminState; disabled: boolean; onSetAi: Props["onSetStockAi"]; onHide: Props["onHideStockNews"] }) {
@@ -310,14 +311,19 @@ function StockNewsCard({ state, disabled, onSetAi, onHide }: { state: AdminState
     <button className="admin-card-toggle" type="button" aria-expanded={open} aria-controls={panel} onClick={() => setOpen(value => !value)}>
       <span className="admin-card-art"><Character artKey="monkey" /></span><span className="admin-card-title"><strong>주식 뉴스</strong><span>AI 뉴스 켜기·끄기와 공개된 뉴스 숨기기</span></span><span className="admin-card-chevron" aria-hidden="true">{open ? "−" : "+"}</span>
     </button>
-    <div className="admin-card-badges"><span className="pill peach">{!ai.keyConfigured ? "AI 키 없음 · 템플릿" : ai.enabled ? "AI 뉴스 켜짐" : "AI 뉴스 꺼짐"}</span></div>
+    <div className="admin-card-badges"><span className="pill peach">{!ai.enabled ? "AI 뉴스 꺼짐" : !ai.keyConfigured ? `${engineName[ai.provider]} 키 없음 · 템플릿` : `${engineName[ai.provider]} 사용 중`}</span></div>
     <div id={panel} hidden={!open}>
       <dl className="admin-ai-usage">
         <div><dt>오늘</dt><dd>{ai.today.calls}회 · {dollars(ai.today.costMicroUsd)}</dd></div>
         <div><dt>이번 달</dt><dd>{ai.month.calls}회 · {dollars(ai.month.costMicroUsd)}</dd></div>
       </dl>
-      <p className="admin-claw-explanation">하루 $0.80에 닿으면 그날은 템플릿 뉴스만 써요. 앞으로 나올 뉴스와 가격 사건은 운영자도 볼 수 없어요.</p>
-      <button className="secondary-button" type="button" disabled={disabled || busy} onClick={() => void run(() => onSetAi(!ai.enabled))}>
+      <div className="admin-ai-engine">
+        <Segmented label="AI 엔진" options={[{ value: "openai", label: "OpenAI" }, { value: "anthropic", label: "Claude" }]} value={ai.provider}
+          onChange={provider => { if (!disabled && !busy && provider !== ai.provider) void run(() => onSetAi({ provider })); }} />
+        <p>{(["openai", "anthropic"] as const).map(engine => `${engineName[engine]} 키 ${ai.keys[engine] ? "있음" : "없음"}`).join(" · ")}</p>
+      </div>
+      <p className="admin-claw-explanation">하루 $0.80에 닿으면 그날은 템플릿 뉴스만 써요. 고른 엔진의 키가 없으면 다른 엔진으로 넘어가지 않고 템플릿을 써요. 앞으로 나올 뉴스와 가격 사건은 운영자도 볼 수 없어요.</p>
+      <button className="secondary-button" type="button" disabled={disabled || busy} onClick={() => void run(() => onSetAi({ enabled: !ai.enabled }))}>
         {ai.enabled ? "AI 뉴스 끄기" : "AI 뉴스 켜기"}
       </button>
       <ul className="admin-holiday-list admin-news-list" aria-label="공개된 뉴스">
