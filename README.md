@@ -202,6 +202,11 @@ PR #14의 머지를 확인한 최신 main `2e66839`에서 `codex/launch-b`로 �
 - 키: `npx wrangler secret put OPENAI_API_KEY --name yegoom-3`, `npx wrangler secret put ANTHROPIC_API_KEY --name yegoom-3` (또는 Cloudflare 대시보드 → Workers & Pages → yegoom-3 → Settings → Variables and Secrets).
 - 배포 전: `migrations/0017_stock_ai_provider.sql` 원격 적용(기본 엔진 OpenAI).
 
+## 주식 뉴스 30분 슬롯과 회사 생애주기
+
+- 뉴스는 거래일 09:00부터 17:30까지 **30분마다 한 개씩, 하루 18개**가 나옵니다(아침 08:50에 AI가 한 번에 씁니다). 이 중 주가를 움직이는 것은 지금과 같은 수(일반 뉴스 4~7개, 찌라시와 확인/부인 보도, 예굼 모기 사냥)이고, 나머지 칸은 주가와 상관없는 분위기 기사입니다. 게임 속보·큰손·공시는 이와 별도로 그때그때 나옵니다.
+- 회사마다 **숨겨진 국면**(성장기·전성기·정체기·위기·회복기·신사업 도전)이 5~15일씩 이어집니다. 비밀 시드로 정해져 아무도 볼 수 없고 화면에도 표시하지 않습니다. 국면은 어떤 회사가 뉴스에 자주 나오는지, 주가를 움직이는 뉴스가 호재인지 악재인지, 기사 분위기를 바꿉니다. AI에게는 국면을 알려 주되 국면 이름과 전망은 쓰지 말라고 지시합니다.
+
 ## 검증
 
 ```sh

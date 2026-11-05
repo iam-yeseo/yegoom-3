@@ -31,7 +31,7 @@ function advance(now: number): PreviewMarket {
   const from = Math.min(...preview.rows.map(row => row.lastTickAt));
   const ticks = pendingTicks(from, now, none, 5_000);
   if (ticks.length) {
-    const result = advanceMarket(preview.rows, ticks, seedOf, [], none);
+    const result = advanceMarket(preview.rows, ticks, seedOf, [], none, 'preview|phase');
     preview.rows = result.rows;
     const cutoff = now - STOCK_RULES.tickRetentionDays * 86_400_000;
     preview.ticks = [...preview.ticks, ...result.ticks].filter(tick => tick.at >= cutoff);

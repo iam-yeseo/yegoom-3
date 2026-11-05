@@ -3,6 +3,7 @@ import { addTradingDays, isTradingDay, kstDateOf, kstTimestamp, nextDate, tickTi
 import { applyEffect, normalFrom, seededRandom, stepPrice } from './stock-engine';
 import { disclosureArticle, newsArticle, rumorArticle, type DisclosureKind } from './stock-news-templates';
 import { mosquitoArticle, STOCK_GAME_RULES } from './stock-games';
+import { companyPhase, featureArticle, PHASES, type Phase } from './stock-lifecycle';
 
 /** The market simulation shared by the Worker (HMAC day seeds, D1 state) and the
  * serverless preview (fixed seeds, memory). Given the same rows, ticks, seeds and
@@ -21,7 +22,7 @@ export interface MarketTick { at: number; date: string; index: number; ticker?: 
 /** A price event decided elsewhere (game results; rumors in PR 12). Its article,
  * if any, is published when the price moves. */
 export interface PendingEvent { id: string; ticker: Ticker; effectBp: number; applyAt: number; kind?: string; headline?: string; body?: string }
-export type NewsKind = 'news' | 'disclosure' | 'game' | 'mosquito' | 'rumor' | 'confirm' | 'denied';
+export type NewsKind = 'news' | 'feature' | 'disclosure' | 'game' | 'mosquito' | 'rumor' | 'confirm' | 'denied';
 export interface NewsRecord {
   id: string; ticker: Ticker; kind: NewsKind; publishAt: number;
   headline: string; body: string; effectBp: number | null;
@@ -32,7 +33,6 @@ export interface AdvanceResult {
   rows: StockRow[]; ticks: TickRecord[]; daily: DailyRecord[]; news: NewsRecord[];
   appliedEvents: { id: string; at: number }[]; delisted: { ticker: Ticker; date: string }[];
 }
-export interface ScheduledNews { id: string; ticker: Ticker; index: number; effectBp: number; variant: number }
 
 const TIMES = tickTimes();
 export const initialRows = (lastTickAt: number): StockRow[] => STOCKS.map(stock => ({
@@ -99,78 +99,90 @@ export function tickNormal(seed: string, ticker: Ticker, index: number): number 
   const random = seededRandom(`${seed}|${ticker}|${index}`);
   return normalFrom(random(), random());
 }
-/** The day's template news (4–7 items between 09:10 and 17:50). */
-export function scheduledNews(seed: string, date: string): ScheduledNews[] {
-  const random = seededRandom(`${seed}|news`);
-  const [min, max] = STOCK_RULES.newsPerDay;
-  const count = min + Math.floor(random() * (max - min + 1));
-  return Array.from({ length: count }, (_, n) => {
-    const stock = STOCKS[Math.floor(random() * STOCKS.length)]!;
-    const index = 1 + Math.floor(random() * (TICKS_PER_DAY - 2));
-    const [low, high] = STOCK_RULES.newsEffect[stock.volatility];
-    const sign = random() < 0.5 ? -1 : 1;
-    const size = low + random() * (high - low);
-    return { id: `news:${date}:${n}`, ticker: stock.ticker, index, effectBp: Math.round(sign * size * 10_000), variant: Math.floor(random() * 1000) };
-  });
-}
+/** One article every 30 minutes, 09:00–17:30: tick indexes 0, 3, …, 51 (18 slots). */
+export const NEWS_SLOTS = Array.from({ length: STOCK_RULES.newsSlots }, (_, n) => n * STOCK_RULES.newsSlotTicks);
+export type DayItemKind = 'news' | 'feature' | 'mosquito' | 'rumor' | 'confirm' | 'denied';
+/** Every article scheduled for a day, with its template text. The AI morning batch
+ * rewrites these before they are published. `phase` is internal (never shown). */
+export interface DayItem { id: string; ticker: Ticker; index: number; effectBp: number; kind: DayItemKind; headline: string; body: string; relatedId?: string; phase: Phase }
 
-export interface ScheduledMosquito { id: string; index: number; success: boolean; effectBp: number; variant: number }
-/** YEGM's mosquito hunts of a day (0–2), on its trading days only. */
-export function scheduledMosquito(seed: string, date: string): ScheduledMosquito[] {
-  if (!tradesOn('YEGM', date)) return [];
-  const random = seededRandom(`${seed}|mosquito`);
-  const { maxPerDay, successRate, effect: [low, high] } = STOCK_GAME_RULES.mosquito;
-  const count = Math.floor(random() * (maxPerDay + 1));
-  return Array.from({ length: count }, (_, n) => {
-    const index = 1 + Math.floor(random() * (TICKS_PER_DAY - 2));
-    const success = random() < successRate;
-    const size = low + random() * (high - low);
-    return { id: `mosquito:${date}:${n}`, index, success, effectBp: Math.round((success ? 1 : -1) * size * 10_000), variant: Math.floor(random() * 1000) };
-  });
-}
-
-export interface ScheduledRumor { id: string; ticker: Ticker; index: number; effectBp: number; outcomeId: string; outcomeIndex: number;
-  outcomeBp: number; truth: boolean; variant: number }
-/** 1–2 rumors (찌라시) a day: ±2–3% when they spread, then 2–4 hours later a
- * confirmation (true 60%: ±4–8% the same way) or a denial (undo the rumor plus
- * 1–2% the other way). Decided together so both articles tell one story. */
-export function scheduledRumors(seed: string, date: string): ScheduledRumor[] {
-  const random = seededRandom(`${seed}|rumor`);
-  const { perDay: [min, max], truthRate, spread, confirm, deny, delayTicks: [early, late] } = STOCK_RULES.rumor;
-  const count = min + Math.floor(random() * (max - min + 1));
-  const out: ScheduledRumor[] = [];
-  for (let n = 0; n < count; n++) {
-    const stock = STOCKS[Math.floor(random() * STOCKS.length)]!;
-    const index = 1 + Math.floor(random() * (TICKS_PER_DAY - 2 - late));
-    const delay = early + Math.floor(random() * (late - early + 1));
-    const sign = random() < 0.5 ? -1 : 1;
+/** A day's 18 articles. Price-moving items keep their usual number (rumors and
+ * their outcome, YEGM mosquito hunts, 4–7 news); every other slot is a mood
+ * piece with no price effect. Hidden company phases decide who makes the news
+ * and whether moving news is good or bad. */
+export function dayItems(seed: string, date: string, phaseSeed = 'phase'): DayItem[] {
+  const random = seededRandom(`${seed}|slots`);
+  const trading = STOCKS.filter(stock => tradesOn(stock.ticker, date));
+  const phaseOf = new Map(trading.map(stock => [stock.ticker, companyPhase(phaseSeed, stock.ticker, date)]));
+  const pick = () => {
+    const total = trading.reduce((sum, stock) => sum + PHASES[phaseOf.get(stock.ticker)!].weight, 0);
+    let roll = random() * total;
+    for (const stock of trading) if ((roll -= PHASES[phaseOf.get(stock.ticker)!].weight) < 0) return stock;
+    return trading[trading.length - 1]!;
+  };
+  const free = new Set(NEWS_SLOTS.map((_, slot) => slot));
+  const freeSlot = (from = 0, to = NEWS_SLOTS.length - 1) => {
+    const options = [...free].filter(slot => slot >= from && slot <= to);
+    return options.length ? options[Math.floor(random() * options.length)]! : null;
+  };
+  const items: DayItem[] = [];
+  const add = (slot: number, item: Omit<DayItem, 'index' | 'phase'>) => {
+    free.delete(slot);
+    items.push({ ...item, index: NEWS_SLOTS[slot]!, phase: phaseOf.get(item.ticker)! });
+  };
+  if (!trading.length) return [];
+  // 찌라시 and its confirmation/denial 2–4 hours (4–8 slots) later.
+  const { perDay: [rumorMin, rumorMax], truthRate, spread, confirm, deny, delaySlots: [early, late] } = STOCK_RULES.rumor;
+  const rumors = rumorMin + Math.floor(random() * (rumorMax - rumorMin + 1));
+  for (let n = 0; n < rumors; n++) {
+    const stock = pick();
+    const phase = PHASES[phaseOf.get(stock.ticker)!];
+    const sign = random() < phase.upRate ? 1 : -1;
     const truth = random() < truthRate;
+    const delay = early + Math.floor(random() * (late - early + 1));
     const effectBp = Math.round(sign * (spread[0] + random() * (spread[1] - spread[0])) * 10_000);
     const outcomeBp = truth ? Math.round(sign * (confirm[0] + random() * (confirm[1] - confirm[0])) * 10_000)
       : -effectBp - Math.round(sign * (deny[0] + random() * (deny[1] - deny[0])) * 10_000);
     const variant = Math.floor(random() * 1000);
-    if (!tradesOn(stock.ticker, date)) continue;
-    out.push({ id: `rumor:${date}:${n}`, ticker: stock.ticker, index, effectBp, truth, outcomeBp, variant,
-      outcomeId: `${truth ? 'confirm' : 'denied'}:${date}:${n}`, outcomeIndex: index + delay });
+    const slot = freeSlot(1, NEWS_SLOTS.length - 1 - delay);
+    if (slot === null || !free.has(slot + delay)) continue;
+    const id = `rumor:${date}:s${slot}`;
+    add(slot, { id, ticker: stock.ticker, effectBp, kind: 'rumor', ...rumorArticle(stock.ticker, 'rumor', sign > 0, variant) });
+    add(slot + delay, { id: `${truth ? 'confirm' : 'denied'}:${date}:s${slot + delay}`, ticker: stock.ticker, effectBp: outcomeBp, kind: truth ? 'confirm' : 'denied',
+      relatedId: id, ...rumorArticle(stock.ticker, truth ? 'confirm' : 'denied', sign > 0, variant) });
   }
-  return out;
-}
-/** Every price-moving item scheduled for a day, with its template article. The
- * AI morning batch (PR 12) rewrites these articles before they are published. */
-export interface DayItem { id: string; ticker: Ticker; index: number; effectBp: number; kind: 'news' | 'mosquito' | 'rumor' | 'confirm' | 'denied'; headline: string; body: string; relatedId?: string }
-export function dayItems(seed: string, date: string): DayItem[] {
-  const items: DayItem[] = scheduledNews(seed, date).map(item => ({ id: item.id, ticker: item.ticker, index: item.index, effectBp: item.effectBp, kind: 'news',
-    ...newsArticle(item.ticker, item.effectBp > 0, item.variant) }));
-  for (const hunt of scheduledMosquito(seed, date)) {
-    items.push({ id: hunt.id, ticker: 'YEGM', index: hunt.index, effectBp: hunt.effectBp, kind: 'mosquito', ...mosquitoArticle(hunt.success, hunt.variant) });
+  // YEGM mosquito hunts (0–2) on its trading days.
+  if (phaseOf.has('YEGM')) {
+    const { maxPerDay, successRate, effect: [low, high] } = STOCK_GAME_RULES.mosquito;
+    const hunts = Math.floor(random() * (maxPerDay + 1));
+    for (let n = 0; n < hunts; n++) {
+      const success = random() < successRate;
+      const effectBp = Math.round((success ? 1 : -1) * (low + random() * (high - low)) * 10_000);
+      const variant = Math.floor(random() * 1000);
+      const slot = freeSlot();
+      if (slot !== null) add(slot, { id: `mosquito:${date}:s${slot}`, ticker: 'YEGM', effectBp, kind: 'mosquito', ...mosquitoArticle(success, variant) });
+    }
   }
-  for (const rumor of scheduledRumors(seed, date)) {
-    const up = rumor.effectBp > 0;
-    items.push({ id: rumor.id, ticker: rumor.ticker, index: rumor.index, effectBp: rumor.effectBp, kind: 'rumor', ...rumorArticle(rumor.ticker, 'rumor', up, rumor.variant) });
-    items.push({ id: rumor.outcomeId, ticker: rumor.ticker, index: rumor.outcomeIndex, effectBp: rumor.outcomeBp, kind: rumor.truth ? 'confirm' : 'denied',
-      relatedId: rumor.id, ...rumorArticle(rumor.ticker, rumor.truth ? 'confirm' : 'denied', up, rumor.variant) });
+  // Price-moving news (4–7), direction and size shaped by the hidden phase.
+  const [min, max] = STOCK_RULES.newsPerDay;
+  const moving = min + Math.floor(random() * (max - min + 1));
+  for (let n = 0; n < moving; n++) {
+    const stock = pick();
+    const phase = PHASES[phaseOf.get(stock.ticker)!];
+    const [low, high] = STOCK_RULES.newsEffect[stock.volatility];
+    const sign = random() < phase.upRate ? 1 : -1;
+    const effectBp = Math.round(sign * (low + random() * (high - low)) * phase.size * 10_000);
+    const variant = Math.floor(random() * 1000);
+    const slot = freeSlot();
+    if (slot !== null) add(slot, { id: `news:${date}:s${slot}`, ticker: stock.ticker, effectBp, kind: 'news', ...newsArticle(stock.ticker, effectBp > 0, variant) });
   }
-  return items.filter(item => tradesOn(item.ticker, date));
+  // Every remaining slot: a mood piece (no price effect).
+  for (const slot of [...free].sort((a, b) => a - b)) {
+    const stock = pick();
+    const variant = Math.floor(random() * 1000);
+    add(slot, { id: `feature:${date}:s${slot}`, ticker: stock.ticker, effectBp: 0, kind: 'feature', ...featureArticle(stock.ticker, phaseOf.get(stock.ticker)!, variant) });
+  }
+  return items.sort((a, b) => a.index - b.index);
 }
 
 function disclosure(ticker: Ticker, kind: DisclosureKind, date: string, at: number): NewsRecord {
@@ -179,7 +191,7 @@ function disclosure(ticker: Ticker, kind: DisclosureKind, date: string, at: numb
 
 /** Replay `ticks` in order. `seedOf(date)` must return that date's secret seed. */
 export function advanceMarket(input: readonly StockRow[], ticks: readonly MarketTick[], seedOf: (date: string) => string,
-  events: readonly PendingEvent[], holidays: ReadonlyMap<string, string>): AdvanceResult {
+  events: readonly PendingEvent[], holidays: ReadonlyMap<string, string>, phaseSeed = 'phase'): AdvanceResult {
   const rows = input.map(row => ({ ...row }));
   const result: AdvanceResult = { rows, ticks: [], daily: [], news: [], appliedEvents: [], delisted: [] };
   const applied = new Set<string>();
@@ -191,7 +203,7 @@ export function advanceMarket(input: readonly StockRow[], ticks: readonly Market
   for (const tick of ticks) {
     const seed = seedOf(tick.date);
     let todays = itemsOf.get(tick.date);
-    if (!todays) itemsOf.set(tick.date, todays = dayItems(seed, tick.date));
+    if (!todays) itemsOf.set(tick.date, todays = dayItems(seed, tick.date, phaseSeed));
     const closing = tick.index === TICKS_PER_DAY - 1;
     if (tick.index === -1) {
       // Event step: only the event's stock moves, at the publication instant.

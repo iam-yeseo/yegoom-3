@@ -18,7 +18,7 @@ export interface MarketClock {
   /** When prices next move (the next 10-minute tick), for polling. */
   nextTickAt: string | null;
 }
-export type StockNewsKind = 'news' | 'disclosure' | 'rumor' | 'confirm' | 'denied' | 'game' | 'mosquito' | 'whale' | 'close' | 'comment' | 'weekly';
+export type StockNewsKind = 'news' | 'feature' | 'disclosure' | 'rumor' | 'confirm' | 'denied' | 'game' | 'mosquito' | 'whale' | 'close' | 'comment' | 'weekly';
 export interface StockNewsItem {
   id: string; ticker: Ticker | null; kind: StockNewsKind;
   headline: string; body: string; publishAt: string;
