@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ATTENDANCE_RULES, CATCHMIND_RULES, LOTTO_RULES, SPEETTO_RULES } from '../shared/balance';
+import { ATTENDANCE_RULES, CATCHMIND_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SPEETTO_RULES } from '../shared/balance';
 import { createShopPreview } from '../src/shop-preview';
 import { advanceNoticeOffset, hasSeenLotto, lottoSeenKey, markLottoSeen, markViewedLottoDraw, nextKstMidnight, noticeDate } from '../src/lotto-notice';
 
@@ -129,17 +129,17 @@ describe('combined attendance and shop preview cash', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-11-02T00:00:00Z'));
     const engine = createShopPreview(0, 100, '2026-11-02');
-    expect(engine.read().inventory).toEqual({ lottoTickets: 2, speettoTickets: 2 });
+    expect(engine.read().inventory).toEqual({ lottoTickets: 2, speettoTickets: 2, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
     engine.claimLaunchGift();
-    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 7 });
+    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 7, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
     vi.setSystemTime(new Date('2026-11-02T15:00:00Z'));
     engine.setAttendanceBonus(0, '2026-11-03');
-    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 7 });
+    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 7, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
     engine.setAttendanceBonus(500, '2026-11-03');
     engine.buyLotto({ requestId: 'use-attendance-ticket', numbers: [1, 2, 3, 4, 5], payment: 'ticket' });
     engine.setAttendanceBonus(500, '2026-11-03');
-    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 8 });
-    expect(createShopPreview(0, 100, '2026-11-03').read().inventory).toEqual({ lottoTickets: 3, speettoTickets: 3 });
+    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 8, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
+    expect(createShopPreview(0, 100, '2026-11-03').read().inventory).toEqual({ lottoTickets: 3, speettoTickets: 3, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
   });
   it('makes a Catchmind award spendable without replaying it or undoing prior purchases', () => {
     const engine = createShopPreview(LOTTO_RULES.price * 2 - CATCHMIND_RULES.gold);

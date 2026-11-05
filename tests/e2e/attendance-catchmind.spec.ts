@@ -132,7 +132,7 @@ for (const mode of ['authenticated', 'preview'] as const) for (const width of [3
     await expect(page.locator('.fx-toast')).toContainText('+100G + 로또 1 + 스피또 1 받았어요');
     if (!preview) {
       const view = await (await page.request.get(`${ORIGIN}/api/bootstrap`)).json() as BootstrapResponse;
-      expect(view.inventory).toEqual({ lottoTickets: 3, speettoTickets: 3 });
+      expect(view.inventory).toEqual({ lottoTickets: 3, speettoTickets: 3, tagTickets: 0 });
     }
     // Finished rounds may have been added by earlier real-game tests. Compare
     // the UI with this authenticated user's current state and gallery sequence,

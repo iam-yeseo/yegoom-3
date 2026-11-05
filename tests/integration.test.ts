@@ -1996,7 +1996,7 @@ describe('Worker and D1 integration', () => {
       expect(view).toMatchObject({ launchGift: { available: false, claimed: true },
         inventory: { lottoTickets: 5, speettoTickets: 5 }, user: { gold: 100, weeklyScore: 0 } });
       const shopResponse = await request('/api/shop', { cookie });
-      expect((await shopResponse.json() as ShopState).inventory).toEqual({ lottoTickets: 5, speettoTickets: 5 });
+      expect((await shopResponse.json() as ShopState).inventory).toEqual({ lottoTickets: 5, speettoTickets: 5, tagTickets: 0 });
       expect((await ledgerRows()).map(row => row.reference)).toEqual(['attendance:2026-11-02:min']);
     });
 
@@ -2037,8 +2037,8 @@ describe('Worker and D1 integration', () => {
       expect((await bootstrap(siwon.cookie)).launchGift).toEqual({ available: true, claimed: false });
       await claim(siwon.cookie);
       expect(await giftRows()).toHaveLength(4);
-      expect((await bootstrap(min.cookie)).inventory).toEqual({ lottoTickets: 5, speettoTickets: 5 });
-      expect((await bootstrap(siwon.cookie)).inventory).toEqual({ lottoTickets: 5, speettoTickets: 5 });
+      expect((await bootstrap(min.cookie)).inventory).toEqual({ lottoTickets: 5, speettoTickets: 5, tagTickets: 0 });
+      expect((await bootstrap(siwon.cookie)).inventory).toEqual({ lottoTickets: 5, speettoTickets: 5, tagTickets: 0 });
     });
 
     it('requires login and rejects an admin even with a seeded attendance record', async () => {
@@ -3892,7 +3892,7 @@ describe('Worker and D1 integration', () => {
         ] : []);
         expect((await database.prepare('SELECT * FROM attendance WHERE date < ?').bind(day).all()).results).toEqual(historical);
         const view = await (await request('/api/bootstrap', { cookie: sessions[0]!.cookie, instance })).json() as BootstrapResponse;
-        expect(view.inventory).toEqual({ lottoTickets: coupons, speettoTickets: coupons });
+        expect(view.inventory).toEqual({ lottoTickets: coupons, speettoTickets: coupons, tagTickets: 0 });
         expect(await (await request('/api/shop', { cookie: sessions[0]!.cookie, instance })).json()).toMatchObject({ inventory: view.inventory });
       } finally { await instance.dispose(); }
     });
@@ -4370,7 +4370,7 @@ describe('Worker and D1 integration', () => {
         if (roll === 6) expect(result.spin!.reels).toEqual(['seven', 'seven', 'seven']);
         else expect(new Set(result.spin!.reels).size).toBeGreaterThan(1);
         expect(result.gold).toBe(roll === 6 ? SLOT_RULES.jackpotPrize : 0);
-        expect(result.inventory).toEqual({ lottoTickets: 0, speettoTickets: 0 });
+        expect(result.inventory).toEqual({ lottoTickets: 0, speettoTickets: 0, tagTickets: 0 });
         expect((await recent(cookie, instance)).slot.recent).toEqual([result.spin]);
         const before = await ledgerRows(database);
         expect((await spin(cookie, instance, requestId)).spin).toEqual(result.spin);
@@ -4994,7 +4994,7 @@ describe('Worker and D1 integration', () => {
         expect(view.user.gold).toBe(5000);
         expect(view.ledger.filter(row => row.currency === 'gold' && row.amount === 5000)).toHaveLength(1);
         expect(view.attendance).toMatchObject({ today: TODAY, claimed: false, canClaim: true });
-        expect(view.inventory).toEqual({ lottoTickets: 0, speettoTickets: 0 });
+        expect(view.inventory).toEqual({ lottoTickets: 0, speettoTickets: 0, tagTickets: 0 });
       }
       const settled = await db.prepare('SELECT matches, rank, prize, settled_at FROM lotto_tickets WHERE id = ?')
         .bind(purchase.id).first<{ matches: number; rank: number; prize: number; settled_at: string | null }>();
