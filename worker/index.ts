@@ -18,7 +18,7 @@ import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, re
 import { PhotoError } from './photos';
 import { PROFILE_PHOTO, LUCK_PHOTO } from '../shared/profile';
 import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, getLuckPhotoMetadata, luckPhotoUrl } from './luck-photos';
-import { readAnnouncements } from './announcements';
+import { notificationsRoute, readNotificationSummary, sendAdminNotification, NotificationError, notify } from './notifications';
 import { maintainDatabase } from './maintenance';
 import { settleDueRankingRewards } from './ranking-rewards';
 import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockSecret, tradeStock } from './stocks';
@@ -272,6 +272,10 @@ async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
     }
     writes.push(db.prepare('UPDATE game_rounds SET settled_at = ? WHERE game_id = ? AND round_date = ? AND settled_at IS NULL')
       .bind(now.getTime(), round.game_id, round.round_date));
+    // Everyone hears that the answer is out, once per round.
+    writes.push(notify(db, { kind: 'game', audience: 'all',
+      payload: { kind: 'game', game: round.game_id, title: GAME_RULES[round.game_id].title, answer: round.answer! },
+      reference: `notification:game:${round.game_id}:${round.round_date}`, createdAt: now.toISOString() }));
   }
   // One D1 binding call for the whole batch: rewards and completion markers
   // commit together, including rollbacks and concurrent idempotent retries.
@@ -462,7 +466,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id ${EQUIPPED_TAG_JOIN}
     WHERE (u.role = 'player' AND u.active = 1) OR u.id = ? OR u.username IN (?, ?, ?) ORDER BY u.username`)
     .bind(weekStart(now), user.id, ...GAME_IDS.map(id => GAME_RULES[id].author)).all<BootstrapProfile>().then(result => result.results);
-  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, launchGift, announcements, lottoNotice, stock] = await Promise.all([
+  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, launchGift, notifications, lottoNotice, stock] = await Promise.all([
     profiles,
     readGames(env.DB, user, GAME_IDS, now, profiles),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
@@ -472,7 +476,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     readCatchmindSummary(env.DB),
     getClawSummary(env.DB, user, now.getTime()),
     getLaunchGiftState(env.DB, user, now),
-    readAnnouncements(env.DB, user.id, now),
+    readNotificationSummary(env.DB, user.id),
     readLottoNotice(env.DB, user.id, now),
     // Until the seed secret is configured the market cannot run; the tile says "준비 중".
     FEATURES.stock && env.STOCK_SEED_SECRET ? readStockHome(env.DB, user, now.getTime()) : null,
@@ -485,7 +489,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
     inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0, tagTickets: viewer?.tagTickets ?? 0 },
-    kuji, lottoNotice, catchmind, claw, launchGift, announcements, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    kuji, lottoNotice, catchmind, claw, launchGift, notifications, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {
   if (kstDate(new Date()) !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
@@ -629,6 +633,11 @@ async function api(request: Request, env: Env): Promise<Response> {
       await saveAdminClawConfig(env.DB, user, input, new Date());
       return json(await adminState(env, new Date()));
     }
+    if (url.pathname === '/api/admin/notifications') {
+      if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+      await sendAdminNotification(env.DB, await body(request), now);
+      return json(await readNotificationSummary(env.DB, user.id));
+    }
     if (url.pathname === '/api/admin/stock/ai') {
       if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
       const input = await body(request);
@@ -736,6 +745,9 @@ async function api(request: Request, env: Env): Promise<Response> {
     if (limit > CATCHMIND_RULES.galleryPageSize) throw new HttpError(400, 'INVALID_PAGE', '한 번에 불러올 그림 수를 확인해 주세요.');
     return json(await readCatchmindGallery(env.DB, before, limit));
   }
+  if (url.pathname === '/api/notifications') {
+    return json(await notificationsRoute(env.DB, user, request.method, url.searchParams.get('before'), now));
+  }
   if (url.pathname === '/api/ranking') {
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     return json(await readRanking(env.DB, user, url.searchParams.get('period'), url.searchParams.get('before'), now));
@@ -821,7 +833,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof RankingError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

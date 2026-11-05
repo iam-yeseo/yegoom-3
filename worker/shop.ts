@@ -2,7 +2,7 @@ import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO
 import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoNotice, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotResponse, SlotSpin, SlotSymbol } from '../shared/types';
 import { slotResult } from '../shared/slot';
 import { kstDate, kstTimestamp, weekStart } from './rules';
-import { announcePrize } from './announcements';
+import { notifyPrize } from './notifications';
 import { readBalances } from './balances';
 
 export interface ShopUser { id: string; role: 'player' | 'admin' }
@@ -229,7 +229,7 @@ export async function settleDueLotto(db: D1Database, now: Date): Promise<void> {
       VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
       .bind(crypto.randomUUID(), ticket.user_id, prize, `데일리 로또 ${rank}등`, `lotto:prize:${ticket.id}`, now.toISOString()));
     if (rank !== null && ANNOUNCEMENT_RULES.lottoRanks.some(value => value === rank)) {
-      writes.push(announcePrize(db, 'lotto', `lotto:prize:${ticket.id}`, rank));
+      writes.push(notifyPrize(db, 'lotto', `lotto:prize:${ticket.id}`, rank));
     }
     writes.push(db.prepare('UPDATE lotto_tickets SET matches = ?, rank = ?, prize = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL')
       .bind(matches, rank, prize, now.toISOString(), ticket.id));
@@ -329,7 +329,7 @@ async function buySpeetto(db: D1Database, user: ShopUser, input: Record<string, 
   const writes = [simplePurchaseStatement(db, user, id, 'speetto', payload, method, SPEETTO_RULES.price, JSON.stringify({ cells, won, prize }), attempt, now, window.start, window.end),
     ...chargeStatements(db, attempt, 'speetto')];
   if (prize) writes.push(grantGold(db, attempt, prize, '스피또 당첨', `speetto:prize:${attempt}`),
-    announcePrize(db, 'speetto', `speetto:prize:${attempt}`, null));
+    notifyPrize(db, 'speetto', `speetto:prize:${attempt}`, null));
   await db.batch(writes);
   return await previousPurchase(db, user, id, 'speetto', payload) ?? await rejectedPurchase(db, user, window.start, window.end);
 }

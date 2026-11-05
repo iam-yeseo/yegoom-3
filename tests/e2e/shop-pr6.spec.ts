@@ -44,7 +44,7 @@ const speettoTickets = () => [
 ];
 async function fixture(page: Page, tickets: { lotto?: LottoTicket[]; speetto?: SpeettoTicket[] } = {}) {
   const initial = await signIn(page);
-  let snapshot: BootstrapResponse = { ...initial, announcements: [], serverTime: NOW,
+  let snapshot: BootstrapResponse = { ...initial, notifications: { unread: 0, recent: [] }, serverTime: NOW,
     user: { ...initial.user, gold: 12000 }, inventory: { lottoTickets: 3, speettoTickets: 3, tagTickets: 0 },
     lottoNotice: { drawDate: TODAY, tickets: 3, winners: 2, prize: 10000 } };
   const writes: string[] = [];

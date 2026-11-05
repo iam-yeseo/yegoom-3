@@ -343,6 +343,13 @@ async function mutateOnce(db: D1Database, user: Actor, action: CatchmindAction, 
     writes.push(db.prepare(`UPDATE catchmind_turn SET drawer_id = ${nextPlayerSql('catchmind_turn.drawer_id')}
       WHERE id = 1 AND EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)`)
       .bind(attempt));
+    // Reads the drawer this batch just set, so the new drawer hears about a
+    // turn they did not ask for. One row per skip request.
+    writes.push(db.prepare(`INSERT OR IGNORE INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
+      SELECT 'game', 'user', t.drawer_id, t.drawer_id, ?, ?, 'notification:catchmind:turn:' || ?
+      FROM catchmind_turn t WHERE t.id = 1 AND t.drawer_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)`)
+      .bind(JSON.stringify({ kind: 'turn', game: 'catchmind' }), now.toISOString(), attempt, attempt));
   } else if (action === 'end') {
     writes.push(db.prepare(`UPDATE catchmind_rounds SET status = 'ended', end_reason = 'manual', ended_at = ?
       WHERE id = ? AND EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)`)

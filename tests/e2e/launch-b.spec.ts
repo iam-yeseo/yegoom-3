@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, type WriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
+import { isToastWorthy } from '../../shared/notifications';
 import { expect, test, type Page, type TestInfo, type Locator } from '@playwright/test';
 import type { BootstrapResponse, LuckPhotoResponse, LottoResponse } from '../../shared/types';
 
@@ -385,8 +386,10 @@ test('real announcements queue for four seconds, exclude self and expired events
   const banner = page.locator('.announcement-banner'); await expect(banner).toContainText('siwon님이 스피또');
   await expect(page.locator('.announcement-region')).toHaveAttribute('role', 'status'); await expect(page.locator('.announcement-region')).toHaveAttribute('aria-live', 'polite');
   const data = await snapshot(page);
-  expect(data.announcements.every(row => ![1001, 1002, 1005].includes(row.id))).toBe(true);
-  expect(data.announcements.every(row => row.userId !== data.user.id && row.rank !== 4)).toBe(true);
+  // The toast skips the old, the future and my own; the centre still keeps them.
+  const toasted = data.notifications.recent.filter(row => isToastWorthy(row, data.user.id, Date.parse(data.serverTime)));
+  expect(toasted.every(row => ![1001, 1002, 1005].includes(row.id))).toBe(true);
+  expect(toasted.every(row => row.actorId !== data.user.id)).toBe(true);
   const lotto: LottoResponse = await (await page.request.get(`${ORIGIN}/api/shop/lotto`)).json();
   expect(lotto.lotto.tickets.find(row => row.id === '00000000-0000-4000-8000-000000000004')).toMatchObject({ rank: 4, prize: 500 });
   // Move the browser clock 200ms for the banner's unmodified entrance, then
@@ -403,7 +406,9 @@ test('real announcements queue for four seconds, exclude self and expired events
   const other = await browser.newContext({ reducedMotion: 'reduce' });
   try {
     const viewer = await other.newPage(); await login(viewer, 'yeseo');
-    const own = await snapshot(viewer); expect(own.announcements.every(row => row.userId !== 'e2e-yeseo')).toBe(true);
+    const own = await snapshot(viewer);
+    expect(own.notifications.recent.filter(row => isToastWorthy(row, 'e2e-yeseo', Date.parse(own.serverTime)))
+      .every(row => row.actorId !== 'e2e-yeseo')).toBe(true);
     const visible = viewer.locator('.announcement-banner'); await expect(visible).toBeVisible();
     expect(await visible.evaluate(element => getComputedStyle(element).animationName)).toBe('announcement-fade');
     const frames = await visible.evaluate(element => element.getAnimations().flatMap(animation => (animation.effect as KeyframeEffect).getKeyframes()));

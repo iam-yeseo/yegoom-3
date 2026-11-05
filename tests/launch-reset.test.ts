@@ -23,6 +23,8 @@ const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_ph
   'tag_ticket_ledger',
   // Ranking payouts (0019) start after launch too; their settlement markers stay.
   'ranking_settlements',
+  // The notification centre (0020) is newer than the launch-era reset as well.
+  'notifications',
   // The stock market (0015) starts after launch; a launch reset never touches it.
   'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays', 'ai_usage', 'stock_settings'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
@@ -106,6 +108,8 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at) VALUES ('retained-tag', 'min', 'retained-tag-request', 'A', '반짝이는', 1, '2026-11-01', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO tag_ticket_ledger (id, user_id, amount, reason, reference, created_at) VALUES ('retained-tag-ticket', 'min', 5, '별명 뽑기권 지급', 'tag:grant:welcome:min', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO ranking_settlements (period, key, settled_at) VALUES ('week', '2026-10-26', '2026-11-02T00:01:00Z')"),
+      db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
+        VALUES ('speetto', 'all', NULL, 'min', '{"kind":"speetto","prize":1500}', '2026-11-01T00:00:00Z', 'retained-notification')`),
       db.prepare("INSERT INTO stock_ticks (ticker, at, price) VALUES ('YEGM', 1, 500)"),
       db.prepare("INSERT INTO stock_daily (ticker, date, open, high, low, close) VALUES ('YEGM', '2026-11-05', 500, 510, 490, 505)"),
       db.prepare("INSERT INTO stock_events (id, ticker, kind, effect_bp, apply_at, created_at) VALUES ('retained-event', 'MINJ', 'game', 400, 1, 'x')"),
@@ -154,7 +158,10 @@ describe('launch reset in an isolated local D1', () => {
     expect(bootstrapResponse.status).toBe(200);
     const bootstrap = await bootstrapResponse.json() as BootstrapResponse;
     expect(bootstrap.user).toMatchObject({ id: 'min', displayName: '민', photoVersion: 7, character: 'moon', gold: 0, weeklyScore: 0 });
-    expect(bootstrap.announcements).toEqual([]);
+    // The reset predates the notification centre, so the seeded notice survives.
+    expect(bootstrap.notifications.unread).toBe(1);
+    expect(bootstrap.notifications.recent).toHaveLength(1);
+    expect(bootstrap.notifications.recent[0]).toMatchObject({ actorId: 'min', payload: { kind: 'speetto', prize: 1500 } });
     const retainedPhoto = await request('/api/users/min/photo?v=7');
     expect(retainedPhoto.status).toBe(200);
     expect(Buffer.from(await retainedPhoto.arrayBuffer())).toEqual(await readFile(new URL('./fixtures/photo-square.webp', import.meta.url)));

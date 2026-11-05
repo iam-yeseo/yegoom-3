@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { NOTIFICATION_RULES } from "../../shared/notifications";
 import { ADMIN_LIMITS, type AdminChange, type AdminClawConfig, type AdminGameSettings, type AdminState, type PredictionRules } from "../../shared/admin";
 import { CATCHMIND_RULES } from "../../shared/balance";
 import { GAME_RULES } from "../../shared/balance";
@@ -19,6 +20,7 @@ interface Props {
   onSaveHoliday: (date: string, reason: string | null) => Promise<void>;
   onSetStockAi: (setting: { enabled?: boolean; provider?: "anthropic" | "openai" }) => Promise<void>;
   onHideStockNews: (id: string, hidden: boolean) => Promise<void>;
+  onSendNotice: (notice: { title: string; body: string }) => Promise<void>;
   onPlayClaw: () => void;
   preview?: boolean;
 }
@@ -338,7 +340,45 @@ function StockNewsCard({ state, disabled, onSetAi, onHide }: { state: AdminState
   </section>;
 }
 
-export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw, onSaveHoliday, onSetStockAi, onHideStockNews, onPlayClaw, preview = false }: Props) {
+/** One notice to every player; it lands in their notification centre. */
+function NoticeCard({ disabled, onSend }: { disabled: boolean; onSend: (notice: { title: string; body: string }) => Promise<void> }) {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [sent, setSent] = useState(false);
+  async function send() {
+    setSending(true); setError(""); setSent(false);
+    try {
+      await onSend({ title: title.trim(), body: body.trim() });
+      setTitle(""); setBody(""); setSent(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "공지를 보내지 못했어요.");
+    } finally { setSending(false); }
+  }
+  return <section className="card admin-claw-card admin-notice-card" aria-label="전체 공지 보내기">
+    <div className="admin-card-head">
+      <span className="admin-card-art" aria-hidden="true">📣</span>
+      <span className="admin-card-title"><strong>전체 공지</strong><span>모든 플레이어의 알림센터로 가요</span></span>
+    </div>
+    <label className="admin-field"><span>제목</span>
+      <input type="text" value={title} maxLength={NOTIFICATION_RULES.titleMax} disabled={disabled || sending}
+        placeholder="예: 토요일은 쉬어요" onChange={event => setTitle(event.target.value)} />
+    </label>
+    <label className="admin-field"><span>내용 (선택)</span>
+      <textarea value={body} rows={3} maxLength={NOTIFICATION_RULES.bodyMax} disabled={disabled || sending}
+        placeholder="자세한 내용을 적어요." onChange={event => setBody(event.target.value)} />
+    </label>
+    <p className="admin-claw-explanation">보낸 공지는 되돌릴 수 없어요. 접속 중인 사람에게는 바로 뜨고, 나머지는 알림센터에서 봐요.</p>
+    {error && <p className="admin-form-error" role="alert">{error}</p>}
+    {sent && <p className="admin-form-ok" role="status">공지를 보냈어요.</p>}
+    <button className="primary-button" type="button" disabled={disabled || sending || !title.trim()} onClick={() => void send()}>
+      {sending ? "보내는 중…" : "전체에게 보내기"}
+    </button>
+  </section>;
+}
+
+export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw, onSaveHoliday, onSetStockAi, onHideStockNews, onSendNotice, onPlayClaw, preview = false }: Props) {
   return <div className="admin-page">
     <header className="admin-heading"><span className="pill lavender">{preview ? "운영 화면 미리보기" : "운영자 전용"}</span><h1>운영</h1><p>게임 규칙을 확인하고 다음 판을 준비해요.</p></header>
     <div className="screen-body admin-body">
@@ -356,6 +396,7 @@ export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw,
         <ClawCard config={state.claw} disabled={loading} onSave={onSaveClaw} onPlay={onPlayClaw} />
         <MarketHolidayCard state={state} disabled={loading} onSave={onSaveHoliday} />
         <StockNewsCard state={state} disabled={loading} onSetAi={onSetStockAi} onHide={onHideStockNews} />
+        <NoticeCard disabled={loading} onSend={onSendNotice} />
         <Changes changes={state.changes} />
       </>}
     </div>

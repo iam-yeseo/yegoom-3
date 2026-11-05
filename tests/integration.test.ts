@@ -17,14 +17,14 @@ import { defaultPredictionRules } from '../shared/game-settings';
 import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
 import { getClawState, getClawSummary, playClaw } from '../worker/claw';
 import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
-import { readAnnouncements } from '../worker/announcements';
+import { readNotificationSummary } from '../worker/notifications';
 import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
 import { maintainDatabase } from '../worker/maintenance';
 import { settleDueRankingRewards } from '../worker/ranking-rewards';
 import { mondayOf } from '../shared/ranking-periods';
 import { rankSummary, standings } from '../src/ranking';
-import type { CatchmindGalleryResponse, RankingResponse, SlotResponse, TagResponse } from '../shared/types';
+import type { CatchmindGalleryResponse, NotificationsResponse, RankingResponse, SlotResponse, TagResponse } from '../shared/types';
 import { TAG_TEXTS } from '../shared/nickname-tags';
 import type { LuckPhotoResponse, LaunchGiftResponse, ClawResponse, ClawPlayInput, BootstrapResponse, GameResponse, GameId, HistoryResponse, AttendanceResponse, AttendanceClaimResponse, User, ShopState, KujiResponse, LottoResponse, SpeettoResponse, CatchmindResponse } from '../shared/types';
 
@@ -1843,8 +1843,16 @@ describe('Worker and D1 integration', () => {
     });
   });
 
-  describe('lottery win announcements', () => {
-    it.each([0, 99])('announces winning speetto roll %i atomically once across retries', async roll => {
+  describe('notifications', () => {
+    const notificationRows = async (database: Database = db) => (await database.prepare(
+      'SELECT kind, audience, user_id, actor_id, payload_json, reference FROM notifications ORDER BY id')
+      .all<{ kind: string; audience: string; user_id: string | null; actor_id: string | null; payload_json: string; reference: string }>()).results;
+    const addNotice = (id: string, actor: string, when: number) =>
+      db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
+        VALUES ('speetto', 'all', NULL, ?, '{"kind":"speetto","prize":1500}', ?, ?)`)
+        .bind(actor, new Date(when).toISOString(), id).run();
+
+    it.each([0, 99])('stores a winning speetto roll %i atomically once across retries', async roll => {
       const instant = `${TODAY}T00:00:00Z`;
       const instance = runtime(await workerAt(instant, instant, roll));
       try {
@@ -1855,40 +1863,44 @@ describe('Worker and D1 integration', () => {
         const responses = await Promise.all(Array.from({ length: 3 }, () => request('/api/shop/speetto', { method: 'POST', cookie: min.cookie, instance, body })));
         expect(responses.every(response => response.status === 200)).toBe(true);
         const purchase = (await responses[0]!.json() as SpeettoResponse).purchase!;
-        const rows = (await database.prepare('SELECT kind, user_id, payload_json, reference FROM announcements').all<{ kind: string; user_id: string; payload_json: string; reference: string }>()).results;
+        const rows = await notificationRows(database);
         expect(rows).toHaveLength(roll === 0 ? 1 : 0);
         if (roll === 0) {
-          expect(rows[0]).toMatchObject({ kind: 'speetto', user_id: 'min', reference: `announcement:speetto:prize:${purchase.id}` });
-          expect(JSON.parse(rows[0]!.payload_json)).toEqual({ rank: null, prize: 1500 });
+          expect(rows[0]).toMatchObject({ kind: 'speetto', audience: 'all', user_id: null, actor_id: 'min',
+            reference: `notification:speetto:prize:${purchase.id}` });
+          expect(JSON.parse(rows[0]!.payload_json)).toEqual({ kind: 'speetto', prize: 1500 });
           const peer = await request('/api/bootstrap', { cookie: siwon.cookie, instance });
-          expect((await peer.json() as BootstrapResponse).announcements[0]).toMatchObject({ kind: 'speetto', userId: 'min', displayName: 'min', prize: 1500 });
+          const seen = (await peer.json() as BootstrapResponse).notifications;
+          expect(seen.unread).toBe(1);
+          expect(seen.recent[0]).toMatchObject({ actorId: 'min', unread: true, payload: { kind: 'speetto', prize: 1500 } });
         }
-        const own = await request('/api/bootstrap', { cookie: min.cookie, instance });
-        expect((await own.json() as BootstrapResponse).announcements).toEqual([]);
+        // My own win is kept too; only the toast skips it, not the centre.
+        const own = (await (await request('/api/bootstrap', { cookie: min.cookie, instance })).json() as BootstrapResponse).notifications;
+        expect(own.recent).toHaveLength(roll === 0 ? 1 : 0);
       } finally { await instance.dispose(); }
     });
 
-    it('rolls back a speetto debit, win and receipt when its announcement cannot be inserted', async () => {
+    it('rolls back a speetto debit, win and receipt when its notification cannot be inserted', async () => {
       const instant = `${TODAY}T00:00:00Z`;
       const instance = runtime(await workerAt(instant, instant, 0));
       try {
         const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
         await fund(1000, 'min', database);
         const { cookie } = await login('min', instance);
-        await database.prepare(`CREATE TRIGGER reject_win_notice BEFORE INSERT ON announcements
-          BEGIN SELECT RAISE(ABORT, 'test announcement failure'); END;`).run();
+        await database.prepare(`CREATE TRIGGER reject_win_notice BEFORE INSERT ON notifications
+          BEGIN SELECT RAISE(ABORT, 'test notification failure'); END;`).run();
         const body = { requestId: crypto.randomUUID(), payment: 'gold' };
         expect((await request('/api/shop/speetto', { method: 'POST', cookie, instance, body })).status).toBe(500);
         expect(await database.prepare('SELECT COUNT(*) AS n FROM shop_purchases').first('n')).toBe(0);
-        expect(await database.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(0);
         expect((await ledgerRows(database)).map(row => row.amount)).toEqual([1000]);
         await database.prepare('DROP TRIGGER reject_win_notice').run();
         expect((await request('/api/shop/speetto', { method: 'POST', cookie, instance, body })).status).toBe(200);
-        expect(await database.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(1);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(1);
       } finally { await instance.dispose(); }
     });
 
-    it('announces only daily lotto ranks one through three and deduplicates concurrent settlement', async () => {
+    it('notifies only daily lotto ranks one through three and deduplicates concurrent settlement', async () => {
       const min = await login('min'); const siwon = await login('siwon');
       await fund(3000);
       const picks = [[1,2,3,4,5], [1,2,3,4,6], [1,2,3,6,7], [1,2,6,7,8], [1,6,7,8,9], [6,7,8,9,10]];
@@ -1899,86 +1911,113 @@ describe('Worker and D1 integration', () => {
       await db.prepare("UPDATE lotto_tickets SET draw_date = '2026-10-29'").run();
       await db.prepare("INSERT INTO lotto_draws (date, numbers, created_at) VALUES ('2026-10-29', '[1,2,3,4,5]', '2026-10-29T08:00:00Z')").run();
       const views = await Promise.all([bootstrap(siwon.cookie), bootstrap(min.cookie), bootstrap(siwon.cookie)]);
-      const rows = (await db.prepare('SELECT kind, payload_json, reference FROM announcements ORDER BY id').all<{ kind: string; payload_json: string; reference: string }>()).results;
+      const rows = await notificationRows();
       expect(rows).toHaveLength(3);
       expect(rows.map(row => JSON.parse(row.payload_json).rank).sort()).toEqual([1,2,3]);
       expect(rows.map(row => JSON.parse(row.payload_json).prize).sort((a, b) => a - b)).toEqual([1000,3000,5000]);
-      expect(rows.every(row => row.kind === 'lotto' && row.reference.startsWith('announcement:lotto:prize:'))).toBe(true);
-      expect(views[0]!.announcements).toHaveLength(3);
-      expect(views[1]!.announcements).toEqual([]);
+      expect(rows.every(row => row.kind === 'lotto' && row.reference.startsWith('notification:lotto:prize:'))).toBe(true);
+      expect(views[0]!.notifications.recent).toHaveLength(3);
+      expect(views[0]!.notifications.unread).toBe(3);
       const payouts = (await ledgerRows()).filter(row => row.reference.startsWith('lotto:prize:'));
       expect(payouts.map(row => row.amount).sort((a, b) => a - b)).toEqual([500,1000,3000,5000]);
       await bootstrap(siwon.cookie);
-      expect(await db.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(3);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(3);
     });
 
-    it('rolls back lotto settlement and payout if its announcement fails', async () => {
+    it('rolls back lotto settlement and payout if its notification fails', async () => {
       const { cookie } = await login('min'); await fund(500);
       const bought = await request('/api/shop/lotto', { method: 'POST', cookie,
         body: { requestId: crypto.randomUUID(), numbers: [1,2,3,4,5], payment: 'gold' } });
       expect(bought.status).toBe(200);
       await db.prepare("UPDATE lotto_tickets SET draw_date = '2026-10-29'").run();
       await db.prepare("INSERT INTO lotto_draws (date, numbers, created_at) VALUES ('2026-10-29', '[1,2,3,4,5]', '2026-10-29T08:00:00Z')").run();
-      await db.prepare(`CREATE TRIGGER reject_lotto_notice BEFORE INSERT ON announcements
+      await db.prepare(`CREATE TRIGGER reject_lotto_notice BEFORE INSERT ON notifications
         BEGIN SELECT RAISE(ABORT, 'test lotto notice failure'); END;`).run();
       expect((await request('/api/bootstrap', { cookie })).status).toBe(500);
       expect(await db.prepare('SELECT settled_at FROM lotto_tickets').first('settled_at')).toBeNull();
       expect((await ledgerRows()).filter(row => row.reference.startsWith('lotto:prize:'))).toEqual([]);
-      expect(await db.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(0);
       await db.prepare('DROP TRIGGER reject_lotto_notice').run();
       expect((await bootstrap(cookie)).user.gold).toBe(5000);
-      expect(await db.prepare('SELECT COUNT(*) AS n FROM announcements').first('n')).toBe(1);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(1);
     });
 
-    it('filters self, exact ten-minute-old and future notices, limits to five, and uses current nicknames', async () => {
+    it('counts unread against the watermark and clears it when the centre is opened', async () => {
+      const min = await login('min');
+      const now = Date.parse(`${TODAY}T00:00:00Z`);
+      for (let index = 1; index <= 7; index++) await addNotice(`notice-${index}`, 'siwon', now - index * 1000);
+      const before = (await bootstrap(min.cookie)).notifications;
+      expect(before.unread).toBe(7);
+      // Only the newest five ride along in bootstrap; the centre pages the rest.
+      expect(before.recent).toHaveLength(5);
+      expect(before.recent.every(notice => notice.unread)).toBe(true);
+      const opened = await (await request('/api/notifications', { cookie: min.cookie })).json() as NotificationsResponse;
+      expect(opened.notifications).toHaveLength(7);
+      expect(opened.notifications.every(notice => notice.unread)).toBe(true);
+      expect(opened.unread).toBe(0);
+      expect((await bootstrap(min.cookie)).notifications.unread).toBe(0);
+      // A new notice after the visit counts again, and the old ones stay read.
+      await addNotice('notice-after', 'siwon', now + 1000);
+      const after = (await bootstrap(min.cookie)).notifications;
+      expect(after.unread).toBe(1);
+      expect(after.recent.filter(notice => notice.unread).map(notice => notice.payload.kind)).toEqual(['speetto']);
+    });
+
+    it('pages the centre oldest-ward and keeps personal notices to their owner', async () => {
       const min = await login('min'); const siwon = await login('siwon');
       const now = Date.parse(`${TODAY}T00:00:00Z`);
-      const add = async (id: string, user: string, when: number) => db.prepare(`INSERT INTO announcements (kind, user_id, payload_json, created_at, reference)
-        VALUES ('speetto', ?, '{"rank":null,"prize":1500}', ?, ?)`).bind(user, new Date(when).toISOString(), id).run();
-      await add('exact-old', 'siwon', now - 600000);
-      await add('own', 'min', now);
-      await add('future', 'siwon', now + 1);
-      expect((await bootstrap(min.cookie)).announcements).toEqual([]);
-      await add('inside', 'siwon', now - 599999);
-      expect((await bootstrap(min.cookie)).announcements).toHaveLength(1);
-      for (let index = 1; index <= 6; index++) await add(`recent-${index}`, 'siwon', now - index * 1000);
-      expect((await request('/api/me/profile', { method: 'PUT', cookie: siwon.cookie, body: { displayName: '새시원' } })).status).toBe(200);
-      const notices = (await bootstrap(min.cookie)).announcements;
-      // The newest global five include the viewer's own win; it is omitted, not backfilled.
-      expect(notices).toHaveLength(4);
-      expect(notices.map(notice => notice.createdAt)).toEqual([1,2,3,4].map(seconds => new Date(now - seconds * 1000).toISOString()));
-      expect(notices.every(notice => notice.userId === 'siwon' && notice.displayName === '새시원')).toBe(true);
+      for (let index = 1; index <= 22; index++) await addNotice(`page-${index}`, 'siwon', now - index * 1000);
+      await db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
+        VALUES ('rank', 'user', 'min', 'min', '{"kind":"rank","period":"week","place":1,"gold":500}', ?, 'mine-only')`)
+        .bind(new Date(now).toISOString()).run();
+      const first = await (await request('/api/notifications', { cookie: min.cookie })).json() as NotificationsResponse;
+      expect(first.notifications).toHaveLength(20);
+      expect(first.notifications[0]!.payload.kind).toBe('rank');
+      expect(first.nextBefore).not.toBeNull();
+      const next = await (await request(`/api/notifications?before=${encodeURIComponent(first.nextBefore!)}`, { cookie: min.cookie })).json() as NotificationsResponse;
+      expect(next.notifications).toHaveLength(3);
+      expect(next.nextBefore).toBeNull();
+      // siwon never sees a notice addressed to min.
+      const theirs = await (await request('/api/notifications', { cookie: siwon.cookie })).json() as NotificationsResponse;
+      expect(theirs.notifications.some(notice => notice.payload.kind === 'rank')).toBe(false);
+      expect(theirs.notifications).toHaveLength(20);
     });
 
-    it('bounds reads when hundreds of the newest wins belong to the viewer', async () => {
-      const now = new Date(`${TODAY}T00:00:00Z`);
-      await db.prepare(`INSERT INTO announcements (kind, user_id, payload_json, created_at, reference)
-        VALUES ('speetto', 'siwon', '{"rank":null,"prize":1500}', ?, 'older-other-win')`)
-        .bind(new Date(now.getTime() - 5000).toISOString()).run();
-      await db.batch(Array.from({ length: 200 }, (_, index) => db.prepare(`INSERT INTO announcements
-        (kind, user_id, payload_json, created_at, reference) VALUES ('speetto', 'min', '{"rank":null,"prize":1500}', ?, ?)`)
-        .bind(new Date(now.getTime() - index).toISOString(), `own-fixture:${index}`)));
-      const observed = measuredDatabase(db, now.getTime());
-      expect(await readAnnouncements(observed.binding, 'min', now)).toEqual([]);
-      expect(observed.rowsRead()).toBeLessThanOrEqual(12);
-      console.log(`Announcements bootstrap module D1 rows_read: ${observed.rowsRead()} with 200 recent own wins; newest global five filtered before display`);
+    it('sends an administrator notice to every player and refuses an empty or oversized title', async () => {
+      const admin = await login('admin'); const min = await login('min');
+      expect((await request('/api/admin/notifications', { method: 'POST', cookie: admin.cookie, body: { title: '  ' } })).status).toBe(400);
+      expect((await request('/api/admin/notifications', { method: 'POST', cookie: admin.cookie, body: { title: 'ㄱ'.repeat(41) } })).status).toBe(400);
+      expect((await request('/api/admin/notifications', { method: 'POST', cookie: min.cookie, body: { title: '안녕' } })).status).toBe(403);
+      const sent = await request('/api/admin/notifications', { method: 'POST', cookie: admin.cookie,
+        body: { title: '토요일은 쉬어요', body: '일요일에 다시 열려요.' } });
+      expect(sent.status).toBe(200);
+      const rows = await notificationRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ kind: 'admin', audience: 'all', user_id: null, actor_id: null });
+      expect(JSON.parse(rows[0]!.payload_json)).toEqual({ kind: 'admin', title: '토요일은 쉬어요', body: '일요일에 다시 열려요.' });
+      const mine = (await bootstrap(min.cookie)).notifications;
+      expect(mine.unread).toBe(1);
+      expect(mine.recent[0]!.payload).toMatchObject({ kind: 'admin', title: '토요일은 쉬어요' });
     });
 
-    it('reads a bounded indexed announcement window regardless of old history size', async () => {
+    it('reads a bounded indexed window regardless of how much history exists', async () => {
       const now = new Date(`${TODAY}T00:00:00Z`);
-      await db.batch(Array.from({ length: 5 }, (_, index) => db.prepare(`INSERT INTO announcements
-        (kind, user_id, payload_json, created_at, reference) VALUES ('speetto', 'siwon', '{"rank":null,"prize":1500}', ?, ?)`)
+      await db.batch(Array.from({ length: 5 }, (_, index) => db.prepare(`INSERT INTO notifications
+        (kind, audience, user_id, actor_id, payload_json, created_at, reference)
+        VALUES ('speetto', 'all', NULL, 'siwon', '{"kind":"speetto","prize":1500}', ?, ?)`)
         .bind(new Date(now.getTime() - index * 1000).toISOString(), `recent-fixture:${index}`)));
       const observed = measuredDatabase(db, now.getTime());
-      expect(await readAnnouncements(observed.binding, 'min', now)).toHaveLength(5);
+      expect((await readNotificationSummary(observed.binding, 'min')).recent).toHaveLength(5);
       const before = observed.rowsRead(); observed.reset();
-      await db.batch(Array.from({ length: 200 }, (_, index) => db.prepare(`INSERT INTO announcements
-        (kind, user_id, payload_json, created_at, reference) VALUES ('speetto', 'siwon', '{"rank":null,"prize":1500}', ?, ?)`)
+      await db.batch(Array.from({ length: 200 }, (_, index) => db.prepare(`INSERT INTO notifications
+        (kind, audience, user_id, actor_id, payload_json, created_at, reference)
+        VALUES ('speetto', 'all', NULL, 'siwon', '{"kind":"speetto","prize":1500}', ?, ?)`)
         .bind(new Date(now.getTime() - 600000 - index * 1000).toISOString(), `old-fixture:${index}`)));
-      expect(await readAnnouncements(observed.binding, 'min', now)).toHaveLength(5);
-      expect(observed.rowsRead()).toBe(before);
-      expect(before).toBeLessThanOrEqual(20);
-      console.log(`Announcements bootstrap module D1 rows_read: ${before} for five recent notices, unchanged after 200 expired notices; authentication and other bootstrap work excluded`);
+      const summary = await readNotificationSummary(observed.binding, 'min');
+      expect(summary.recent).toHaveLength(5);
+      expect(summary.unread).toBe(99);
+      expect(observed.rowsRead()).toBeLessThanOrEqual(before + 100);
+      console.log(`Notification summary D1 rows_read: ${before} for five notices, ${observed.rowsRead()} with 205 and the unread count capped at 99`);
     });
   });
 

@@ -1,5 +1,6 @@
 import { addDays, mondayOf, rankingRange, scoreGameDate, weeksOverlapping } from '../shared/ranking-periods';
 import { RANKING_REWARDS, RANKING_SETTLEMENT_CATCHUP, rankScores, rankingReward, type RewardPeriod } from '../shared/ranking-rewards';
+import { notify } from './notifications';
 import { kstDate } from './rules';
 
 interface ScoreRow { user_id: string; amount: number; reference: string; created_at: string; game_date: string | null }
@@ -73,10 +74,18 @@ export async function settleDueRankingRewards(db: D1Database, now: Date): Promis
       .map(entry => ({ ...entry, gold: rankingReward(period.period, entry.rank, entry.score) }))
       .filter(entry => entry.gold > 0);
     await db.batch([
-      ...payouts.map(entry => db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
-        VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
-        .bind(crypto.randomUUID(), entry.userId, entry.gold, RANKING_REWARDS[period.period].reason,
-          `rank:${period.period}:${period.key}:${entry.userId}`, createdAt)),
+      ...payouts.flatMap(entry => {
+        const reference = `rank:${period.period}:${period.key}:${entry.userId}`;
+        return [
+          db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+            VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
+            .bind(crypto.randomUUID(), entry.userId, entry.gold, RANKING_REWARDS[period.period].reason, reference, createdAt),
+          // Only this player sees it, and only once: the reference is UNIQUE.
+          notify(db, { kind: 'rank', audience: 'user', userId: entry.userId, actorId: entry.userId,
+            payload: { kind: 'rank', period: period.period, place: entry.rank, gold: entry.gold },
+            reference: `notification:${reference}`, createdAt }),
+        ];
+      }),
       db.prepare('INSERT OR IGNORE INTO ranking_settlements (period, key, settled_at) VALUES (?, ?, ?)')
         .bind(period.period, period.key, createdAt),
     ]);

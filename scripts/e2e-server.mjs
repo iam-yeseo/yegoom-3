@@ -130,7 +130,8 @@ if (process.env.E2E_PROFILE === 'launch-b') {
     [1004, 'yeseo', 'lotto', 2, 3000, -2000],
     [1005, 'siwon', 'speetto', null, 1500, 60000],
   ]) {
-    statements.push(`INSERT INTO announcements (id, kind, user_id, payload_json, created_at, reference) VALUES (${id}, '${kind}', 'e2e-${username}', '${JSON.stringify({ rank, prize })}', '${new Date(timestamp + offset).toISOString()}', 'fixture:announcement:${id}');`);
+    const payload = kind === 'lotto' ? { kind, rank, prize } : { kind, prize };
+    statements.push(`INSERT INTO notifications (id, kind, audience, user_id, actor_id, payload_json, created_at, reference) VALUES (${id}, '${kind}', 'all', NULL, 'e2e-${username}', '${JSON.stringify(payload)}', '${new Date(timestamp + offset).toISOString()}', 'fixture:notification:${id}');`);
   }
   const fourthId = '00000000-0000-4000-8000-000000000004';
   const fourthNumbers = [1, 2, 6, 7, 8];

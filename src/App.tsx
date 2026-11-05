@@ -15,7 +15,8 @@ import type {
 import { normalizeNickname } from "../shared/profile";
 import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/admin";
 import { createAdminPreview, savePreviewGame, savePreviewClaw } from "./admin-preview";
-import { AnnouncementBanner } from "./AnnouncementBanner";
+import { NotificationToast } from "./NotificationToast";
+import { previewNotificationSummary } from "./notifications-preview";
 import { FEATURES } from "../shared/balance";
 import { CATCHMIND_WORDS } from "../shared/catchmind-words";
 import { ApiFailure, api } from "./api";
@@ -59,6 +60,7 @@ const serverStock: StockClient = {
 };
 
 const Admin = lazy(() => import("./screens/Admin").then(module => ({ default: module.Admin })));
+const Notifications = lazy(() => import("./screens/Notifications").then(module => ({ default: module.Notifications })));
 const Claw = lazy(() => import("./screens/Claw").then(module => ({ default: module.Claw })));
 const StockMarket = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockMarket })));
 const StockDetail = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockDetail })));
@@ -111,6 +113,7 @@ function previewHome(): HomeData {
     catchmind: emptyCatchmind,
     claw: previewClawSummary(),
     lottoNotice: null,
+    unreadNotifications: previewNotificationSummary(previewUser.id).unread,
     serverTime: new Date().toISOString(),
   };
 }
@@ -128,6 +131,7 @@ function homeData(data: BootstrapResponse): HomeData {
     claw: data.claw,
     lottoNotice: data.lottoNotice,
     stock: data.stock,
+    unreadNotifications: data.notifications.unread,
     serverTime: data.serverTime,
   };
 }
@@ -665,6 +669,12 @@ export default function App() {
       setPreviewAdminState(next);
     } else await saveAdmin(owner => api.saveGameSettings(id, rules, effectiveFrom, owner));
   }
+  async function sendNotice(notice: { title: string; body: string }) {
+    // The preview must never reach the API; it just accepts the notice.
+    if (adminDemo) return;
+    await api.sendNotice(notice);
+    await refresh();
+  }
   async function setStockAi(setting: { enabled?: boolean; provider?: "anthropic" | "openai" }) {
     if (adminDemo) {
       const current = previewAdminStateRef.current;
@@ -748,7 +758,7 @@ export default function App() {
   else if (path === "/admin" && adminAllowed) content = <Admin key={adminDemo ? "preview-admin" : me.id}
     state={adminDemo ? { ...previewAdminState, catchmindWordsRemaining: previewCatchmind.wordsRemaining } : adminData?.owner === me.id ? adminData.state : null}
     loading={adminLoading} error={adminError} onReload={() => void reloadAdmin()}
-    onSaveGame={saveAdminGame} onSaveClaw={saveAdminClaw} onSaveHoliday={saveAdminHoliday} onSetStockAi={setStockAi} onHideStockNews={hideStockNews} onPlayClaw={() => go("/play/claw")} preview={adminDemo} />;
+    onSaveGame={saveAdminGame} onSaveClaw={saveAdminClaw} onSaveHoliday={saveAdminHoliday} onSetStockAi={setStockAi} onHideStockNews={hideStockNews} onSendNotice={sendNotice} onPlayClaw={() => go("/play/claw")} preview={adminDemo} />;
   else if (play === "kuji") content = <Kuji onBack={home} />;
   else if (path === "/play/catchmind/gallery") content = <CatchmindGallery demo={demo} gold={me.gold} onBack={() => go("/play/catchmind")} />;
   else if (play === "catchmind") content = <Catchmind user={me} demo={demo} onBack={home} />;
@@ -837,6 +847,8 @@ export default function App() {
         onBack={home}
       />
     );
+  else if (path === "/notifications")
+    content = <Notifications demo={demo} viewerId={me.id} onBack={home} go={go} />;
   else if (path === "/attendance")
     content = (
       <Attendance attendanceKey={view.attendanceKey} gold={me.gold} onBack={home} />
@@ -1002,7 +1014,7 @@ export default function App() {
             <button onClick={() => void refresh()}>다시 시도</button>
           </div>
         )}
-        <AnnouncementBanner announcements={data?.announcements ?? []} userId={data?.user.id ?? null} preview={demo}
+        <NotificationToast notifications={data?.notifications.recent ?? []} userId={data?.user.id ?? null} preview={demo}
           serverTime={new Date(Date.now() + (demo ? 0 : serverClockOffset.current)).toISOString()} />
         <div className="screen" ref={screenRef}>
           <Suspense fallback={<Skeleton />}>{content}</Suspense>

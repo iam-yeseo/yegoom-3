@@ -58,7 +58,7 @@ function withPlayers(snapshot: BootstrapResponse, people: readonly Person[]): Bo
     character: snapshot.players.find(player => player.username === username)?.character ?? 'cat', photoVersion: null, tag: null,
   }));
   const me = players.find(player => player.username === snapshot.user.username)!;
-  return { ...snapshot, announcements: [], players, dailyScores: [me.weeklyScore, 0, 0, 0, 0, 0, 0],
+  return { ...snapshot, notifications: { unread: 0, recent: [] }, players, dailyScores: [me.weeklyScore, 0, 0, 0, 0, 0, 0],
     user: { ...snapshot.user, displayName: me.displayName, weeklyScore: me.weeklyScore, photoVersion: null } };
 }
 

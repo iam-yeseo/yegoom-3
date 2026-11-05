@@ -11,7 +11,8 @@ export type Role = 'player' | 'admin';
 export interface PhotoMetadata { url: string; version: number }
 export interface ProfileMetadata { displayName: string; photoVersion: number | null }
 export interface LuckPhotoResponse { photo: PhotoMetadata; serverTime: string }
-export interface Announcement { id: number; kind: 'lotto' | 'speetto'; userId: string; displayName: string; rank: number | null; prize: number; createdAt: string }
+export type { AppNotification, NotificationSummary, NotificationsResponse } from './notifications';
+import type { NotificationSummary } from './notifications';
 export interface User {
   id: string;
   username: string;
@@ -94,7 +95,7 @@ export interface BootstrapResponse {
   catchmind: CatchmindSummary;
   claw: ClawSummary;
   launchGift: LaunchGiftState;
-  announcements: Announcement[];
+  notifications: NotificationSummary;
   /** Home tile summary; null while the stock market is not open to players. */
   stock: StockHomeSummary | null;
   serverTime: string;

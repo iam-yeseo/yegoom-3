@@ -5,6 +5,7 @@ import { GAME_STOCK, STOCK_GAME_RULES, gameArticle, gameEffectBp, gameForTicker,
 import { GAME_RULES } from '../shared/balance';
 import type { GameId } from '../shared/types';
 import { readGameRules } from './game-settings';
+import { notify } from './notifications';
 import { AI_RULES } from '../shared/balance';
 import { writeCloseNews, writeMorningNews, type AiWriters } from './stock-ai';
 import type { Candle, MarketClock, MarketHoliday, StockDetailView, StockHomeSummary, StockMarketView, StockNewsItem, StockNewsKind, StockNewsPage, StockQuote, StockTradeResponse, StockTradeView, StockUnchanged } from '../shared/stock-types';
@@ -159,6 +160,11 @@ export async function advanceStocks(db: D1Database, secret: string, now: number)
         WHERE ${won}`).bind(createdAt, delisted, token),
       db.prepare(`UPDATE stock_holdings SET quantity = 0, cost_basis = 0
         WHERE quantity > 0 AND ticker IN (SELECT ${field('ticker')} FROM json_each(?)) AND ${won}`).bind(delisted, token),
+      // A delisting is the one market event everyone should not miss.
+      ...result.delisted.map(company => notify(db, { kind: 'stock', audience: 'all',
+        payload: { kind: 'stock', event: 'delisted', ticker: company.ticker, name: stockInfo(company.ticker)!.name,
+          detail: '보유 주식은 사라지고 거래도 멈춰요.' },
+        reference: `notification:stock:delisted:${company.ticker}:${company.date}`, createdAt })),
     );
   }
   const writes = await db.batch(statements);
@@ -356,6 +362,13 @@ export async function tradeStock(db: D1Database, secret: string, user: StockUser
       .bind(`whale:${id}`, order.ticker, now, `익명의 큰손, ${name} ${q.toLocaleString('ko-KR')}주 ${buy ? '매수' : '매도'}`,
         `한 번에 ${(row.price * q).toLocaleString('ko-KR')}G어치가 ${buy ? '사들여졌다' : '팔려 나갔다'}. 누구인지는 아무도 모른다.`, createdAt,
         user.id, order.ticker, id, new Date(now - 3_600_000).toISOString(), AI_RULES.whaleShares, AI_RULES.whaleGold).run();
+    // Tied to the news row the same write just made, so the hourly limit on
+    // whale news limits the notification too. It never carries who traded.
+    await db.prepare(`INSERT OR IGNORE INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
+      SELECT 'stock', 'all', NULL, NULL, ?, created_at, ? FROM stock_news WHERE id = ?`)
+      .bind(JSON.stringify({ kind: 'stock', event: 'whale', ticker: order.ticker, name,
+        detail: `${q.toLocaleString('ko-KR')}주 ${buy ? '매수' : '매도'} · ${(row.price * q).toLocaleString('ko-KR')}G` }),
+        `notification:stock:whale:${id}`, `whale:${id}`).run();
   }
   if (writes[0]!.meta.changes === 1) {
     const trade = (await db.prepare('SELECT * FROM stock_trades WHERE id = ?').bind(id).first<TradeRow>())!;

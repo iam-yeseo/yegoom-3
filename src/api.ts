@@ -11,8 +11,7 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput,
-  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse,
-} from "../shared/types";
+  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse, NotificationsResponse, NotificationSummary } from "../shared/types";
 import type { RankingPeriod } from "../shared/ranking-periods";
 import type { StockDetailView, StockMarketView, StockNewsPage, StockTradeInput, StockTradeResponse, StockUnchanged } from "../shared/stock-types";
 import type { ArtKey } from "../shared/characters";
@@ -98,6 +97,8 @@ export const api = {
   stockNews: (before?: string) => request<StockNewsPage>(`/stock/news${before ? `?before=${encodeURIComponent(before)}` : ""}`),
   tradeStock: (input: StockTradeInput) => request<StockTradeResponse>("/stock/trade", { method: "POST", body: JSON.stringify(input) }),
   addMarketHoliday: (date: string, reason: string, expectedUserId: string) => request<AdminState>("/admin/market-holidays", { method: "POST", body: JSON.stringify({ date, reason, expectedUserId }) }),
+  sendNotice: (notice: { title: string; body: string }) =>
+    request<NotificationSummary>("/admin/notifications", { method: "POST", body: JSON.stringify(notice) }),
   setStockAi: (setting: { enabled?: boolean; provider?: "anthropic" | "openai" }) => request<AdminState>("/admin/stock/ai", { method: "PUT", body: JSON.stringify(setting) }),
   setStockNewsHidden: (id: string, hidden: boolean) => request<AdminState>(`/admin/stock/news/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ hidden }) }),
   removeMarketHoliday: (date: string) => request<AdminState>(`/admin/market-holidays/${date}`, { method: "DELETE" }),
@@ -107,6 +108,8 @@ export const api = {
     body: JSON.stringify({ roundDate }),
   }),
   bootstrap: () => request<BootstrapResponse>("/bootstrap"),
+  notifications: (before?: string) =>
+    request<NotificationsResponse>(`/notifications${before ? `?before=${encodeURIComponent(before)}` : ""}`),
   ranking: (period: RankingPeriod, before?: string) => request<RankingResponse>(`/ranking?period=${period}${before ? `&before=${encodeURIComponent(before)}` : ""}`),
   changePassword: (input: PasswordChangeInput) => request<{ ok: true }>("/me/password", {
     method: "PUT", body: JSON.stringify(input),

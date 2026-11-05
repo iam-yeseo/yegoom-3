@@ -38,6 +38,7 @@ import {
   useOnChange,
 } from "../motion";
 import { rankSummary, standings, type RankingPlayer } from "../ranking";
+import { unreadLabel } from "./Notifications";
 
 export type HomePlayer = RankingPlayer;
 export interface HomeData {
@@ -56,6 +57,8 @@ export interface HomeData {
   lottoNotice: LottoNotice | null;
   /** null while the market is not open to players. */
   stock: StockHomeSummary | null;
+  /** Unread notifications behind the bell in the top right. */
+  unreadNotifications: number;
   serverTime: string;
 }
 type Go = (path: string) => void;
@@ -432,9 +435,10 @@ function AttendanceCard({ data, go, onClaimed }: {
   </section>;
 }
 
-function Room({ data, gold, evening, jumpRequest, onJumpDone }: {
+function Room({ data, gold, evening, jumpRequest, onJumpDone, go }: {
   data: HomeData;
   gold: number;
+  go: Go;
   evening: boolean;
   jumpRequest: number;
   onJumpDone: () => void;
@@ -468,13 +472,18 @@ function Room({ data, gold, evening, jumpRequest, onJumpDone }: {
       <div className="room-top">
         <span className="room-identity">
           <Avatar username={data.username} size={32} />
-          <span className="room-name"><PersonName username={data.username} fallback={data.displayName} /></span>
+          <span className="room-identity-text">
+            <span className="room-name"><PersonName username={data.username} fallback={data.displayName} /></span>
+            <span className="gold"><Coin size={14} />{shown.toLocaleString("ko-KR")}<span className="sr-only"> 골드</span></span>
+          </span>
         </span>
-        <span className="gold">
-          <Coin size={22} />
-          {shown.toLocaleString("ko-KR")}
-          <span className="sr-only"> 골드</span>
-        </span>
+        <button type="button" className="room-bell" onClick={() => go("/notifications")}
+          aria-label={data.unreadNotifications > 0 ? `알림 ${unreadLabel(data.unreadNotifications)}개 안 읽음` : "알림"}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" />
+          </svg>
+          {data.unreadNotifications > 0 && <span className="room-bell-badge">{unreadLabel(data.unreadNotifications)}</span>}
+        </button>
       </div>
       <div className="room-window" aria-hidden="true">
         <div>
@@ -543,7 +552,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
   const summary = rankSummary(table, data.username);
   return (
     <div className={`home ${evening ? "evening" : ""}`}>
-      <Room data={data} gold={data.gold} evening={evening} jumpRequest={jumpRequest} onJumpDone={finishJump} />
+      <Room data={data} gold={data.gold} evening={evening} jumpRequest={jumpRequest} onJumpDone={finishJump} go={go} />
       <div className="home-score">
         <div className="home-score-row">
           <div>
