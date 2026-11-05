@@ -2,6 +2,11 @@ name: Check
 on: [push, pull_request]
 permissions:
   contents: read
+# A new push to the same branch cancels the run still going for the old commit,
+# so a series of small fixes costs one run instead of one per push.
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   validate:
     runs-on: ubuntu-latest

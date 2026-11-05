@@ -447,6 +447,11 @@ describe('Worker and D1 integration', () => {
       }
       await db.prepare(`INSERT INTO catchmind_guesses (id, round_id, player_id, answer, normalized_answer, correct, created_at)
         VALUES ('guess', 'retention-0', 'siwon', '사과', '사과', 1, ?)` ).bind(old).run();
+      // Notifications past the retention window go; the recent one stays.
+      for (const [id, when] of [['old-notice', old], ['recent-notice', now.toISOString()]]) {
+        await db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
+          VALUES ('speetto', 'all', NULL, 'siwon', '{"kind":"speetto","prize":1500}', ?, ?)`).bind(when, id).run();
+      }
       await maintainDatabase(db as unknown as D1Database, now);
       for (const table of ['sessions', 'login_attempts']) expect(await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first('n')).toBe(3);
       expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_requests').first('n')).toBe(8);
@@ -458,9 +463,10 @@ describe('Worker and D1 integration', () => {
       expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_rounds').first('n')).toBe(4);
       expect(await db.prepare('SELECT COUNT(*) AS n FROM ledger').first('n')).toBe(1);
       expect(await db.prepare('SELECT COUNT(*) AS n FROM inventory_ledger').first('n')).toBe(1);
+      expect((await db.prepare('SELECT reference FROM notifications').all()).results.map(row => row.reference)).toEqual(['recent-notice']);
       const observed = measuredDatabase(db, now.getTime());
       await maintainDatabase(observed.binding, now);
-      expect(observed.queries).toHaveLength(4);
+      expect(observed.queries).toHaveLength(5);
       expect(observed.queries.every(query => query.rowsWritten === 0)).toBe(true);
     });
   });

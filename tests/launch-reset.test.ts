@@ -159,9 +159,10 @@ describe('launch reset in an isolated local D1', () => {
     const bootstrap = await bootstrapResponse.json() as BootstrapResponse;
     expect(bootstrap.user).toMatchObject({ id: 'min', displayName: '민', photoVersion: 7, character: 'moon', gold: 0, weeklyScore: 0 });
     // The reset predates the notification centre, so the seeded notice survives.
+    // It is a day old, so it counts as unread without riding along for the toast.
     expect(bootstrap.notifications.unread).toBe(1);
-    expect(bootstrap.notifications.recent).toHaveLength(1);
-    expect(bootstrap.notifications.recent[0]).toMatchObject({ actorId: 'min', payload: { kind: 'speetto', prize: 1500 } });
+    expect(bootstrap.notifications.recent).toEqual([]);
+    expect(await db.prepare("SELECT actor_id FROM notifications WHERE reference = 'retained-notification'").first('actor_id')).toBe('min');
     const retainedPhoto = await request('/api/users/min/photo?v=7');
     expect(retainedPhoto.status).toBe(200);
     expect(Buffer.from(await retainedPhoto.arrayBuffer())).toEqual(await readFile(new URL('./fixtures/photo-square.webp', import.meta.url)));
