@@ -472,7 +472,8 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     getLaunchGiftState(env.DB, user, now),
     readAnnouncements(env.DB, user.id, now),
     readLottoNotice(env.DB, user.id, now),
-    FEATURES.stock ? readStockHome(env.DB, user, now.getTime()) : null,
+    // Until the seed secret is configured the market cannot run; the tile says "준비 중".
+    FEATURES.stock && env.STOCK_SEED_SECRET ? readStockHome(env.DB, user, now.getTime()) : null,
   ]);
   const viewer = roster.find(player => player.id === user.id);
   const players = roster.filter(player => player.role === 'player' && player.active === 1)
