@@ -665,6 +665,17 @@ export default function App() {
       setPreviewAdminState(next);
     } else await saveAdmin(owner => api.saveGameSettings(id, rules, effectiveFrom, owner));
   }
+  async function setStockAi(enabled: boolean) {
+    if (adminDemo) {
+      const current = previewAdminStateRef.current;
+      const next = { ...current, stock: { ...current.stock, ai: { ...current.stock.ai, enabled } } };
+      previewAdminStateRef.current = next;
+      setPreviewAdminState(next);
+    } else await saveAdmin(() => api.setStockAi(enabled));
+  }
+  async function hideStockNews(id: string, hidden: boolean) {
+    if (!adminDemo) await saveAdmin(() => api.setStockNewsHidden(id, hidden));
+  }
   async function saveAdminHoliday(date: string, reason: string | null) {
     if (adminDemo) {
       const current = previewAdminStateRef.current;
@@ -736,7 +747,7 @@ export default function App() {
   else if (path === "/admin" && adminAllowed) content = <Admin key={adminDemo ? "preview-admin" : me.id}
     state={adminDemo ? { ...previewAdminState, catchmindWordsRemaining: previewCatchmind.wordsRemaining } : adminData?.owner === me.id ? adminData.state : null}
     loading={adminLoading} error={adminError} onReload={() => void reloadAdmin()}
-    onSaveGame={saveAdminGame} onSaveClaw={saveAdminClaw} onSaveHoliday={saveAdminHoliday} onPlayClaw={() => go("/play/claw")} preview={adminDemo} />;
+    onSaveGame={saveAdminGame} onSaveClaw={saveAdminClaw} onSaveHoliday={saveAdminHoliday} onSetStockAi={setStockAi} onHideStockNews={hideStockNews} onPlayClaw={() => go("/play/claw")} preview={adminDemo} />;
   else if (play === "kuji") content = <Kuji onBack={home} />;
   else if (path === "/play/catchmind/gallery") content = <CatchmindGallery demo={demo} gold={me.gold} onBack={() => go("/play/catchmind")} />;
   else if (play === "catchmind") content = <Catchmind user={me} demo={demo} onBack={home} />;

@@ -20,10 +20,11 @@ import { PROFILE_PHOTO, LUCK_PHOTO } from '../shared/profile';
 import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, getLuckPhotoMetadata, luckPhotoUrl } from './luck-photos';
 import { readAnnouncements } from './announcements';
 import { maintainDatabase } from './maintenance';
-import { StockError, addMarketHoliday, advanceStocks, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, stockCronDue, stockSecret, tradeStock } from './stocks';
+import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockSecret, tradeStock } from './stocks';
+import { anthropicWriter, readAiStatus, setAiEnabled } from './stock-ai';
 import { FEATURES } from '../shared/balance';
 
-export interface Env { DB: D1Database; ASSETS: Fetcher; STOCK_SEED_SECRET?: string }
+export interface Env { DB: D1Database; ASSETS: Fetcher; STOCK_SEED_SECRET?: string; ANTHROPIC_API_KEY?: string }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null; settings_json: string | null }
 interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null; photo_version: number | null }
@@ -588,9 +589,12 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
   }
   return json({ game: await readGame(env.DB, user, id, refreshedAt) });
 }
-async function adminState(db: D1Database, now: Date): Promise<AdminState> {
-  const [games, claw, changes, catchmindWordsRemaining, marketHolidays] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db), readRemainingWords(db), readMarketHolidays(db, now.getTime())]);
-  return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, catchmindWordsRemaining, marketHolidays, serverTime: now.toISOString() };
+async function adminState(env: Env, now: Date): Promise<AdminState> {
+  const db = env.DB;
+  const [games, claw, changes, catchmindWordsRemaining, marketHolidays, ai, stockNews] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db),
+    readRemainingWords(db), readMarketHolidays(db, now.getTime()), readAiStatus(db, kstDate(now), !!env.ANTHROPIC_API_KEY), readAdminStockNews(db, now.getTime())]);
+  return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, catchmindWordsRemaining, marketHolidays,
+    stock: { ai, news: stockNews }, serverTime: now.toISOString() };
 }
 async function api(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -606,21 +610,36 @@ async function api(request: Request, env: Env): Promise<Response> {
   const user = await requireUser(request, env, now.getTime());
   if (url.pathname === '/api/admin' || url.pathname.startsWith('/api/admin/')) {
     if (user.role !== 'admin') throw new HttpError(403, 'ADMIN_ONLY', '운영자만 사용할 수 있어요.');
-    if (url.pathname === '/api/admin' && request.method === 'GET') return json(await adminState(env.DB, now));
+    if (url.pathname === '/api/admin' && request.method === 'GET') return json(await adminState(env, now));
     const gameSettings = /^\/api\/admin\/games\/([^/]+)$/.exec(url.pathname);
     if (gameSettings && isGameId(gameSettings[1]!)) {
       if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
       const input = await body(request);
       if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) throw new HttpError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
       await saveGameSettings(env.DB, user, gameSettings[1], input, new Date());
-      return json(await adminState(env.DB, new Date()));
+      return json(await adminState(env, new Date()));
     }
     if (url.pathname === '/api/admin/claw') {
       if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
       const input = await body(request);
       if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) throw new HttpError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
       await saveAdminClawConfig(env.DB, user, input, new Date());
-      return json(await adminState(env.DB, new Date()));
+      return json(await adminState(env, new Date()));
+    }
+    if (url.pathname === '/api/admin/stock/ai') {
+      if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+      const input = await body(request);
+      if (typeof input.enabled !== 'boolean') throw new HttpError(400, 'INVALID_SETTING', 'AI 뉴스 설정을 확인해 주세요.');
+      await setAiEnabled(env.DB, user.id, input.enabled, Date.now());
+      return json(await adminState(env, new Date()));
+    }
+    const newsMatch = /^\/api\/admin\/stock\/news\/([^/]{1,300})$/.exec(url.pathname);
+    if (newsMatch) {
+      if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+      const input = await body(request);
+      if (typeof input.hidden !== 'boolean') throw new HttpError(400, 'INVALID_SETTING', '숨김 설정을 확인해 주세요.');
+      await setStockNewsHidden(env.DB, decodeURIComponent(newsMatch[1]!), input.hidden, Date.now());
+      return json(await adminState(env, new Date()));
     }
     const holidayMatch = /^\/api\/admin\/market-holidays(?:\/(\d{4}-\d{2}-\d{2}))?$/.exec(url.pathname);
     if (holidayMatch) {
@@ -630,7 +649,7 @@ async function api(request: Request, env: Env): Promise<Response> {
         await addMarketHoliday(env.DB, user, input, Date.now());
       } else if (request.method === 'DELETE' && holidayMatch[1]) await removeMarketHoliday(env.DB, holidayMatch[1], Date.now());
       else throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
-      return json(await adminState(env.DB, new Date()));
+      return json(await adminState(env, new Date()));
     }
     throw new HttpError(404, 'NOT_FOUND', '요청한 운영 기능이 없어요.');
   }
@@ -778,7 +797,8 @@ export default {
     const at = new Date(event.scheduledTime);
     if (kstTime(at) < '00:10:00') context.waitUntil(maintainDatabase(env.DB, at));
     if (FEATURES.stock && env.STOCK_SEED_SECRET && stockCronDue(at.getTime())) {
-      context.waitUntil(advanceStocks(env.DB, env.STOCK_SEED_SECRET, at.getTime()).then(() => undefined, error => {
+      const writer = env.ANTHROPIC_API_KEY ? anthropicWriter(env.ANTHROPIC_API_KEY) : null;
+      context.waitUntil(runStockCron(env.DB, env.STOCK_SEED_SECRET, writer, at.getTime()).then(() => undefined, error => {
         console.error('Stock tick failed', error instanceof Error ? error.name : 'UnknownError');
       }));
     }

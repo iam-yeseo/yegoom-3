@@ -130,6 +130,30 @@ const DISCLOSURE: Record<DisclosureKind, (name: string) => Article> = {
   relist: name => [`[공시] ${name}, 재상장`, `${name}${subjectParticle(name)} 상장가로 다시 상장했습니다. 오늘부터 다시 거래할 수 있습니다.`],
 };
 
+const RUMOR = {
+  rumor: {
+    up: [(n: string) => [`${n}, 대형 계약 앞두고 있다?`, `업계에서 ${n}이(가) 큰 계약을 앞두고 있다는 이야기가 돈다. 회사는 아직 아무 말도 하지 않았다.`],
+      (n: string) => [`${n}, 비밀 신제품 곧 공개?`, `${n} 사옥 불이 밤늦게까지 켜져 있다는 목격담이 이어진다. 확인된 내용은 없다.`]],
+    down: [(n: string) => [`${n}, 내부 사정 심상치 않다?`, `${n} 회의실에서 한숨 소리가 자주 들린다는 소문이 퍼졌다. 회사는 확인해 주지 않았다.`],
+      (n: string) => [`${n}, 대표 휴가 연장설`, `${n} 대표가 휴가에서 돌아오지 않는다는 이야기가 돈다. 사실 여부는 알려지지 않았다.`]],
+  },
+  confirm: {
+    up: [(n: string) => [`${n}, 소문 사실로 확인`, `오전에 돌던 이야기가 사실로 확인됐다. ${n} 측은 "드디어 말할 수 있게 됐다"며 웃었다.`]],
+    down: [(n: string) => [`${n}, 소문대로였다`, `${n} 측이 오전의 소문을 인정했다. 회사는 "곧 수습하겠다"고 밝혔다.`]],
+  },
+  denied: {
+    up: [(n: string) => [`${n}, "사실무근" 소문 일축`, `${n} 측은 오전에 돈 이야기가 사실이 아니라고 밝혔다. 기대했던 사람들은 머쓱해졌다.`]],
+    down: [(n: string) => [`${n}, "근거 없는 소문" 반박`, `${n} 측이 오전의 소문을 전면 부인했다. 대표는 휴가 사진까지 공개하며 해명했다.`]],
+  },
+} as const;
+/** Template articles for a rumor and its confirmation or denial. `up` is the rumor's direction. */
+export function rumorArticle(ticker: Ticker, kind: 'rumor' | 'confirm' | 'denied', up: boolean, variant: number): { headline: string; body: string } {
+  const name = stockInfo(ticker)!.name;
+  const list = RUMOR[kind][up ? 'up' : 'down'];
+  const [headline, body] = list[variant % list.length]!(name);
+  return { headline, body: body.replace('이(가)', subjectParticle(name)) };
+}
+
 /** `variant` is any non-negative integer drawn by the engine. */
 export function newsArticle(ticker: Ticker, up: boolean, variant: number): { headline: string; body: string } {
   const list = NEWS[ticker][up ? 'up' : 'down'];

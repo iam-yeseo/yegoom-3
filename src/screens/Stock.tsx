@@ -111,7 +111,7 @@ function NewsCard({ item, go }: { item: StockNewsItem; go?: (path: string) => vo
         <time dateTime={item.publishAt}>{kstDay(item.publishAt) === kstDay(new Date().toISOString()) ? formatTime(item.publishAt) : formatDateTime(item.publishAt).slice(6)}</time>
         {item.effectBp !== null && item.effectBp !== 0 && <b className={upDown(item.effectBp)}>{percent(item.effectBp / 100)}</b>}
       </header>
-      <h3>{item.kind === "rumor" && <span className="rumor-label">[찌라시] </span>}{item.headline}</h3>
+      <h3>{item.kind === "rumor" && <span className="rumor-label">[찌라시] </span>}{(item.kind === "confirm" || item.kind === "denied") && <span className="rumor-label">[찌라시 {item.kind === "confirm" ? "확인" : "부인"}] </span>}{item.kind === "whale" && <span className="whale-label">[큰손] </span>}{item.headline}</h3>
       <p>{item.body}</p>
     </article>
   );
@@ -180,6 +180,7 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
   }
   const { market } = view;
   const pnl = totals.value - totals.cost;
+  const dayChange = view.stocks.reduce((sum, stock) => sum + (stock.status === "delisted" || stock.dayOpen === null ? 0 : stock.held * (stock.price - stock.prevClose)), 0);
   const newsCard = (
     <section className="card stock-news">
       <div className="card-head">
@@ -206,10 +207,26 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
           </div>
         </div>
         <div className="screen-body stack">
+          {view.closing?.summary && (
+            <section className="card stock-closing">
+              <span className="closing-label">오늘의 시황</span>
+              <h3>{view.closing.summary.headline}</h3>
+              <p>{view.closing.summary.body}</p>
+              {view.closing.comment && <p className="closing-comment">{view.closing.comment.body}</p>}
+            </section>
+          )}
           <section className="card stock-summary">
             <div><span>내 주식</span><strong>{won(totals.value)}G</strong></div>
             <div><span>평가손익</span><strong className={upDown(pnl)}>{totals.count ? `${signed(pnl)}G` : "—"}</strong></div>
+            <div><span>마지막 거래일 변동</span><strong className={upDown(dayChange)}>{totals.count ? `${signed(dayChange)}G` : "—"}</strong></div>
           </section>
+          {view.closing?.weekly && (
+            <section className="card stock-closing weekly">
+              <span className="closing-label">주간 실적</span>
+              <h3>{view.closing.weekly.headline}</h3>
+              <p>{view.closing.weekly.body}</p>
+            </section>
+          )}
           {list}
           {newsCard}
         </div>

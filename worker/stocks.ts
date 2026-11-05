@@ -5,6 +5,8 @@ import { GAME_STOCK, STOCK_GAME_RULES, gameArticle, gameEffectBp, gameForTicker,
 import { GAME_RULES } from '../shared/balance';
 import type { GameId } from '../shared/types';
 import { readGameRules } from './game-settings';
+import { AI_RULES } from '../shared/balance';
+import { writeCloseNews, writeMorningNews, type AiWriter } from './stock-ai';
 import type { Candle, MarketClock, MarketHoliday, StockDetailView, StockHomeSummary, StockMarketView, StockNewsItem, StockNewsKind, StockNewsPage, StockQuote, StockTradeResponse, StockTradeView, StockUnchanged } from '../shared/stock-types';
 
 export interface StockUser { id: string; role: 'player' | 'admin'; username: string }
@@ -37,7 +39,7 @@ const tradeView = (row: TradeRow): StockTradeView => ({
 
 /** The secret day seed: HMAC-SHA256(STOCK_SEED_SECRET, "stock|date"). Neither the
  * code nor the database is enough to predict a future price. */
-async function daySeeds(secret: string, dates: readonly string[]): Promise<Map<string, string>> {
+export async function daySeeds(secret: string, dates: readonly string[]): Promise<Map<string, string>> {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const seeds = await Promise.all(dates.map(async date => {
     const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`stock|${date}`)));
@@ -201,13 +203,20 @@ export async function readStockMarket(db: D1Database, secret: string, user: Stoc
   const market = clock(now, holidays);
   const serverTime = new Date(now).toISOString();
   if (since === version) return { unchanged: true, version, market, serverTime };
-  const [holdings, news, gold] = await db.batch([
+  const [holdings, news, gold, closingRows] = await db.batch([
     db.prepare('SELECT ticker, quantity, cost_basis FROM stock_holdings WHERE user_id = ?').bind(user.id),
-    db.prepare(`SELECT id, ticker, kind, headline, body, publish_at, effect_bp, source FROM stock_news WHERE ${VISIBLE_NEWS} ORDER BY publish_at DESC, id DESC LIMIT 5`).bind(now, user.id),
+    db.prepare(`SELECT id, ticker, kind, headline, body, publish_at, effect_bp, source FROM stock_news WHERE ${VISIBLE_NEWS}
+      AND kind NOT IN ('close', 'comment', 'weekly') ORDER BY publish_at DESC, id DESC LIMIT 5`).bind(now, user.id),
     db.prepare('SELECT gold FROM user_balances WHERE user_id = ?').bind(user.id),
+    // The latest closing articles (one publish time); empty work while the market is open.
+    db.prepare(`SELECT id, ticker, kind, headline, body, publish_at, effect_bp, source FROM stock_news WHERE ${VISIBLE_NEWS}
+      AND kind IN ('close', 'comment', 'weekly') AND ? = 0 ORDER BY publish_at DESC LIMIT 3`).bind(now, user.id, market.open ? 1 : 0),
   ]);
   const held = new Map((holdings!.results as HoldingRow[]).map(row => [row.ticker, row]));
-  return { market, version, stocks: rows.map(row => quote(row, market.date, held.get(row.ticker))), news: (news!.results as NewsRow[]).map(newsView),
+  const closingNews = (closingRows!.results as NewsRow[]).filter((row, _, all) => row.publish_at === all[0]!.publish_at).map(newsView);
+  const closing = market.open ? null : { summary: closingNews.find(item => item.kind === 'close') ?? null,
+    comment: closingNews.find(item => item.kind === 'comment') ?? null, weekly: closingNews.find(item => item.kind === 'weekly') ?? null };
+  return { market, version, stocks: rows.map(row => quote(row, market.date, held.get(row.ticker))), news: (news!.results as NewsRow[]).map(newsView), closing,
     gold: (gold!.results[0] as { gold: number } | undefined)?.gold ?? 0, canTrade: user.role === 'player', serverTime };
 }
 
@@ -337,6 +346,16 @@ export async function tradeStock(db: D1Database, secret: string, user: StockUser
           FROM (SELECT user_id, ticker, quantity, cost_basis FROM stock_trades WHERE id = ?) AS t
           WHERE stock_holdings.user_id = t.user_id AND stock_holdings.ticker = t.ticker`).bind(id),
   ]);
+  if (writes[0]!.meta.changes === 1 && (q >= AI_RULES.whaleShares || row.price * q >= AI_RULES.whaleGold)) {
+    // Anonymous whale news (no price effect), once an hour per person and stock.
+    await db.prepare(`INSERT OR IGNORE INTO stock_news (id, ticker, kind, publish_at, headline, body, source, created_at)
+      SELECT ?, ?, 'whale', ?, ?, ?, 'template', ? WHERE NOT EXISTS (
+        SELECT 1 FROM stock_trades t WHERE t.user_id = ? AND t.ticker = ? AND t.id != ? AND t.side IN ('buy', 'sell')
+          AND t.created_at >= ? AND (t.quantity >= ? OR t.price * t.quantity >= ?))`)
+      .bind(`whale:${id}`, order.ticker, now, `익명의 큰손, ${name} ${q.toLocaleString('ko-KR')}주 ${buy ? '매수' : '매도'}`,
+        `한 번에 ${(row.price * q).toLocaleString('ko-KR')}G어치가 ${buy ? '사들여졌다' : '팔려 나갔다'}. 누구인지는 아무도 모른다.`, createdAt,
+        user.id, order.ticker, id, new Date(now - 3_600_000).toISOString(), AI_RULES.whaleShares, AI_RULES.whaleGold).run();
+  }
   if (writes[0]!.meta.changes === 1) {
     const trade = (await db.prepare('SELECT * FROM stock_trades WHERE id = ?').bind(id).first<TradeRow>())!;
     return tradeResponse(db, user, trade, row, date, false);
@@ -368,15 +387,12 @@ async function rejectTrade(db: D1Database, user: StockUser, order: ReturnType<ty
 /** Home tile: no advance, just the stored prices (at most one tick behind). */
 export async function readStockHome(db: D1Database, user: StockUser, now: number): Promise<StockHomeSummary> {
   const date = kstDateOf(now);
-  const [holding, holiday] = await db.batch([
-    db.prepare(`SELECT COALESCE(SUM(CASE WHEN s.status != 'delisted' THEN h.quantity * s.price ELSE 0 END), 0) AS value,
-        COALESCE(SUM(h.cost_basis), 0) AS cost
-      FROM stock_holdings h JOIN stock_state s ON s.ticker = h.ticker WHERE h.user_id = ? AND h.quantity > 0`).bind(user.id),
-    db.prepare('SELECT date, reason FROM market_holidays WHERE date = ?').bind(date),
-  ]);
-  const holidays = new Map((holiday!.results as MarketHoliday[]).map(row => [row.date, row.reason]));
-  const status = marketStatus(now, holidays);
-  const sums = holding!.results[0] as { value: number; cost: number };
+  // One statement: the aggregate always returns a row, with today's holiday reason.
+  const sums = (await db.prepare(`SELECT COALESCE(SUM(CASE WHEN s.status != 'delisted' THEN h.quantity * s.price ELSE 0 END), 0) AS value,
+      COALESCE(SUM(h.cost_basis), 0) AS cost, (SELECT reason FROM market_holidays WHERE date = ?) AS holiday
+    FROM stock_holdings h JOIN stock_state s ON s.ticker = h.ticker WHERE h.user_id = ? AND h.quantity > 0`)
+    .bind(date, user.id).first<{ value: number; cost: number; holiday: string | null }>())!;
+  const status = marketStatus(now, new Map(sums.holiday ? [[date, sums.holiday]] : []));
   return { open: status.open, holiday: status.holiday, value: sums.value, cost: sums.cost };
 }
 
@@ -417,5 +433,32 @@ export async function removeMarketHoliday(db: D1Database, date: string, now: num
 /** Cron: weekdays from the open through the close tick only. */
 export function stockCronDue(now: number): boolean {
   const date = kstDateOf(now);
-  return !isWeekend(date) && now >= kstTimestamp(date, STOCK_RULES.openTime) && now < kstTimestamp(date, STOCK_RULES.closeTime) + STOCK_RULES.tickMinutes * 60_000;
+  const step = STOCK_RULES.tickMinutes * 60_000;
+  // 08:50 writes the morning AI news; 09:00–18:00 are the ticks (18:00 also the close news).
+  return !isWeekend(date) && now >= kstTimestamp(date, STOCK_RULES.openTime) - step && now < kstTimestamp(date, STOCK_RULES.closeTime) + step;
+}
+
+/** The 10-minute Cron: ticks, then the AI news batches at 08:50 and 18:00. */
+export async function runStockCron(db: D1Database, secret: string, writer: AiWriter | null, now: number): Promise<void> {
+  const { rows, holidays } = await advanceStocks(db, secret, now);
+  const date = kstDateOf(now);
+  if (!isTradingDay(date, holidays)) return;
+  const time = new Date(now + 9 * 3_600_000).toISOString().slice(11, 16);
+  if (time === '08:50') await writeMorningNews(db, writer, (await daySeeds(secret, [date])).get(date)!, date, rows, now);
+  if (time === '18:00') await writeCloseNews(db, writer, date, rows, now);
+}
+
+// Administrator: published news only (never future), hide/show, and the AI switch.
+export interface AdminStockNews { id: string; ticker: Ticker | null; kind: string; headline: string; publishAt: string; source: 'ai' | 'template'; hidden: boolean }
+export async function readAdminStockNews(db: D1Database, now: number): Promise<AdminStockNews[]> {
+  const rows = await db.prepare(`SELECT id, ticker, kind, headline, publish_at, source, hidden FROM stock_news
+    WHERE publish_at <= ? AND audience_user_id IS NULL ORDER BY publish_at DESC, id DESC LIMIT 20`).bind(now)
+    .all<{ id: string; ticker: Ticker | null; kind: string; headline: string; publish_at: number; source: 'ai' | 'template'; hidden: number }>();
+  return rows.results.map(row => ({ id: row.id, ticker: row.ticker, kind: row.kind, headline: row.headline,
+    publishAt: new Date(row.publish_at).toISOString(), source: row.source, hidden: row.hidden === 1 }));
+}
+export async function setStockNewsHidden(db: D1Database, id: string, hidden: boolean, now: number): Promise<void> {
+  const result = await db.prepare('UPDATE stock_news SET hidden = ? WHERE id = ? AND publish_at <= ? AND audience_user_id IS NULL')
+    .bind(hidden ? 1 : 0, id, now).run();
+  if (!result.meta.changes) throw new StockError(404, 'NEWS_NOT_FOUND', '공개된 뉴스만 숨길 수 있어요.');
 }

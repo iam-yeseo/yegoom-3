@@ -17,6 +17,8 @@ interface Props {
   onSaveClaw: (config: AdminClawConfig) => Promise<void>;
   /** reason null removes the holiday. */
   onSaveHoliday: (date: string, reason: string | null) => Promise<void>;
+  onSetStockAi: (enabled: boolean) => Promise<void>;
+  onHideStockNews: (id: string, hidden: boolean) => Promise<void>;
   onPlayClaw: () => void;
   preview?: boolean;
 }
@@ -291,7 +293,46 @@ function MarketHolidayCard({ state, disabled, onSave }: { state: AdminState; dis
   </section>;
 }
 
-export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw, onSaveHoliday, onPlayClaw, preview = false }: Props) {
+const dollars = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
+/** AI news switch, spend, and hiding already-published articles (§8-6). */
+function StockNewsCard({ state, disabled, onSetAi, onHide }: { state: AdminState; disabled: boolean; onSetAi: Props["onSetStockAi"]; onHide: Props["onHideStockNews"] }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const panel = useId();
+  const { ai, news } = state.stock;
+  async function run(action: () => Promise<void>) {
+    if (busy) return;
+    setBusy(true); setError("");
+    try { await action(); } catch (cause) { setError(explain(cause)); } finally { setBusy(false); }
+  }
+  return <section className="card admin-claw-card admin-stock-card" aria-label="주식 뉴스 운영">
+    <button className="admin-card-toggle" type="button" aria-expanded={open} aria-controls={panel} onClick={() => setOpen(value => !value)}>
+      <span className="admin-card-art"><Character artKey="monkey" /></span><span className="admin-card-title"><strong>주식 뉴스</strong><span>AI 뉴스 켜기·끄기와 공개된 뉴스 숨기기</span></span><span className="admin-card-chevron" aria-hidden="true">{open ? "−" : "+"}</span>
+    </button>
+    <div className="admin-card-badges"><span className="pill peach">{!ai.keyConfigured ? "AI 키 없음 · 템플릿" : ai.enabled ? "AI 뉴스 켜짐" : "AI 뉴스 꺼짐"}</span></div>
+    <div id={panel} hidden={!open}>
+      <dl className="admin-ai-usage">
+        <div><dt>오늘</dt><dd>{ai.today.calls}회 · {dollars(ai.today.costMicroUsd)}</dd></div>
+        <div><dt>이번 달</dt><dd>{ai.month.calls}회 · {dollars(ai.month.costMicroUsd)}</dd></div>
+      </dl>
+      <p className="admin-claw-explanation">하루 $0.80에 닿으면 그날은 템플릿 뉴스만 써요. 앞으로 나올 뉴스와 가격 사건은 운영자도 볼 수 없어요.</p>
+      <button className="secondary-button" type="button" disabled={disabled || busy} onClick={() => void run(() => onSetAi(!ai.enabled))}>
+        {ai.enabled ? "AI 뉴스 끄기" : "AI 뉴스 켜기"}
+      </button>
+      <ul className="admin-holiday-list admin-news-list" aria-label="공개된 뉴스">
+        {news.map(item => <li key={item.id} className={item.hidden ? "hidden-news" : ""}>
+          <span><small>{formatDateTime(item.publishAt).slice(6)} · {item.source === "ai" ? "AI" : "템플릿"}</small>{item.headline}</span>
+          <button className="text-button" type="button" disabled={disabled || busy} onClick={() => void run(() => onHide(item.id, !item.hidden))}>{item.hidden ? "다시 보이기" : "숨기기"}</button>
+        </li>)}
+        {!news.length && <li><span>아직 공개된 뉴스가 없어요.</span></li>}
+      </ul>
+      {error && <p className="admin-form-error" role="alert">{error}</p>}
+    </div>
+  </section>;
+}
+
+export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw, onSaveHoliday, onSetStockAi, onHideStockNews, onPlayClaw, preview = false }: Props) {
   return <div className="admin-page">
     <header className="admin-heading"><span className="pill lavender">{preview ? "운영 화면 미리보기" : "운영자 전용"}</span><h1>운영</h1><p>게임 규칙을 확인하고 다음 판을 준비해요.</p></header>
     <div className="screen-body admin-body">
@@ -308,6 +349,7 @@ export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw,
         </section>
         <ClawCard config={state.claw} disabled={loading} onSave={onSaveClaw} onPlay={onPlayClaw} />
         <MarketHolidayCard state={state} disabled={loading} onSave={onSaveHoliday} />
+        <StockNewsCard state={state} disabled={loading} onSetAi={onSetStockAi} onHide={onHideStockNews} />
         <Changes changes={state.changes} />
       </>}
     </div>

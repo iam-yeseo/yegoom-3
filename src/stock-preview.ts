@@ -73,7 +73,7 @@ export function createPreviewStockClient(wallet: { gold(): number; canTrade(): b
       const version = marketVersion(market.rows);
       const status = clock(now);
       if (since === version) return { unchanged: true, version, market: status, serverTime: new Date(now).toISOString() };
-      return { market: status, version, stocks: market.rows.map(row => quote(market, row, status.date)), news: newestNews(market).slice(0, 5).map(newsItem),
+      return { market: status, version, stocks: market.rows.map(row => quote(market, row, status.date)), news: newestNews(market).slice(0, 5).map(newsItem), closing: status.open ? null : { summary: null, comment: null, weekly: null },
         gold: wallet.gold(), canTrade: wallet.canTrade(), serverTime: new Date(now).toISOString() };
     },
     async detail(ticker) {

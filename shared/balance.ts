@@ -2,7 +2,21 @@ import type { GameId, Inventory } from './types';
 
 export const ANNOUNCEMENT_RULES = { recentMs: 10 * 60_000, limit: 5, displayMs: 4000, lottoRanks: [1, 2, 3] as const } as const;
 
-export const FEATURES = { stock: false };
+export const FEATURES = { stock: true };
+/** AI stock news (docs/plan-stock.md §8). Prices per million tokens for Claude
+ * Opus 5.5 ($4 input, $20 output, $5 cache write, $0.20 cache read), checked
+ * 2026-11-05 against the Claude API reference; when a server-side fallback model
+ * answers, the higher Opus rates ($5/$25/$6.25/$0.50) are charged to be safe.
+ * The daily cap keeps spending under the user's $1/day limit. */
+export const AI_RULES = {
+  model: 'claude-opus-5-5', effort: 'medium', maxTokens: 16000, timeoutMs: 90_000,
+  dailyCapMicroUsd: 800_000,
+  microUsdPerToken: { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 },
+  fallbackMicroUsdPerToken: { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
+  headlineMax: 40, bodyMax: 200, commentMax: 120, recentHeadlines: 20,
+  /** Whale trades: anonymous news, no price effect, once an hour per person and stock. */
+  whaleGold: 20_000, whaleShares: 100,
+} as const;
 export const LAUNCH_GIFT = { date: '2026-11-02', lottoTickets: 5, speettoTickets: 5 } as const;
 
 /** The published prediction rules, shared by settlement, help, and previews. */

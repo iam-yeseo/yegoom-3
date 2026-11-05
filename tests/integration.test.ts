@@ -50,6 +50,10 @@ function paddedJpeg(bytes: number): string {
 const profilePhotoPath = (id: string, version: number) => `/api/users/${id}/photo?v=${version}`;
 const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds/${date}/photo?v=${version}`;
 
+/** Stock PR 12 opened the market: bootstrap adds one read for the home stock tile
+ * (holdings value and today's market holiday in one statement). */
+const STOCK_HOME = { prepares: 1, queries: 1, bindingCalls: 1, rowsRead: 12, rowsWritten: 0 } as const;
+const stockAllowance = (route: string, field: keyof typeof STOCK_HOME) => route.includes('bootstrap') ? STOCK_HOME[field] : 0;
 const ORIGIN = 'http://localhost';
 const PASSWORD = 'test-only-password-42!';
 const TODAY = '2026-10-30';
@@ -662,10 +666,10 @@ describe('Worker and D1 integration', () => {
               // This fixture has no lottery purchases, so the empty aggregate
               // must leave billed rows unchanged and add no writes.
               const noticeAllowance = clockKst === '18:00' ? 1 : 0;
-              expect(metrics.prepares, route).toBeLessThanOrEqual(prior.prepares + noticeAllowance);
-              expect(metrics.bindingCalls, route).toBeLessThanOrEqual(prior.bindingCalls + noticeAllowance);
-              expect(metrics.queries, route).toBeLessThanOrEqual(prior.queries + noticeAllowance);
-              expect(metrics.rowsRead, route).toBeLessThanOrEqual(prior.rowsRead);
+              expect(metrics.prepares, route).toBeLessThanOrEqual(prior.prepares + noticeAllowance + stockAllowance(route, 'prepares'));
+              expect(metrics.bindingCalls, route).toBeLessThanOrEqual(prior.bindingCalls + noticeAllowance + stockAllowance(route, 'bindingCalls'));
+              expect(metrics.queries, route).toBeLessThanOrEqual(prior.queries + noticeAllowance + stockAllowance(route, 'queries'));
+              expect(metrics.rowsRead, route).toBeLessThanOrEqual(prior.rowsRead + stockAllowance(route, 'rowsRead'));
             }
             await response.arrayBuffer();
           };
@@ -948,7 +952,7 @@ describe('Worker and D1 integration', () => {
         expect(measurements.map(row => [row.clockKst, row.historicalTicketsPerKind, row.route])).toEqual(prior.after.map(row => [row.clockKst, row.historicalTicketsPerKind, row.route]));
         for (const row of measurements) {
           const limit = prior.after.find(candidate => candidate.clockKst === row.clockKst && candidate.historicalTicketsPerKind === row.historicalTicketsPerKind && candidate.route === row.route)!;
-          for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsRead', 'rowsWritten'] as const) expect(row[field], `${row.clockKst} ${row.route}: ${field}`).toBeLessThanOrEqual(limit[field]);
+          for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsRead', 'rowsWritten'] as const) expect(row[field], `${row.clockKst} ${row.route}: ${field}`).toBeLessThanOrEqual(limit[field] + stockAllowance(row.route, field));
         }
       }
       if (!baseline) for (const row of measurements.filter(value => value.historicalTicketsPerKind === 5000)) {
@@ -1020,7 +1024,7 @@ describe('Worker and D1 integration', () => {
         for (const row of measurements) {
           const prior = previous.before.find(candidate => candidate.label === row.label)!;
           for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsRead', 'rowsWritten'] as const) {
-            expect(row[field], `${row.label}: ${field}`).toBeLessThanOrEqual(prior[field]);
+            expect(row[field], `${row.label}: ${field}`).toBeLessThanOrEqual(prior[field] + stockAllowance(row.label, field));
           }
         }
       }
@@ -4626,7 +4630,7 @@ describe('Worker and D1 integration', () => {
           [historicalSpins, recentSpins, historicalGoldLedgerRows, outcome, route])).toEqual(prior.measurements.map(row =>
           [row.historicalSpins, row.recentSpins, row.historicalGoldLedgerRows, row.outcome, row.route]));
         for (const [index, row] of measurements.entries()) for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsRead', 'rowsWritten'] as const) {
-          expect(row[field], `${row.route}: ${field}`).toBeLessThanOrEqual(prior.measurements[index]![field]);
+          expect(row[field], `${row.route}: ${field}`).toBeLessThanOrEqual(prior.measurements[index]![field] + stockAllowance(row.route, field));
         }
       }
       console.log(`Slot authenticated request metrics: ${JSON.stringify(measurements)}`);

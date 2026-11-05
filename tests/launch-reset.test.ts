@@ -20,7 +20,7 @@ const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventor
 // Post-launch records (slot receipts, nickname tags) are outside the launch-era reset.
 const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins', 'nickname_tags',
   // The stock market (0015) starts after launch; a launch reset never touches it.
-  'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays'];
+  'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays', 'ai_usage', 'stock_settings'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -107,6 +107,7 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO stock_holdings (user_id, ticker, quantity, cost_basis) VALUES ('min', 'YEGM', 1, 505)"),
       db.prepare("INSERT INTO stock_trades (id, user_id, request_id, ticker, side, quantity, price, fee, total, date, created_at) VALUES ('retained-trade', 'min', 'retained-trade', 'YEGM', 'buy', 1, 500, 5, 505, '2026-11-05', 'x')"),
       db.prepare("INSERT INTO market_holidays (date, reason, created_by, created_at) VALUES ('2026-12-03', '선거', 'admin', 'x')"),
+      db.prepare("INSERT INTO ai_usage (date, calls, cost_micro_usd) VALUES ('2026-11-05', 1, 1000)"),
     ]);
   });
   afterAll(async () => { await worker?.dispose(); });

@@ -98,43 +98,7 @@ async function screenshot(page: Page, mode: 'authenticated' | 'preview', state: 
   await info.attach(`${mode}-${state}-${width}`, { path, contentType: 'image/png' });
 }
 
-test('stock entry points stay closed with accessible notices for real users until the market opens', async ({ page }, info) => {
-  test.setTimeout(60000);
-  await login(page, 'yeseo');
-  // The serverless preview opens the sample market (tests/e2e/stock-pr10.spec.ts).
-  for (const mode of ['authenticated'] as const) {
-    const previewRequests: string[] = [];
-    const prefix = '';
-    const card = page.getByRole('button').filter({ hasText: '주식 시장' });
-    await expect(card).toContainText('준비 중');
-    await card.click();
-    await expect(stock(page)).toContainText('곧 문을 열어요. 조금만 기다려 주세요!');
-    expect(new URL(page.url()).hash).not.toContain('/stock');
-    for (const width of [390, 560]) await screenshot(page, mode, 'stock', width, info);
-    await stock(page).getByRole('button', { name: '확인', exact: true }).click();
-    await expect(stock(page)).toHaveCount(0);
-    await navigate(page, `${prefix}/games`);
-    await expect(card).toContainText('준비 중');
-    await card.click();
-    await page.keyboard.press('Escape');
-    await expect(stock(page)).toHaveCount(0);
-    expect(new URL(page.url()).hash).toBe(`#${prefix}/games`);
-    await card.click();
-    await stock(page).getByRole('button', { name: '닫기', exact: true }).click();
-    await expect(stock(page)).toHaveCount(0);
-    await card.click();
-    await page.mouse.click(2, 2);
-    await expect(stock(page)).toHaveCount(0);
-    for (const path of [`${prefix}/stock`, `${prefix}/stock/YEGM`, `${prefix}/stock/news`]) {
-      await page.goto(`${LAUNCH_ORIGIN}/#${path}`);
-      await expect(stock(page)).toBeVisible();
-      await expect.poll(() => new URL(page.url()).hash.includes('/stock')).toBe(false);
-      await expect(page.locator('.room-name').filter({ hasText: 'yeseo님' })).toBeVisible();
-      await page.keyboard.press('Escape');
-    }
-    expect(previewRequests).toEqual([]);
-  }
-});
+// The stock market opened in PR 12; tests/e2e/stock-pr12.spec.ts covers real players.
 
 for (const [width, username, motion] of [[390, 'min', 'no-preference'], [560, 'siwon', 'reduce']] as const) {
   test(`real launch gift follows attendance, reopens until claimed, and grants five tickets once at ${width}px`, async ({ page }, info) => {
