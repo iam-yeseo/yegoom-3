@@ -9,7 +9,7 @@ import { Miniflare } from 'miniflare';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken, verifyPassword } from '../worker/crypto';
 import { PASSWORD_RULES } from '../shared/password';
-import { CATCHMIND_RULES, SLOT_RULES } from '../shared/balance';
+import { CATCHMIND_RULES, SLOT_RULES, SPEETTO_RULES } from '../shared/balance';
 import { CATCHMIND_WORDS } from '../shared/catchmind-words';
 import { catchmindRoute } from '../worker/catchmind';
 import type { AdminState, PredictionRules } from '../shared/admin';
@@ -18,6 +18,7 @@ import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics
 import { getClawState, getClawSummary, playClaw } from '../worker/claw';
 import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
 import { readNotificationSummary } from '../worker/notifications';
+import { isToastWorthy } from '../shared/notifications';
 import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
 import { maintainDatabase } from '../worker/maintenance';
@@ -56,6 +57,14 @@ const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds
  * (holdings value and today's market holiday in one statement). */
 const STOCK_HOME = { prepares: 1, queries: 1, bindingCalls: 1, rowsRead: 12, rowsWritten: 0 } as const;
 const stockAllowance = (route: string, field: keyof typeof STOCK_HOME) => route.includes('bootstrap') ? STOCK_HOME[field] : 0;
+/** Every successful player write is followed by the achievement check: one
+ * batch that reads the facts and the known rows, and, only when something new
+ * was earned, one batch of two statements per unlock (the row and its notice).
+ * A first write in a fresh fixture earns up to three at once. */
+const ACHIEVEMENT_SYNC = { prepares: 2 + 2 * 3, queries: 2 + 2 * 3, bindingCalls: 2, rowsRead: 60, rowsWritten: 8 * 3 + 1 } as const;
+/** bootstrap also carries up to five of my own fresh achievement notices for the toast. */
+const achievementAllowance = (route: string, field: keyof typeof ACHIEVEMENT_SYNC) =>
+  /^POST\b/.test(route) ? ACHIEVEMENT_SYNC[field] : route.includes('bootstrap') && field === 'rowsRead' ? 5 : 0;
 const ORIGIN = 'http://localhost';
 const PASSWORD = 'test-only-password-42!';
 const TODAY = '2026-10-30';
@@ -466,7 +475,7 @@ describe('Worker and D1 integration', () => {
       expect((await db.prepare('SELECT reference FROM notifications').all()).results.map(row => row.reference)).toEqual(['recent-notice']);
       const observed = measuredDatabase(db, now.getTime());
       await maintainDatabase(observed.binding, now);
-      expect(observed.queries).toHaveLength(5);
+      expect(observed.queries).toHaveLength(6);
       expect(observed.queries.every(query => query.rowsWritten === 0)).toBe(true);
     });
   });
@@ -1032,7 +1041,7 @@ describe('Worker and D1 integration', () => {
         for (const row of measurements) {
           const prior = previous.before.find(candidate => candidate.label === row.label)!;
           for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsRead', 'rowsWritten'] as const) {
-            expect(row[field], `${row.label}: ${field}`).toBeLessThanOrEqual(prior[field] + stockAllowance(row.label, field));
+            expect(row[field], `${row.label}: ${field}`).toBeLessThanOrEqual(prior[field] + stockAllowance(row.label, field) + achievementAllowance(row.label, field));
           }
         }
       }
@@ -1827,15 +1836,24 @@ describe('Worker and D1 integration', () => {
       expect(await db.prepare('SELECT version FROM luck_photos WHERE round_date = ?').bind(TODAY).first('version')).toBe(1);
     });
 
-    it('uses automatic reveal time for image permissions and includes evidence in revealed history', async () => {
+    it('uses automatic reveal time for image permissions, keeps evidence out of history and deletes it after the day', async () => {
       const { cookie } = await login('min');
       await seedRound({ game: 'luck', date: '2026-10-29', answer: '50', revealAt: Date.parse('2026-10-29T09:00:00Z') });
       await db.prepare('INSERT INTO luck_photos (round_date, mime, data, version, updated_at) VALUES (?, ?, ?, 3, ?)')
         .bind('2026-10-29', 'image/webp', Array.from(Buffer.from(LUCK_PHOTO.split(',')[1]!, 'base64')), '2026-10-29T00:00:00Z').run();
+      await db.prepare('INSERT INTO luck_photos (round_date, mime, data, version, updated_at) VALUES (?, ?, ?, 1, ?)')
+        .bind(TODAY, 'image/webp', Array.from(Buffer.from(LUCK_PHOTO.split(',')[1]!, 'base64')), `${TODAY}T00:00:00Z`).run();
       const response = await request(luckPhotoPath('2026-10-29', 3), { cookie });
       expect(response.status).toBe(200);
       const history = await request('/api/games/luck/history', { cookie });
-      expect((await history.json() as HistoryResponse).history[0]).toMatchObject({ roundDate: '2026-10-29', photo: { url: luckPhotoPath('2026-10-29', 3), version: 3 } });
+      const round = (await history.json() as HistoryResponse).history[0]!;
+      expect(round).toMatchObject({ roundDate: '2026-10-29', answer: '50' });
+      expect('photo' in round).toBe(false);
+      // The nightly job keeps only today's evidence; the answer and results stay.
+      await maintainDatabase(db as unknown as D1Database, new Date(`${TODAY}T00:00:00Z`));
+      expect((await db.prepare('SELECT round_date FROM luck_photos').all()).results.map(row => row.round_date)).toEqual([TODAY]);
+      expect((await request(luckPhotoPath('2026-10-29', 3), { cookie })).status).toBe(404);
+      expect((await (await request('/api/games/luck/history', { cookie })).json() as HistoryResponse).history[0]).toMatchObject({ roundDate: '2026-10-29', answer: '50' });
     });
 
     it('rejects a photo replacement when the SQL write crosses KST midnight', async () => {
@@ -1850,8 +1868,10 @@ describe('Worker and D1 integration', () => {
   });
 
   describe('notifications', () => {
+    // Prize notices only: a player's own achievement notices (first purchase,
+    // first win…) ride along in the same table and are covered separately.
     const notificationRows = async (database: Database = db) => (await database.prepare(
-      'SELECT kind, audience, user_id, actor_id, payload_json, reference FROM notifications ORDER BY id')
+      "SELECT kind, audience, user_id, actor_id, payload_json, reference FROM notifications WHERE kind != 'achievement' ORDER BY id")
       .all<{ kind: string; audience: string; user_id: string | null; actor_id: string | null; payload_json: string; reference: string }>()).results;
     const addNotice = (id: string, actor: string, when: number) =>
       db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
@@ -1883,9 +1903,9 @@ describe('Worker and D1 integration', () => {
         // bootstrap only carries what the toast may show, so my own win is not
         // in it; the centre below still lists it.
         const own = (await (await request('/api/bootstrap', { cookie: min.cookie, instance })).json() as BootstrapResponse).notifications;
-        expect(own.recent).toEqual([]);
+        expect(own.recent.filter(notice => notice.payload.kind !== 'achievement')).toEqual([]);
         const centre = await (await request('/api/notifications', { cookie: min.cookie, instance })).json() as NotificationsResponse;
-        expect(centre.notifications).toHaveLength(roll === 0 ? 1 : 0);
+        expect(centre.notifications.filter(notice => notice.payload.kind !== 'achievement')).toHaveLength(roll === 0 ? 1 : 0);
       } finally { await instance.dispose(); }
     });
 
@@ -1901,11 +1921,11 @@ describe('Worker and D1 integration', () => {
         const body = { requestId: crypto.randomUUID(), payment: 'gold' };
         expect((await request('/api/shop/speetto', { method: 'POST', cookie, instance, body })).status).toBe(500);
         expect(await database.prepare('SELECT COUNT(*) AS n FROM shop_purchases').first('n')).toBe(0);
-        expect(await database.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM notifications WHERE kind != \'achievement\'').first('n')).toBe(0);
         expect((await ledgerRows(database)).map(row => row.amount)).toEqual([1000]);
         await database.prepare('DROP TRIGGER reject_win_notice').run();
         expect((await request('/api/shop/speetto', { method: 'POST', cookie, instance, body })).status).toBe(200);
-        expect(await database.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(1);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM notifications WHERE kind != \'achievement\'').first('n')).toBe(1);
       } finally { await instance.dispose(); }
     });
 
@@ -1930,7 +1950,7 @@ describe('Worker and D1 integration', () => {
       const payouts = (await ledgerRows()).filter(row => row.reference.startsWith('lotto:prize:'));
       expect(payouts.map(row => row.amount).sort((a, b) => a - b)).toEqual([500,1000,3000,5000]);
       await bootstrap(siwon.cookie);
-      expect(await db.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(3);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE kind != \'achievement\'').first('n')).toBe(3);
     });
 
     it('rolls back lotto settlement and payout if its notification fails', async () => {
@@ -1945,10 +1965,10 @@ describe('Worker and D1 integration', () => {
       expect((await request('/api/bootstrap', { cookie })).status).toBe(500);
       expect(await db.prepare('SELECT settled_at FROM lotto_tickets').first('settled_at')).toBeNull();
       expect((await ledgerRows()).filter(row => row.reference.startsWith('lotto:prize:'))).toEqual([]);
-      expect(await db.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(0);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE kind != \'achievement\'').first('n')).toBe(0);
       await db.prepare('DROP TRIGGER reject_lotto_notice').run();
       expect((await bootstrap(cookie)).user.gold).toBe(5000);
-      expect(await db.prepare('SELECT COUNT(*) AS n FROM notifications').first('n')).toBe(1);
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE kind != \'achievement\'').first('n')).toBe(1);
     });
 
     it('counts unread against the watermark and clears it when the centre is opened', async () => {
@@ -2056,6 +2076,129 @@ describe('Worker and D1 integration', () => {
       await measured('GET luck photo author', photo.url, { cookie: yeseo.cookie });
       console.log(`Launch B full authenticated API D1 rows_read (empty history): ${JSON.stringify(measurements)}`);
     } finally { await instance.dispose(); }
+  });
+
+  describe('achievements', () => {
+    type Achievements = import('../shared/achievements').AchievementsResponse;
+    const achievements = async (cookie: string, instance?: Miniflare) => {
+      const response = await request('/api/achievements', { cookie, instance }); expect(response.status).toBe(200);
+      return response.json() as Promise<Achievements>;
+    };
+    const status = (view: Achievements, key: string, periodKey = '') => {
+      const row = view.progress.find(item => item.key === key && item.periodKey === periodKey);
+      return row ? row.claimedAt ? 'claimed' : 'unlocked' : 'locked';
+    };
+
+    it('unlocks on the first read and after writes, notifies the player once, and pays each claim exactly once', async () => {
+      const instant = `${TODAY}T00:00:00Z`;
+      const instance = runtime(await workerAt(instant, instant, 0));
+      try {
+        const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
+        await fund(1000, 'min', database);
+        const min = await login('min', instance); const admin = await login('admin', instance);
+        const first = await achievements(min.cookie, instance);
+        expect(status(first, 'welcome')).toBe('unlocked');
+        expect(status(first, 'speetto_win')).toBe('locked');
+        expect(first.unclaimed).toBe(1); expect(first.gold).toBe(1000);
+        // Reading again changes nothing and notifies nothing twice.
+        expect((await achievements(min.cookie, instance)).unclaimed).toBe(1);
+        const notices = async () => (await database.prepare("SELECT reference, user_id, actor_id FROM notifications WHERE kind = 'achievement' ORDER BY id")
+          .all<{ reference: string; user_id: string; actor_id: string }>()).results;
+        expect(await notices()).toEqual([{ reference: 'notification:achievement:min:welcome:', user_id: 'min', actor_id: 'min' }]);
+        // A winning scratch ticket (roll 0) completes 손톱이 일했다 after the write.
+        const bought = await request('/api/shop/speetto', { method: 'POST', cookie: min.cookie, instance, body: { requestId: crypto.randomUUID(), payment: 'gold' } });
+        expect(bought.status).toBe(200);
+        const afterWin = await achievements(min.cookie, instance);
+        expect(status(afterWin, 'speetto_win')).toBe('unlocked');
+        expect(afterWin.unclaimed).toBe(2);
+        expect((await notices()).map(row => row.reference)).toEqual(['notification:achievement:min:welcome:', 'notification:achievement:min:speetto_win:']);
+        // My own achievement rides in bootstrap for the toast; a peer never sees it.
+        const own = await (await request('/api/bootstrap', { cookie: min.cookie, instance })).json() as BootstrapResponse;
+        expect(own.notifications.recent.filter(notice => notice.payload.kind === 'achievement')).toHaveLength(2);
+        expect(own.notifications.recent.every(notice => notice.payload.kind !== 'achievement' || isToastWorthy(notice, 'min', Date.parse(instant)))).toBe(true);
+        const siwon = await login('siwon', instance);
+        const peer = await (await request('/api/bootstrap', { cookie: siwon.cookie, instance })).json() as BootstrapResponse;
+        expect(peer.notifications.recent.filter(notice => notice.payload.kind === 'achievement')).toHaveLength(0);
+        // Claiming pays once, even for three concurrent requests.
+        const claims = await Promise.all(Array.from({ length: 3 }, () => request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'welcome', periodKey: '' } })));
+        expect(claims.map(response => response.status).sort()).toEqual([200, 409, 409]);
+        const paid = await claims.find(response => response.status === 200)!.json() as Achievements;
+        expect(status(paid, 'welcome')).toBe('claimed');
+        expect(paid.gold).toBe(1000 - SPEETTO_RULES.price + SPEETTO_RULES.prize + 50);
+        expect((await ledgerRows(database)).filter(row => row.reference.startsWith('achievement:'))).toEqual([{ user_id: 'min', currency: 'gold', amount: 50, reference: 'achievement:welcome::min', week_start: null }]);
+        expect((await (await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'welcome', periodKey: '' } })).json() as { error: { code: string } }).error.code).toBe('ALREADY_CLAIMED');
+        expect((await (await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'claw_clear', periodKey: '' } })).json() as { error: { code: string } }).error.code).toBe('NOT_UNLOCKED');
+        expect((await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'nope', periodKey: '' } })).status).toBe(400);
+        // Administrators have no achievements and cannot claim any.
+        expect((await achievements(admin.cookie, instance)).progress).toEqual([]);
+        expect((await request('/api/achievements/claim', { method: 'POST', cookie: admin.cookie, instance, body: { key: 'welcome', periodKey: '' } })).status).toBe(403);
+        await expectBalanced(database);
+      } finally { await instance.dispose(); }
+    });
+
+    it('keys daily achievements by the round date, weekly ones by the settled week, and counts collections', async () => {
+      const { cookie } = await login('min');
+      // An exact wake guess satisfies all three tiers for that date; a two-minute
+      // miss on another day satisfies the two wider ones only.
+      await seedRound({ game: 'wake', date: '2026-10-29', answer: '08:00:00', revealedAt: Date.parse('2026-10-29T00:00:00Z'), predictions: [['min', '08:00:00']] });
+      await seedRound({ game: 'wake', date: '2026-10-28', answer: '08:00:00', revealedAt: Date.parse('2026-10-28T00:00:00Z'), predictions: [['min', '08:02:00']] });
+      await seedRound({ game: 'luck', date: '2026-10-29', answer: '50', revealedAt: Date.parse('2026-10-29T00:00:00Z'), predictions: [['min', '53']] });
+      await db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
+        VALUES ('rank', 'user', 'min', 'min', '{"kind":"rank","period":"week","place":1,"gold":500}', ?, 'notification:rank:week:2026-10-19:min')`)
+        .bind(`${TODAY}T00:00:00.000Z`).run();
+      await bootstrap(cookie); // settles both rounds and runs the check for each predictor
+      const view = await achievements(cookie);
+      expect(status(view, 'wake_exact', '2026-10-29')).toBe('unlocked');
+      expect(status(view, 'wake_close', '2026-10-29')).toBe('unlocked');
+      expect(status(view, 'wake_near', '2026-10-28')).toBe('unlocked');
+      expect(status(view, 'wake_close', '2026-10-28')).toBe('unlocked');
+      expect(status(view, 'wake_exact', '2026-10-28')).toBe('locked');
+      expect(status(view, 'luck_near', '2026-10-29')).toBe('unlocked');
+      expect(status(view, 'luck_exact', '2026-10-29')).toBe('locked');
+      expect(status(view, 'wake_join')).toBe('unlocked');
+      expect(status(view, 'rank_week', '2026-10-19')).toBe('unlocked');
+      expect(status(view, 'rank_month')).toBe('locked');
+      const claimed = await (await request('/api/achievements/claim', { method: 'POST', cookie, body: { key: 'wake_near', periodKey: '2026-10-28' } })).json() as Achievements;
+      expect(claimed.claimedCounts.wake_near).toBe(1);
+      // A collected row from another day leaves the current list; unclaimed ones stay.
+      expect(claimed.progress.some(row => row.key === 'wake_near' && row.periodKey === '2026-10-28')).toBe(false);
+      expect(status(claimed, 'wake_close', '2026-10-28')).toBe('unlocked');
+      expect((await ledgerRows()).find(row => row.reference === 'achievement:wake_near:2026-10-28:min')).toMatchObject({ amount: 100 });
+    });
+
+    it('accepts the allow-listed client event, counts opening the centre, attendance and a kuji A prize', async () => {
+      const min = await login('min'); const siwon = await login('siwon');
+      await fund(2000);
+      expect((await request('/api/achievements/events', { method: 'POST', cookie: min.cookie, body: { event: 'password' } })).status).toBe(400);
+      const fontSize = await (await request('/api/achievements/events', { method: 'POST', cookie: min.cookie, body: { event: 'font_size' } })).json() as Achievements;
+      expect(status(fontSize, 'font_size')).toBe('unlocked');
+      expect(status(fontSize, 'notifications')).toBe('locked');
+      await request('/api/notifications', { cookie: min.cookie });
+      expect(status(await achievements(min.cookie), 'notifications')).toBe('unlocked');
+      expect((await request('/api/me/attendance', { method: 'POST', cookie: min.cookie, body: {} })).status).toBe(200);
+      expect(status(await achievements(min.cookie), 'attend_first')).toBe('unlocked');
+      // A board whose first cell is the A prize.
+      const grades = ['A', 'B', 'B', 'C', 'C', 'C', ...Array(6).fill('D'), ...Array(10).fill('E'), ...Array(15).fill('F'), ...Array(25).fill('G'), ...Array(38).fill('H')];
+      await db.prepare('INSERT INTO kuji_boards (id, grades, created_at) VALUES (1, ?, ?)').bind(JSON.stringify(grades), `${TODAY}T00:00:00.000Z`).run();
+      const bought = await request('/api/shop/kuji', { method: 'POST', cookie: min.cookie, body: { requestId: crypto.randomUUID(), boardId: 1, positions: [0, 1] } });
+      expect(bought.status).toBe(200);
+      const board = (await bought.json() as KujiResponse).kuji;
+      expect(board.recent).toHaveLength(1);
+      expect(board.recent[0]).toMatchObject({ userId: 'min', lastOne: false, cells: [{ position: 0, grade: 'A' }, { position: 1, grade: 'B' }] });
+      const afterKuji = await achievements(min.cookie);
+      expect(status(afterKuji, 'kuji_first')).toBe('unlocked');
+      expect(status(afterKuji, 'kuji_a')).toBe('unlocked');
+      expect(status(afterKuji, 'kuji_last')).toBe('locked');
+      // A round siwon drew that min guessed first try: both sides get theirs.
+      await db.prepare(`INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, round_date, published_at, ended_at, wrong_count, winner_id, end_reason, created_at)
+        VALUES ('ach-round', 1, 'siwon', '사과', '사과', '["사과"]', 'ended', ?, ?, ?, 0, 'min', 'correct', ?)`)
+        .bind(TODAY, `${TODAY}T00:00:00.000Z`, `${TODAY}T00:00:00.000Z`, `${TODAY}T00:00:00.000Z`).run();
+      expect(status(await achievements(min.cookie), 'catchmind_first', TODAY)).toBe('unlocked');
+      const drawer = await achievements(siwon.cookie);
+      expect(status(drawer, 'catchmind_drawn_first', TODAY)).toBe('unlocked');
+      expect(status(drawer, 'catchmind_draw')).toBe('unlocked');
+      expect(status(drawer, 'catchmind_first', TODAY)).toBe('locked');
+    });
   });
 
   describe('launch gift event', () => {
@@ -4768,8 +4911,9 @@ describe('Worker and D1 integration', () => {
             if (!isBootstrap) {
               const added = route === 'GET slot before' ? 0 : 1;
               expect(row.returnedSpins).toBe(Math.min(SLOT_RULES.historyLimit, fixture.recentSpins + added));
-              // Both the server list limit and cached balance must bound work.
-              expect(row.rowsRead).toBeLessThan(100);
+              // Both the server list limit and cached balance must bound work;
+              // the achievement check after a spin probes indexes only.
+              expect(row.rowsRead).toBeLessThan(100 + achievementAllowance(route, 'rowsRead'));
             }
           }
           await expectBalanced(database);
@@ -4813,7 +4957,7 @@ describe('Worker and D1 integration', () => {
           [historicalSpins, recentSpins, historicalGoldLedgerRows, outcome, route])).toEqual(prior.measurements.map(row =>
           [row.historicalSpins, row.recentSpins, row.historicalGoldLedgerRows, row.outcome, row.route]));
         for (const [index, row] of measurements.entries()) for (const field of ['prepares', 'queries', 'bindingCalls', 'rowsRead', 'rowsWritten'] as const) {
-          expect(row[field], `${row.route}: ${field}`).toBeLessThanOrEqual(prior.measurements[index]![field] + stockAllowance(row.route, field));
+          expect(row[field], `${row.route}: ${field}`).toBeLessThanOrEqual(prior.measurements[index]![field] + stockAllowance(row.route, field) + achievementAllowance(row.route, field));
         }
       }
       console.log(`Slot authenticated request metrics: ${JSON.stringify(measurements)}`);

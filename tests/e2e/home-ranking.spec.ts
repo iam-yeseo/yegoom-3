@@ -114,7 +114,7 @@ test('home rank sentences cover every tie case and share competition ranks with 
   }
 });
 
-test('home identity uses the current profile photo and truncates a long nickname before the gold balance', async ({ page }) => {
+test('home identity uses the current profile photo and truncates a long nickname beside the bell', async ({ page }) => {
   const snapshot = await signedInSnapshot(page);
   const photo = `data:image/webp;base64,${(await readFile('tests/fixtures/photo-square.webp')).toString('base64')}`;
   const uploaded = await page.request.put('/api/me/photo', { headers: { Origin: ORIGIN },
@@ -138,12 +138,11 @@ test('home identity uses the current profile photo and truncates a long nickname
         const layout = await page.locator('.room-top').evaluate(top => {
           const identity = top.querySelector('.room-identity')!.getBoundingClientRect();
           const name = top.querySelector('.room-name')!;
-          const gold = top.querySelector('.gold')!.getBoundingClientRect();
           const bell = top.querySelector('.room-bell')!.getBoundingClientRect();
           const avatar = top.querySelector('.avatar')!.getBoundingClientRect();
           const style = getComputedStyle(name);
-          // The balance now sits under the nickname; the bell keeps the corner.
-          return { separated: identity.right <= bell.left, goldInside: gold.right <= identity.right + 1,
+          // The hero shows only the name; the bell keeps the corner and no gold chip is drawn.
+          return { separated: identity.right <= bell.left, goldInside: top.querySelector('.gold') === null,
             avatarWidth: avatar.width,
             overflow: style.overflow, ellipsis: style.textOverflow, noWrap: style.whiteSpace,
             documentOverflow: document.documentElement.scrollWidth > innerWidth };

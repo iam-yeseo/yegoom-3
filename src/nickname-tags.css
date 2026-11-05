@@ -30,7 +30,7 @@
 /* 내 정보 — collected tags; pressing one wears it (Claude Design "Ranking and Me" 4c). */
 .tag-collection-card { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .tag-collection-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px; }
-.tag-collection-head h2 { font-size: 17px; margin: 0; }
+.tag-collection-head h2 { font-size: var(--fs-card-title); margin: 0; }
 .tag-collection-head small { font-size: 12px; font-weight: 600; color: #ada4b3; white-space: nowrap; }
 .tag-collection { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .tag-collection button {
@@ -39,7 +39,7 @@
   transition: box-shadow .2s, background-color .2s;
 }
 .tag-collection button .nick-tag { max-width: 14em; }
-.tag-collection button small { font-size: 10.5px; font-weight: 800; color: #ada4b3; }
+.tag-collection button small { font-size: 11px; font-weight: 800; color: #ada4b3; }
 .tag-collection button small.grade-s { color: #6a4fb8; }
 .tag-collection button small.grade-a { color: #94700a; }
 .tag-collection button small.grade-b { color: #7c7383; }
@@ -57,9 +57,9 @@
 .tag-shop-sample { font-size: 19px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .tag-shop-hero p { margin: 0; font-size: 13px; color: #7c7383; line-height: 1.55; word-break: keep-all; }
 .tag-shop-odds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; width: 100%; }
-.tag-shop-odds div { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; border-radius: 16px; background: #fbf8f4; font-size: 11.5px; font-weight: 700; color: #7c7383; }
+.tag-shop-odds div { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; border-radius: 16px; background: #fbf8f4; font-size: 12px; font-weight: 700; color: #7c7383; }
 .tag-shop-odds strong { font-size: 15px; color: #7c7383; }
-.tag-shop-odds small { font-size: 11.5px; font-weight: 800; color: #ada4b3; }
+.tag-shop-odds small { font-size: 12px; font-weight: 800; color: #ada4b3; }
 .tag-shop-odds .grade-s { background: #f3eefd; } .tag-shop-odds .grade-s strong { color: #6a4fb8; }
 .tag-shop-odds .grade-a { background: #fff4cc; } .tag-shop-odds .grade-a strong { color: #94700a; }
 .tag-shop-odds .grade-b { background: #f3f1f6; } .tag-shop-odds .grade-b strong { color: #5c5162; }

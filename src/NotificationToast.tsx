@@ -9,6 +9,8 @@ interface Props {
   userId: string | null;
   preview: boolean;
   serverTime: string;
+  /** Tapping a notice that is about a screen opens it. */
+  go: (path: string) => void;
 }
 const storageKey = (userId: string) => `yegoom:announcements:seen:${userId}`;
 function readSeen(userId: string): Set<number> {
@@ -21,11 +23,11 @@ function readSeen(userId: string): Set<number> {
 /** Fresh notifications from other players pop up for four seconds; the
  * notification centre keeps every one of them. The keyed queue is discarded
  * immediately on logout, account switch, or preview. */
-export function NotificationToast({ notifications, userId, preview, serverTime }: Props) {
+export function NotificationToast({ notifications, userId, preview, serverTime, go }: Props) {
   if (preview || !userId) return null;
-  return <ToastQueue key={userId} notifications={notifications} userId={userId} serverTime={serverTime} />;
+  return <ToastQueue key={userId} notifications={notifications} userId={userId} serverTime={serverTime} go={go} />;
 }
-function ToastQueue({ notifications, userId, serverTime }: Omit<Props, 'preview'> & { userId: string }) {
+function ToastQueue({ notifications, userId, serverTime, go }: Omit<Props, 'preview'> & { userId: string }) {
   const nameOf = useDisplayNameByIdLookup();
   const [seen] = useState(() => readSeen(userId));
   const [queue, setQueue] = useState<AppNotification[]>([]);
@@ -53,22 +55,42 @@ function ToastQueue({ notifications, userId, serverTime }: Omit<Props, 'preview'
     try { localStorage.setItem(storageKey(userId), JSON.stringify([...seen])); } catch { /* Seen ids still persist for this session if storage is unavailable. */ }
     const timer = window.setTimeout(() => {
       const serverNow = clock.current.server + performance.now() - clock.current.received;
-      setQueue(previous => previous.filter(item => item.id !== current.id && isToastWorthy(item, userId, serverNow)));
+      const achievement = current.payload.kind === 'achievement';
+      setQueue(previous => previous.filter(item => item.id !== current.id && !(achievement && item.payload.kind === 'achievement')
+        && isToastWorthy(item, userId, serverNow)));
     }, ANNOUNCEMENT_RULES.displayMs);
     return () => window.clearTimeout(timer);
   }, [current?.id, seen, userId]);
 
+  // Several achievements earned at once (a first visit can complete a handful)
+  // share one toast, so the screen is not covered for a minute of banners.
+  const grouped = current?.payload.kind === 'achievement' ? queue.filter(item => item.payload.kind === 'achievement') : [];
+  const groupIds = new Set(grouped.map(item => item.id));
+  useEffect(() => {
+    if (grouped.length < 2) return;
+    for (const item of grouped) seen.add(item.id);
+    try { localStorage.setItem(storageKey(userId), JSON.stringify([...seen])); } catch { /* As above. */ }
+  }, [current?.id, grouped.length, seen, userId]);
   function dismiss() {
     const serverNow = clock.current.server + performance.now() - clock.current.received;
-    setQueue(previous => previous.filter(item => item.id !== current?.id && isToastWorthy(item, userId, serverNow)));
+    setQueue(previous => previous.filter(item => item.id !== current?.id && !groupIds.has(item.id) && isToastWorthy(item, userId, serverNow)));
   }
-  const text = current ? notificationText(current, actorId => honorific(nameOf(actorId, ''))) : null;
+  const single = current ? notificationText(current, actorId => honorific(nameOf(actorId, ''))) : null;
+  const text = single && grouped.length > 1
+    ? { ...single, title: `도전과제 ${grouped.length}개 달성!`, body: '눌러서 보상 받기' } : single;
+  // The body opens the screen the notice is about (or just dismisses it when
+  // there is none); the × always only dismisses.
   return <div className="announcement-region" role={current ? 'status' : undefined} aria-live="polite" aria-atomic="true">
-    {current && text && <button className="announcement-banner" key={current.id} type="button" onClick={dismiss}
-      aria-label={`${text.title}. ${text.body}. 알림 닫기`}>
-      <span className="announcement-celebration" aria-hidden="true">{text.emoji}</span>
-      <span className="announcement-message">{text.title}<strong>{text.body}</strong></span>
-      <svg className="announcement-close" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
-    </button>}
+    {current && text && <div className="announcement-banner" key={current.id}>
+      <button className="announcement-open" type="button"
+        onClick={() => { dismiss(); if (text.link) go(text.link.replace(/^#/, '')); }}
+        aria-label={`${text.title}. ${text.body}. ${text.link ? '열기' : '알림 닫기'}`}>
+        <span className="announcement-celebration" aria-hidden="true">{text.emoji}</span>
+        <span className="announcement-message">{text.title}<strong>{text.body}</strong></span>
+      </button>
+      <button className="announcement-close" type="button" aria-label="알림 닫기" onClick={dismiss}>
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
+      </button>
+    </div>}
   </div>;
 }

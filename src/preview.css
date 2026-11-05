@@ -1040,7 +1040,7 @@
 }
 .kuji-modal::backdrop { background: rgba(58, 51, 64, .28); }
 .kuji-modal .kuji-sheet { width: 100%; }
-.kuji-modal h2 { font-size: 20px; margin: 0; }
+.kuji-modal h2 { font-size: var(--fs-sheet-title); margin: 0; }
 .kuji-modal .primary-button { width: 100%; }
 .kuji-sheet-note { margin: 0; text-align: center; color: #7c7383; font-size: 14px; line-height: 1.6; }
 .kuji-reward-summary { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
@@ -1075,7 +1075,7 @@
 .pg-catchmind .pg-next-player > span:not(.avatar) { white-space: normal; }
 .cm-round-label { padding: 0 4px; font-size: 12px; color: #7c7383; }
 .cm-history-head, .cm-gallery-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.cm-history-head h2, .cm-gallery-modal-head h2 { font-size: 18px; }
+.cm-history-head h2, .cm-gallery-modal-head h2 { font-size: var(--fs-card-title); }
 .cm-history-head a { text-decoration: none; }
 .cm-previous-round { padding: 18px; }
 .cm-previous-open { display: flex; width: 100%; gap: 16px; align-items: center; margin: 12px 0; padding: 0; background: transparent; text-align: left; }
@@ -1105,7 +1105,7 @@
 .cm-gallery-navigation button[aria-disabled="true"] { opacity: .45; }
 .cm-gallery-navigation > span { flex-shrink: 0; white-space: nowrap; font-size: 12px; color: #7c7383; }
 .cm-waiting { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 28px 22px; text-align: center; }
-.cm-waiting h2 { font-size: 20px; }
+.cm-waiting h2 { font-size: var(--fs-sheet-title); }
 .cm-waiting p, .cm-draft-note { font-size: 13px; line-height: 1.6; color: #7c7383; }
 .cm-draft-note { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 10px; }
 .cm-draft-note .text-button { padding: 6px 8px; }
@@ -1114,6 +1114,20 @@
 .cm-end-button { align-self: center; }
 .cm-confirmation { width: min(400px, calc(100% - 32px)); padding: 26px; border: 0; border-radius: 24px; color: #3a3340; background: #fff9ee; box-shadow: 0 6px 24px rgba(120,90,60,.06); }
 .cm-confirmation::backdrop { background: rgba(58,51,64,.28); }
-.cm-confirmation h2 { font-size: 20px; margin-bottom: 12px; }
+.cm-confirmation h2 { font-size: var(--fs-sheet-title); margin-bottom: 12px; }
 .cm-confirmation p { font-size: 14px; line-height: 1.7; margin-bottom: 20px; }
 .cm-confirmation .text-button { display: block; margin: 10px auto 0; }
+/* Who drew what on this board. */
+.kuji-recent { padding: 14px 16px 8px; }
+.kuji-recent-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.kuji-recent-head h3 { font-size: 15px; font-weight: 800; }
+.kuji-recent-head span { font-size: 12px; color: #ada4b3; }
+.kuji-recent-row { display: grid; grid-template-columns: 28px auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 44px; padding: 6px 0; }
+.kuji-recent-row + .kuji-recent-row { border-top: 1px solid #f3eee8; }
+.kuji-recent-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 96px; }
+.kuji-recent-grades { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.kuji-recent-grades b { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+.kuji-recent-grades .kuji-recent-last { background: #ffd866; color: #5c4300; }
+.kuji-recent-row small { font-size: 12px; color: #ada4b3; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.kuji-recent-more { display: block; width: 100%; padding: 8px; }
+.kuji-recent-empty { margin: 4px 0 8px; font-size: 13px; line-height: 1.6; color: #7c7383; text-align: center; }

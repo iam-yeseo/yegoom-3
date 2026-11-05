@@ -380,7 +380,7 @@ function AttendanceCard({ data, go, onClaimed }: {
       const result = await claim();
       if (!mounted.current) return;
       if (result.awarded) {
-        await new Promise<void>(resolve => coinFly(button, document.querySelector(".room-top .gold"), resolve));
+        await new Promise<void>(resolve => coinFly(button, document.querySelector(".room-identity .avatar"), resolve));
         if (!mounted.current) return;
         toast(`+${attendanceRewardLabel(result.attendance.reward, result.attendance.today)} 받았어요`);
         await onClaimed();
@@ -443,8 +443,6 @@ function Room({ data, gold, evening, jumpRequest, onJumpDone, go }: {
   jumpRequest: number;
   onJumpDone: () => void;
 }) {
-  const displayNameOf = useDisplayNameLookup();
-  const shown = useCountUp(gold);
   const chosen = useCharacter(data.username);
   const [oneShot, setOneShot] = useState<CharState | null>(null);
   const playJump = useCallback(() => {
@@ -474,7 +472,6 @@ function Room({ data, gold, evening, jumpRequest, onJumpDone, go }: {
           <Avatar username={data.username} size={32} />
           <span className="room-identity-text">
             <span className="room-name"><PersonName username={data.username} fallback={data.displayName} /></span>
-            <span className="gold"><Coin size={14} />{shown.toLocaleString("ko-KR")}<span className="sr-only"> 골드</span></span>
           </span>
         </span>
         <button type="button" className="room-bell" onClick={() => go("/notifications")}

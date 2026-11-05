@@ -85,7 +85,7 @@ async function capture(page: Page, mode: 'authenticated' | 'preview', state: str
   await page.evaluate(() => document.fonts.ready);
   await expect(page.locator('.fx-toast')).toHaveCount(0);
   if (!await page.getByRole('dialog').count()) {
-    for (let i = 0; i < 5 && await page.locator('.announcement-banner').count(); i++) await page.locator('.announcement-banner').click();
+    for (let i = 0; i < 5 && await page.locator('.announcement-banner').count(); i++) await page.locator('.announcement-close').click();
   }
   await page.evaluate(() => Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity)
     .map(animation => animation.finished.catch(() => {}))));

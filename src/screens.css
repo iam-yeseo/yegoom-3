@@ -27,7 +27,7 @@
 .color-picker-dialog::backdrop { background: rgba(58,51,64,.28); }
 .color-picker-sheet { display: flex; flex-direction: column; gap: 18px; padding: 20px 24px calc(24px + env(safe-area-inset-bottom)); background: var(--cream); }
 .color-picker-heading { display: flex; align-items: center; justify-content: space-between; }
-.color-picker-heading h2 { font-size: 20px; font-weight: 800; }
+.color-picker-heading h2 { font-size: var(--fs-sheet-title); font-weight: 800; }
 .color-picker-heading button { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; background: #f6f1eb; color: var(--muted); }
 .color-picker-sv {
   position: relative; height: 176px; flex-shrink: 0; border-radius: 18px; touch-action: none; cursor: crosshair;
@@ -140,7 +140,7 @@
   gap: 10px;
 }
 .card-head h2 {
-  font-size: 16px;
+  font-size: var(--fs-card-title);
   font-weight: 800;
 }
 .card-head > span {
@@ -1056,7 +1056,7 @@
   border-radius: 999px;
   background: #ffe6df;
   color: #c9533e;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 800;
   font-style: normal;
   display: inline-flex;
@@ -1230,7 +1230,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 800;
 }
 .ranking .stack {
@@ -1451,7 +1451,7 @@
   padding: 0 4px;
 }
 .calendar-head h2 {
-  font-size: 16px;
+  font-size: var(--fs-card-title);
   font-weight: 800;
 }
 .calendar-head button {
@@ -1580,7 +1580,7 @@
   gap: 12px;
 }
 .character-picker h2 {
-  font-size: 16px;
+  font-size: var(--fs-card-title);
   font-weight: 800;
   padding: 0 2px;
 }
@@ -1615,7 +1615,7 @@
   padding: 0 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.9);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 700;
   color: #7c7383;
   display: flex;
@@ -1946,7 +1946,7 @@ em.delisted {
 .detail-change em {
   height: 22px;
   padding: 0 8px;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .detail-icon {
   width: 72px;
@@ -2232,7 +2232,7 @@ em.delisted {
   border-radius: 999px;
   background: #f3eee8;
   color: #ada4b3;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 800;
   display: flex;
   align-items: center;
@@ -2286,7 +2286,7 @@ em.delisted {
   padding: 0 4px;
 }
 .scratch-card .card-head h2 {
-  font-size: 18px;
+  font-size: var(--fs-card-title);
   color: #e0644e;
 }
 .scratch-card .card-head span {
@@ -2835,7 +2835,7 @@ em.ring::after {
 .lotto-draw .draw > div { gap: 6px; width: 100%; justify-content: center; }
 .lotto-draw .draw i { width: min(52px, 17%); height: auto; aspect-ratio: 1; flex-shrink: 0; }
 .shop-ticket-history { display: flex; flex-direction: column; gap: 14px; padding: 16px 14px; }
-.shop-ticket-history > h2 { padding: 0; margin: 0; font-size: 16px; }
+.shop-ticket-history > h2 { padding: 0; margin: 0; font-size: var(--fs-card-title); }
 .shop-history-group + .shop-history-group { border-top: 1px solid #eee8e2; padding-top: 14px; }
 .shop-history-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 5px 10px; margin-bottom: 5px; }
 .shop-history-heading h3 { margin: 0; font-size: 12px; font-weight: 800; white-space: nowrap; }
@@ -2881,5 +2881,35 @@ em.ring::after {
 
 /* 내 정보 › 글자 크기 */
 .font-size-setting { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
-.font-size-setting h2 { font-size: 17px; }
+.font-size-setting h2 { font-size: var(--fs-card-title); }
 .font-size-setting p { margin: 0; font-size: 12px; color: #7c7383; line-height: 1.6; word-break: keep-all; }
+
+/* 게임 탭 › 도전과제 */
+.games-toggle { padding: 10px 20px 4px; }
+.achievement-summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 20px; }
+.achievement-summary-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.achievement-summary-label { font-size: 13px; font-weight: 600; color: var(--muted); }
+.achievement-count { font-size: 28px; font-weight: 800; letter-spacing: -0.8px; line-height: 1; }
+.achievement-count small { margin-left: 4px; font-size: 14px; font-weight: 700; color: var(--faint); letter-spacing: 0; }
+.achievement-summary .bar { display: block; height: 8px; border-radius: 4px; background: #f3eee8; overflow: hidden; margin-top: 4px; }
+.achievement-summary .bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #ffd866, #f47c66); transition: width var(--dur-spring) var(--ease-out); }
+.achievement-summary-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: none; }
+.achievement-gold { display: inline-flex; align-items: center; gap: 5px; font-size: 15px; font-weight: 800; }
+.achievement-claim { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 36px; padding: 0 14px; border-radius: 999px; background: #f47c66; color: #fff; font-size: 13px; font-weight: 800; white-space: nowrap; box-shadow: 0 6px 14px rgba(244, 124, 102, 0.3); }
+.achievement-claim:disabled { background: #f1ece6; color: var(--faint); box-shadow: none; }
+.achievement-claim.all { min-height: 40px; padding: 0 16px; }
+.achievement-group .section-title { padding-top: 6px; }
+.achievement-list { padding: 4px 16px; }
+.achievement-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 60px; padding: 10px 0; }
+.achievement-row + .achievement-row { border-top: 1px solid #f3eee8; }
+.achievement-mark { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #f3eee8; color: var(--faint); font-size: 18px; }
+.achievement-row.unlocked .achievement-mark { background: #fff4cc; }
+.achievement-row.claimed .achievement-mark { background: #e3f6ee; color: #2e8c6e; }
+.achievement-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.achievement-text strong { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 15px; font-weight: 800; line-height: 1.4; word-break: keep-all; }
+.achievement-row.locked .achievement-text strong { color: var(--muted); }
+.achievement-text small { font-size: 12px; line-height: 1.5; color: var(--muted); word-break: keep-all; }
+.achievement-repeat { font-style: normal; font-size: 11px; font-weight: 800; padding: 1px 7px; border-radius: 999px; background: #eee8fc; color: #7556c4; }
+.achievement-reward { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 800; color: var(--muted); white-space: nowrap; }
+.achievement-reward.claimed { color: #2e8c6e; }
+.achievement-row.locked .achievement-reward .coin { filter: grayscale(1); opacity: .6; }

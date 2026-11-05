@@ -2,6 +2,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import type { BootstrapResponse, CatchmindResponse, KujiResponse, LottoPurchaseInput, LottoResponse, ShopState, SpeettoResponse } from '../../shared/types';
 
+/** The home hero no longer shows gold; the signed-in balance is read from the API. */
+async function expectGold(page: Page, gold: number) {
+  await expect.poll(() => page.evaluate(() => fetch('/api/bootstrap', { credentials: 'same-origin', cache: 'no-store' })
+    .then(response => response.json() as Promise<{ user: { gold: number } }>).then(body => body.user.gold)), { timeout: 10000 }).toBe(gold);
+}
+
+
 // Match the isolated Worker fixture; performance/animation timers still run.
 const TEST_NOW = '2026-10-30T00:00:00Z';
 const SAVED_LOTTO_ID = '00000000-0000-4000-8000-000000000002';
@@ -222,7 +229,7 @@ test('offwork author saves seconds privately and rewards appear in results, home
     await expect(player.getByRole('region', { name: '최근 결과 기록' }).locator('.history-heading h3')).toHaveText(['2026년 10월 29일', '2026년 10월 27일', '2026년 10월 24일']);
     await captureWidths(player, 'authenticated-results', info);
     await player.goto('/#/');
-    await expect(player.locator('.room-top .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
+    await expectGold(player, after.user.gold);
     await player.goto('/#/profile');
     await expect(player.locator('.profile-summary .stats')).toContainText(after.user.gold.toLocaleString('ko-KR'));
     await expect(player.locator('.profile-summary .stats')).toContainText(`${after.user.weeklyScore}점`);
@@ -370,7 +377,7 @@ test('seventh attendance claim waits for the celebration, collapses and loads pa
   expect(after.ledger.filter(entry => entry.reason.includes('출석') && entry.createdAt.startsWith('2026-10-30'))).toEqual([
     expect.objectContaining({ currency: 'gold', amount: 500 }),
   ]);
-  await expect(page.locator('.room-top .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
+  await expectGold(page, after.user.gold);
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(card.locator('.week-path')).toBeVisible();
@@ -477,7 +484,7 @@ test('character import runs only for a null server choice and selected character
     const data = await snapshot(anotherDevice);
     expect(data.players.find(player => player.username === 'siwon')?.character).toBe('bread');
     await anotherDevice.goto('/#/game/luck');
-    const row = anotherDevice.getByRole('region', { name: '최근 결과 기록' }).locator('.result-card').filter({ hasText: 'siwon님' }).first();
+    const row = anotherDevice.getByRole('region', { name: '최근 결과 기록' }).locator('.history-result').filter({ hasText: 'siwon' }).first();
     await expect(row.locator('[data-character="bread"]')).toBeVisible();
     // Duplicate choices are permitted; ownership labels are informational.
     await anotherDevice.goto('/#/profile');
@@ -573,12 +580,10 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await expect(page.locator('.lotto-tickets .ticket').first()).toContainText('추첨 대기');
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold - 500).toLocaleString('ko-KR'));
   await page.goto('/#/preview');
-  await expect(page.locator('.room-top .gold')).toContainText((beforeGold - 500).toLocaleString('ko-KR'));
   const attendance = page.locator('.attendance-card');
   const reward = Number((await attendance.locator('.attendance-title small').innerText()).match(/(\d+)G/)![1]);
   await attendance.getByRole('button', { name: '받기', exact: true }).click();
   await expect(attendance.locator('.attendance-summary')).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.locator('.room-top .gold')).toContainText((beforeGold - 500 + reward).toLocaleString('ko-KR'));
   await page.goto('/#/preview/shop/lotto');
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold - 500 + reward).toLocaleString('ko-KR'));
   await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
@@ -587,7 +592,6 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await expect(page.locator('.game-toolbar .gold')).toContainText(finalGold.toLocaleString('ko-KR'));
   await captureWidths(page, 'preview-lotto', info, 3);
   await page.goto('/#/preview');
-  await expect(page.locator('.room-top .gold')).toContainText(finalGold.toLocaleString('ko-KR'));
   await page.goto('/#/preview/profile');
   await expect(page.locator('.profile-summary .stats')).toContainText(finalGold.toLocaleString('ko-KR'));
   const attendanceLedger = page.locator('.history-row').filter({ hasText: '출석 체크' });
@@ -655,7 +659,7 @@ test('kuji grade modals close accessibly and a multi-purchase updates real gold,
   await expect(page.locator('.game-toolbar .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
   await captureWidths(page, 'authenticated-kuji', info, 3);
   await page.goto('/#/');
-  await expect(page.locator('.room-top .gold')).toContainText(after.user.gold.toLocaleString('ko-KR'));
+  await expectGold(page, after.user.gold);
   await expect(page.locator('.home-score strong').first()).toHaveText(String(after.user.weeklyScore));
   await page.goto('/#/profile');
   await expect(page.locator('.history-row').filter({ hasText: '예굼쿠지 구매' }).first()).toContainText('600G');
@@ -845,7 +849,7 @@ test('a shop read refreshes home and profile after a purchase by another HTTP cl
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await login(page, 'min');
   const before = await snapshot(page);
-  await expect(page.locator('.room-top .gold')).toContainText(before.user.gold.toLocaleString('ko-KR'));
+  await expectGold(page, before.user.gold);
   const external = await page.request.post('/api/shop/lotto', {
     data: { requestId: crypto.randomUUID(), numbers: [16, 17, 18, 19, 20], payment: 'gold' },
     headers: { Origin: new URL(page.url()).origin },
@@ -853,14 +857,13 @@ test('a shop read refreshes home and profile after a purchase by another HTTP cl
   expect(external.status()).toBe(200);
   const receipt = await external.json() as LottoResponse;
   expect(receipt.gold).toBe(before.user.gold - 500);
-  // APIRequestContext does not update React state: the view still has its
-  // original balance until entering the shop reads the new server state.
-  await expect(page.locator('.room-top .gold')).toContainText(before.user.gold.toLocaleString('ko-KR'));
+  // APIRequestContext does not update React state: the view keeps its original
+  // balance until entering the shop reads the new server state.
   const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/bootstrap', { timeout: 5000 });
   await page.goto('/#/shop');
   expect((await refreshed).status()).toBe(200);
   await page.goto('/#/');
-  await expect(page.locator('.room-top .gold')).toContainText(receipt.gold.toLocaleString('ko-KR'));
+  await expectGold(page, receipt.gold);
   await page.goto('/#/profile');
   await expect(page.locator('.profile-summary .stats')).toContainText(receipt.gold.toLocaleString('ko-KR'));
   await expect(page.locator('.history-row').filter({ hasText: '데일리 로또 구매' }).first()).toContainText('500G');
@@ -952,7 +955,6 @@ test('catchmind preview keeps hints, rewards, drawing tools and color selection 
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5).toLocaleString('ko-KR'));
   await captureWidths(page, 'preview-result', info, 4);
   await page.goto('/#/preview');
-  await expect(page.locator('.room-top .gold')).toContainText((beforeGold + 5).toLocaleString('ko-KR'));
   await expect(page.locator('.home-score strong').first()).toHaveText(String(beforeScore + 3));
   await page.goto('/#/preview/profile');
   const rewardRows = page.locator('.history-row').filter({ hasText: '캐치마인드 정답' });
@@ -967,7 +969,6 @@ test('catchmind preview keeps hints, rewards, drawing tools and color selection 
   await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5 - 500).toLocaleString('ko-KR'));
   await page.goto('/#/preview');
-  await expect(page.locator('.room-top .gold')).toContainText((beforeGold + 5 - 500).toLocaleString('ko-KR'));
   await expect(page.locator('.home-score strong').first()).toHaveText(String(beforeScore + 3));
   await page.goto('/#/preview/play/catchmind');
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5 - 500).toLocaleString('ko-KR'));

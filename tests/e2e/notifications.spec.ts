@@ -32,27 +32,28 @@ test('the preview home bell carries the badge and opens the centre without APIs'
   const apiCalls: string[] = [];
   page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) apiCalls.push(request.url()); });
   await page.goto('/#/preview');
-  // The gold moved under the nickname; the bell owns the top right corner.
-  await expect(page.locator('.room-identity .gold')).toContainText('12,480');
+  // The hero shows the nickname only; the bell owns the top right corner.
+  await expect(page.locator('.room-identity .gold')).toHaveCount(0);
   const bell = page.locator('.room-bell');
   await expect(bell).toHaveAttribute('aria-label', /안 읽음/);
-  await expect(page.locator('.room-bell-badge')).toHaveText('2');
+  await expect(page.locator('.room-bell-badge')).toHaveText('3');
   await bell.click();
   await expect(page).toHaveURL(/#\/preview\/notifications$/);
   await expect(page.locator('h1').first()).toHaveText('알림');
   const rows = page.locator('.notification-row');
-  await expect(rows).toHaveCount(6);
-  await expect(rows.first()).toContainText('이번 주 토요일은 쉬어요');
-  await expect(page.locator('.notification-row.unread')).toHaveCount(2);
+  await expect(rows).toHaveCount(7);
+  await expect(rows.first()).toContainText('도전과제 달성! 예굼방 아케이드에 어서오세요');
+  await expect(rows.nth(1)).toContainText('이번 주 토요일은 쉬어요');
+  await expect(page.locator('.notification-row.unread')).toHaveCount(3);
   // Every kind words itself from its payload, including the player's name.
-  await expect(rows.nth(1)).toContainText('주간 랭킹 2위 보상이 들어왔어요');
-  await expect(rows.nth(2)).toContainText('siwon님이 데일리 로또 3등에 당첨됐어요');
-  await expect(rows.nth(3)).toContainText('기상시간 맞히기 정답이 공개됐어요');
-  await expect(rows.nth(4)).toContainText('익명의 큰손이 YK하이커스를 움직였어요');
+  await expect(rows.nth(2)).toContainText('주간 랭킹 2위 보상이 들어왔어요');
+  await expect(rows.nth(3)).toContainText('siwon님이 데일리 로또 3등에 당첨됐어요');
+  await expect(rows.nth(4)).toContainText('기상시간 맞히기 정답이 공개됐어요');
+  await expect(rows.nth(5)).toContainText('익명의 큰손이 YK하이커스를 움직였어요');
   await capture(page, 'preview-centre', info);
   await page.setViewportSize({ width: 390, height: 900 });
   // A notice with a link opens the screen it is about.
-  await rows.nth(1).click();
+  await rows.nth(2).click();
   await expect(page).toHaveURL(/#\/preview\/ranking$/);
   expect(apiCalls).toEqual([]);
 });

@@ -275,6 +275,28 @@ function ResultCards({ id, results, username, demo }: { id: GameId; results: Gam
     </article>;
   }) : <div className="card empty-state">이번 라운드에는 제출한 예측이 없어요.</div>;
 }
+/** A finished round in two lines per player: rank, who, their answer, how far
+ * off and the points. The date and the answer share the heading line. */
+function HistoryRound({ id, round, username, demo }: { id: GameId; round: GameHistoryRound; username: string; demo?: boolean }) {
+  return <section className="history-round" key={round.roundDate}>
+    <div className="history-heading"><h3>{formatDate(round.roundDate)}</h3><span>정답 <strong>{predictionLabel(id, round.answer)}</strong></span></div>
+    {round.results.length ? <div className="card history-results">
+      {round.results.map(result => {
+        const rank = rankOf(round.results, result);
+        return <div className={`history-result${result.username === username ? " me" : ""}`} key={result.playerId}>
+          <span className={`rank-badge ${result.isFirst ? "first" : ""}`}>{rank}</span>
+          <Avatar username={result.username} userId={result.playerId} photoVersion={result.photoVersion} artKey={demo ? undefined : result.character} size={32} />
+          <span className="history-result-name">
+            <strong><PersonName username={result.username} fallback={result.displayName} honorific={false} />{result.username === username ? " (나)" : ""}</strong>
+            <small>{differenceText(id, result.difference)}</small>
+          </span>
+          <span className="history-result-value">{predictionLabel(id, result.value)}</span>
+          <b className="history-result-score">{result.score > 0 ? "+" : ""}{result.score}점</b>
+        </div>;
+      })}
+    </div> : <p className="card empty-state compact">이 라운드에는 제출한 예측이 없어요.</p>}
+  </section>;
+}
 function GameHistory({ game, username, demo }: { game: GameState; username: string; demo?: boolean }) {
   const [history, setHistory] = useState<GameHistoryRound[]>(() => demo ? previewHistory(game.id) : []);
   const [error, setError] = useState("");
@@ -296,11 +318,8 @@ function GameHistory({ game, username, demo }: { game: GameState; username: stri
     <h2>최근 결과 기록</h2>
     {loading ? <p className="subtle-note" role="status">기록을 불러오는 중…</p> : error ?
       <div className="card empty-state"><p role="alert">{error}</p><button className="text-button" onClick={() => setRetry(n => n + 1)}>다시 시도</button></div> :
-      history.length ? history.map(round => <section className="history-round" key={round.roundDate}>
-        <div className="history-heading"><h3>{formatDate(round.roundDate)}</h3><span>정답 <strong>{predictionLabel(game.id, round.answer)}</strong></span></div>
-        {game.id === "luck" && round.photo && <LuckPhotoCard photo={round.photo} label={`${formatDate(round.roundDate)} 증거 사진`} compact />}
-        <ResultCards id={game.id} results={round.results} username={username} demo={demo} />
-      </section>) : <p className="card empty-state">아직 공개된 지난 기록이 없어요.</p>}
+      history.length ? history.map(round => <HistoryRound key={round.roundDate} id={game.id} round={round} username={username} demo={demo} />)
+        : <p className="card empty-state">아직 공개된 지난 기록이 없어요.</p>}
   </section>;
 }
 function GameHelp({ id, authorName, rules }: { id: GameId; authorName: string; rules: PredictionRules }) {

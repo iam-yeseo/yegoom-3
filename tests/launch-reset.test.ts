@@ -23,8 +23,8 @@ const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_ph
   'tag_ticket_ledger',
   // Ranking payouts (0019) start after launch too; their settlement markers stay.
   'ranking_settlements',
-  // The notification centre (0020) is newer than the launch-era reset as well.
-  'notifications',
+  // The notification centre (0020) and achievements (0021) are newer than the launch-era reset as well.
+  'notifications', 'achievements',
   // The stock market (0015) starts after launch; a launch reset never touches it.
   'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays', 'ai_usage', 'stock_settings'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
@@ -110,6 +110,7 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO ranking_settlements (period, key, settled_at) VALUES ('week', '2026-10-26', '2026-11-02T00:01:00Z')"),
       db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
         VALUES ('speetto', 'all', NULL, 'min', '{"kind":"speetto","prize":1500}', '2026-11-01T00:00:00Z', 'retained-notification')`),
+      db.prepare("INSERT INTO achievements (user_id, key, period_key, unlocked_at, claimed_at) VALUES ('min', 'welcome', '', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO stock_ticks (ticker, at, price) VALUES ('YEGM', 1, 500)"),
       db.prepare("INSERT INTO stock_daily (ticker, date, open, high, low, close) VALUES ('YEGM', '2026-11-05', 500, 510, 490, 505)"),
       db.prepare("INSERT INTO stock_events (id, ticker, kind, effect_bp, apply_at, created_at) VALUES ('retained-event', 'MINJ', 'game', 400, 1, 'x')"),
@@ -186,7 +187,11 @@ describe('launch reset in an isolated local D1', () => {
       await expect(db.prepare(`UPDATE ${table} SET amount = amount + 1`).run()).rejects.toThrow('append-only');
       await expect(db.prepare(`DELETE FROM ${table}`).run()).rejects.toThrow('append-only');
     }
-    expect(await contents(preserved)).toEqual(before);
+    // The claim above also completed 첫 출석, which adds an achievement row and
+    // its notice; every other preserved table is exactly as it was.
+    const stable = preserved.filter(table => table !== 'achievements' && table !== 'notifications');
+    expect(await contents(stable)).toEqual(Object.fromEntries(stable.map(table => [table, before[table]])));
+    expect(await db.prepare("SELECT claimed_at FROM achievements WHERE user_id = 'min' AND key = 'attend_first'").first('claimed_at')).toBeNull();
   });
 
   it('rolls back deletions and dropped triggers together if the D1 batch fails partway', async () => {

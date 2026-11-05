@@ -67,7 +67,7 @@ export const CLAW_RULES = {
 } as const;
 /** Shop prices, odds and rewards are shared by the Worker and every screen. */
 export const KUJI_RULES = {
-  size: 100, basePrice: 300, higherPrice: 400, basePriceCount: 5, lastOneGold: 1000,
+  size: 100, basePrice: 300, higherPrice: 400, basePriceCount: 5, lastOneGold: 1000, historyLimit: 20,
   grades: [
     { grade: 'A', count: 1, score: 10, gold: 100, lottoTickets: 0, speettoTickets: 0 },
     { grade: 'B', count: 2, score: 5, gold: 50, lottoTickets: 0, speettoTickets: 0 },

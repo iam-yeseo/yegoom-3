@@ -52,6 +52,7 @@ export function Profile({
   onBack,
   onLogin,
   onLogout,
+  onFontSizeChange,
   onCharacterChange,
   onDisplayNameChange,
   onPhotoChange,
@@ -70,6 +71,8 @@ export function Profile({
   onBack: () => void;
   onLogin?: () => void;
   onLogout?: () => Promise<void>;
+  /** Told once the size actually changes, for the matching achievement. */
+  onFontSizeChange?: (size: FontSize) => void;
   onCharacterChange: (character: ArtKey) => Promise<void>;
   onDisplayNameChange: (displayName: string) => Promise<void>;
   onPhotoChange: (photo: string) => Promise<void>;
@@ -216,7 +219,7 @@ export function Profile({
         <section className="card font-size-setting" aria-label="글자 크기">
           <h2>글자 크기</h2>
           <Segmented label="글자 크기" options={FONT_SIZES.map(({ value, label }) => ({ value, label }))} value={fontSize}
-            onChange={next => { setFontSize(next); saveFontSize(next); }} />
+            onChange={next => { if (next === fontSize) return; setFontSize(next); saveFontSize(next); onFontSizeChange?.(next); }} />
           <p>이 기기에만 적용돼요. 글자만 작아지고 화면 배치는 그대로예요.</p>
         </section>
         <section className="card profile-password">

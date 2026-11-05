@@ -48,7 +48,7 @@ async function fixtureMachine(page: Page, holdBootstrap = false) {
 async function capture(page: Page, name: string, info: TestInfo) {
   await expect(page.locator('.claw-wallet-detail small')).toContainText('다음 충전까지');
   await expect(page.locator('.fx-toast')).toHaveCount(0);
-  for (let index = 0; index < 5 && await page.locator('.announcement-banner').count(); index++) await page.locator('.announcement-banner').click();
+  for (let index = 0; index < 5 && await page.locator('.announcement-banner').count(); index++) await page.locator('.announcement-close').click();
   await expect(page.locator('.announcement-banner')).toHaveCount(0);
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(() => Promise.all(Array.from(document.images, image => image.decode().catch(() => {}))));

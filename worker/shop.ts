@@ -1,8 +1,9 @@
 import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
-import type { Inventory, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoNotice, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotResponse, SlotSpin, SlotSymbol } from '../shared/types';
+import type { Inventory, KujiDraw, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoNotice, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotResponse, SlotSpin, SlotSymbol } from '../shared/types';
 import { slotResult } from '../shared/slot';
 import { kstDate, kstTimestamp, weekStart } from './rules';
 import { notifyPrize } from './notifications';
+import { syncAchievementsFor } from './achievements';
 import { readBalances } from './balances';
 
 export interface ShopUser { id: string; role: 'player' | 'admin' }
@@ -119,17 +120,27 @@ async function ensureBoard(db: D1Database, now: Date): Promise<BoardRow> {
 async function readKuji(db: D1Database, user: ShopUser, now: Date, board?: BoardRow): Promise<KujiState> {
   board ??= await ensureBoard(db, now);
   const grades = JSON.parse(board.grades) as KujiGrade[];
+  // The board's claims are read once with their purchase, so the recent-draw
+  // list costs no extra statement: it is the same rows grouped by purchase.
   const [claims, purchasedToday] = await Promise.all([
-    db.prepare('SELECT c.position, p.user_id FROM kuji_claims c JOIN shop_purchases p ON p.id = c.purchase_id WHERE c.board_id = ?')
-      .bind(board.id).all<{ position: number; user_id: string }>(),
+    db.prepare(`SELECT c.position, p.id, p.user_id, p.created_at, p.last_one FROM kuji_claims c JOIN shop_purchases p ON p.id = c.purchase_id
+      WHERE c.board_id = ? ORDER BY p.created_at DESC, p.id, c.position`)
+      .bind(board.id).all<{ position: number; id: string; user_id: string; created_at: string; last_one: number }>(),
     db.prepare('SELECT COUNT(*) AS count FROM kuji_claims c JOIN shop_purchases p ON p.id = c.purchase_id WHERE p.user_id = ? AND p.date = ?')
       .bind(user.id, kstDate(now)).first<number>('count'),
   ]);
   const remainingByGrade = Object.fromEntries(KUJI_RULES.grades.map(tier => [tier.grade, tier.count])) as Record<KujiGrade, number>;
   const claimed = new Map(claims.results.map(claim => [claim.position, claim.user_id]));
   for (const claim of claims.results) remainingByGrade[grades[claim.position]!]--;
+  const recent: KujiDraw[] = [];
+  for (const claim of claims.results) {
+    const last = recent[recent.length - 1];
+    if (last?.id === claim.id) last.cells.push({ position: claim.position, grade: grades[claim.position]! });
+    else if (recent.length < KUJI_RULES.historyLimit) recent.push({ id: claim.id, userId: claim.user_id, createdAt: claim.created_at, lastOne: Boolean(claim.last_one),
+      cells: [{ position: claim.position, grade: grades[claim.position]! }] });
+  }
   return { boardId: board.id, remaining: KUJI_RULES.size - claims.results.length, remainingByGrade,
-    purchasedToday: purchasedToday ?? 0, nextPrice: kujiCost(purchasedToday ?? 0, 1),
+    purchasedToday: purchasedToday ?? 0, nextPrice: kujiCost(purchasedToday ?? 0, 1), recent,
     cells: grades.map((grade, position) => ({ position, grade: claimed.has(position) ? grade : null, buyerId: claimed.get(position) ?? null })) };
 }
 function kujiReceipt(row: PurchaseRow): KujiPurchase {
@@ -237,6 +248,8 @@ export async function settleDueLotto(db: D1Database, now: Date): Promise<void> {
   // D1 counts batch() as one invocation query. Catching up several missed dates
   // keeps the same call budget, with payouts, notices and settlement atomic.
   if (writes.length) await db.batch(writes);
+  // A first prize or a blank ticket completes an achievement for its owner.
+  await syncAchievementsFor(db, tickets.map(ticket => ticket.user_id), now);
 }
 
 function simplePurchaseStatement(db: D1Database, user: ShopUser, id: string, kind: 'lotto' | 'speetto', payload: string, method: ShopPayment,

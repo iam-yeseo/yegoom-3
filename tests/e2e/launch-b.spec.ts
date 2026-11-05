@@ -62,7 +62,7 @@ async function mutate(page: Page, path: string, data: unknown) {
 }
 async function dismissAnnouncements(page: Page) {
   for (let i = 0; i < 5 && await page.locator('.announcement-banner').count(); i++) {
-    await page.locator('.announcement-banner').click();
+    await page.locator('.announcement-close').click();
   }
   await expect(page.locator('.announcement-banner')).toHaveCount(0);
 }
@@ -308,15 +308,12 @@ async function inspectEvidenceViewers(page: Page, preview: boolean) {
   await today.click(); let dialog = page.getByRole('dialog', { name: '오늘의 증거', exact: true });
   await expect(dialog.locator('img')).toBeVisible(); await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
   await today.click(); await dialog.getByRole('button', { name: '닫기', exact: true }).click(); await expect(dialog).toHaveCount(0);
+  // Past rounds keep their answers and results but no longer carry a photo:
+  // evidence is shown on its day only and deleted by the nightly housekeeping.
   const history = page.getByRole('region', { name: '최근 결과 기록', exact: true });
-  await expect(history.locator('.luck-photo-thumbnail')).toHaveCount(3);
-  for (const button of await history.locator('.luck-photo-thumbnail').all()) {
-    const label = (await button.getAttribute('aria-label'))!.replace(' 크게 보기', '');
-    await button.click(); dialog = page.getByRole('dialog', { name: label, exact: true });
-    await expect(dialog.locator('img')).toHaveAttribute('src', preview ? /^data:image\// : /\/api\/games\/luck\/rounds\/2026-10-(29|27|24)\/photo\?v=1$/);
-    await expect.poll(() => dialog.locator('img').evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
-    await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
-  }
+  await expect(history.locator('.history-round')).toHaveCount(3);
+  await expect(history.locator('.luck-photo-thumbnail')).toHaveCount(0);
+  void preview;
 }
 test('real luck evidence stays private until publication, replaces its version and appears in three past rounds', async ({ page, browser }, info) => {
   test.setTimeout(90000);
@@ -381,6 +378,11 @@ test('real announcements queue for four seconds, exclude self and expired events
   // from the login button cannot interfere with precise banner deadlines.
   const response = await page.request.post(`${ORIGIN}/api/auth/login`, { data: { username: 'min', password: PASSWORD }, headers: { Origin: ORIGIN, 'CF-Connecting-IP': '192.0.2.12' } });
   expect(response.status()).toBe(200);
+  // My own achievement notices also toast now; this scenario is about the
+  // others' prizes, so those are marked seen before the page opens.
+  const seeded: BootstrapResponse = await (await page.request.get(`${ORIGIN}/api/bootstrap`)).json();
+  const achievementIds = seeded.notifications.recent.filter(row => row.payload.kind === 'achievement').map(row => row.id);
+  await page.addInitScript(ids => localStorage.setItem('yegoom:announcements:seen:e2e-min', JSON.stringify(ids)), achievementIds);
   await page.clock.install({ time: new Date(NOW) }); await page.clock.pauseAt(new Date(Date.parse(NOW) + 1000));
   await page.goto(`${ORIGIN}/`);
   const banner = page.locator('.announcement-banner'); await expect(banner).toContainText('siwon님이 스피또');
@@ -389,7 +391,7 @@ test('real announcements queue for four seconds, exclude self and expired events
   // The toast skips the old, the future and my own; the centre still keeps them.
   const toasted = data.notifications.recent.filter(row => isToastWorthy(row, data.user.id, Date.parse(data.serverTime)));
   expect(toasted.every(row => ![1001, 1002, 1005].includes(row.id))).toBe(true);
-  expect(toasted.every(row => row.actorId !== data.user.id)).toBe(true);
+  expect(toasted.every(row => row.payload.kind === 'achievement' || row.actorId !== data.user.id)).toBe(true);
   const lotto: LottoResponse = await (await page.request.get(`${ORIGIN}/api/shop/lotto`)).json();
   expect(lotto.lotto.tickets.find(row => row.id === '00000000-0000-4000-8000-000000000004')).toMatchObject({ rank: 4, prize: 500 });
   // Move the browser clock 200ms for the banner's unmodified entrance, then
@@ -398,9 +400,10 @@ test('real announcements queue for four seconds, exclude self and expired events
   for (const width of [390, 560]) await capture(page, 'authenticated', 'announcement', width, info);
   await page.clock.runFor(3799); await expect(banner).toContainText('siwon님이 스피또');
   await page.clock.runFor(1); await expect(banner).toContainText('yeseo님이 데일리 로또 2등');
-  await banner.evaluate((button: HTMLButtonElement) => button.click()); await expect(banner).toContainText('yeseo님이 데일리 로또 1등');
+  await banner.locator('.announcement-close').evaluate((button: HTMLButtonElement) => button.click()); await expect(banner).toContainText('yeseo님이 데일리 로또 1등');
   await page.clock.runFor(4000); await expect(banner).toHaveCount(0);
-  const ids = await page.evaluate(() => JSON.parse(localStorage.getItem('yegoom:announcements:seen:e2e-min')!));
+  const ids = (await page.evaluate(() => JSON.parse(localStorage.getItem('yegoom:announcements:seen:e2e-min')!) as number[]))
+    .filter(id => !achievementIds.includes(id));
   expect(ids).toHaveLength(3); expect(ids).toEqual(expect.arrayContaining([1003, 1004]));
   await page.reload(); await page.clock.runFor(500); await expect(banner).toHaveCount(0);
   const other = await browser.newContext({ reducedMotion: 'reduce' });
@@ -408,7 +411,7 @@ test('real announcements queue for four seconds, exclude self and expired events
     const viewer = await other.newPage(); await login(viewer, 'yeseo');
     const own = await snapshot(viewer);
     expect(own.notifications.recent.filter(row => isToastWorthy(row, 'e2e-yeseo', Date.parse(own.serverTime)))
-      .every(row => row.actorId !== 'e2e-yeseo')).toBe(true);
+      .every(row => row.payload.kind === 'achievement' || row.actorId !== 'e2e-yeseo')).toBe(true);
     const visible = viewer.locator('.announcement-banner'); await expect(visible).toBeVisible();
     expect(await visible.evaluate(element => getComputedStyle(element).animationName)).toBe('announcement-fade');
     const frames = await visible.evaluate(element => element.getAnimations().flatMap(animation => (animation.effect as KeyframeEffect).getKeyframes()));

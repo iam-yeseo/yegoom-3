@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { KUJI_RULES, kujiCost } from "../../shared/balance";
-import type { KujiGrade, KujiPurchase } from "../../shared/types";
+import type { KujiDraw, KujiGrade, KujiPurchase } from "../../shared/types";
 import { ApiFailure } from "../api";
-import { Toolbar, artSrc } from "../components/UI";
+import { Avatar, Toolbar, artSrc, honorific, useDisplayNameByIdLookup } from "../components/UI";
+import { formatTime } from "../format";
 import { anim, confetti, flipY, hop, openSheet, pop, reduced, sparkle } from "../motion";
 import { useShop } from "../shop";
 import "../preview.css";
@@ -77,6 +78,34 @@ function PurchaseSheet({ purchase, onClose }: { purchase: KujiPurchase; onClose:
         {purchase.lastOne && <p>라스트원 보너스 {KUJI_RULES.lastOneGold.toLocaleString("ko-KR")}G 포함</p>}</>}
     </div>
   </Sheet>;
+}
+
+/** Who drew what on this board, one short line per purchase: the grades are
+ * shown as small chips so a five-ticket draw still fits on one line. */
+function KujiRecent({ draws }: { draws: KujiDraw[] }) {
+  const nameOf = useDisplayNameByIdLookup();
+  const [open, setOpen] = useState(false);
+  const shown = open ? draws : draws.slice(0, 5);
+  return <section className="pg-card kuji-recent" aria-label="이 판의 최근 뽑기">
+    <div className="kuji-recent-head"><h3>최근 뽑기</h3><span>{draws.length ? `이 판 ${draws.length}건` : ""}</span></div>
+    {draws.length ? <>
+      {shown.map(draw => {
+        const counts = new Map<KujiGrade, number>();
+        for (const cell of draw.cells) counts.set(cell.grade, (counts.get(cell.grade) ?? 0) + 1);
+        const grades = [...counts.entries()].sort((a, b) => gradeIndex(a[0]) - gradeIndex(b[0]));
+        return <div className="kuji-recent-row" key={draw.id}>
+          <Avatar userId={draw.userId} username={nameOf(draw.userId, "")} size={28} nameFormat="plain" />
+          <span className="kuji-recent-name">{honorific(nameOf(draw.userId, "")) || "누군가"}</span>
+          <span className="kuji-recent-grades" aria-label={grades.map(([grade, n]) => `${grade}상 ${n}장`).join(", ")}>
+            {grades.map(([grade, n]) => <b key={grade} style={{ background: gradeColors[gradeIndex(grade)], color: gradeText[gradeIndex(grade)] }}>{grade}{n > 1 ? `×${n}` : ""}</b>)}
+            {draw.lastOne && <b className="kuji-recent-last">★</b>}
+          </span>
+          <small>{formatTime(draw.createdAt)}</small>
+        </div>;
+      })}
+      {draws.length > 5 && <button type="button" className="text-button kuji-recent-more" onClick={() => setOpen(value => !value)}>{open ? "접기" : `${draws.length - 5}건 더 보기`}</button>}
+    </> : <p className="kuji-recent-empty">아직 아무도 뽑지 않았어요. 첫 쿠지의 주인공이 되어 보세요.</p>}
+  </section>;
 }
 
 export function Kuji({ onBack }: { onBack: () => void }) {
@@ -159,6 +188,8 @@ export function Kuji({ onBack }: { onBack: () => void }) {
           <div aria-hidden="true">{Array.from({ length: KUJI_RULES.basePriceCount }, (_, index) => <i key={index} style={{ background: index < kuji.purchasedToday + activeSelection.length ? "#F2C94C" : "#EDE3C4" }} />)}</div>
         </div>
         <p className="kuji-next-price">다음 쿠지 1장 {kuji.nextPrice.toLocaleString("ko-KR")}G</p>
+        <KujiRecent draws={kuji.recent} />
+
         {(error || shop.error) && <p className="form-message error" role="alert">{error || shop.error}</p>}
         {!shop.canPurchase && <p className="form-message">운영자 계정은 쿠지를 구매할 수 없어요.</p>}
         {anotherPending && <p className="form-message">진행 중인 다른 구매 결과를 먼저 확인해 주세요.</p>}

@@ -1,6 +1,7 @@
 /** Daily housekeeping only: accounting and public game history are never deleted. */
 import { NOTIFICATION_RULES } from '../shared/notifications';
 import { STOCK_RULES } from '../shared/stocks';
+import { kstDate } from './rules';
 
 export const MAINTENANCE_RULES = { requestRetentionDays: 30, deleteLimit: 500, stockTickDeleteLimit: 2000 } as const;
 
@@ -28,6 +29,9 @@ export async function maintainDatabase(db: D1Database, now: Date): Promise<void>
     db.prepare(`DELETE FROM notifications WHERE id IN (
       SELECT id FROM notifications WHERE created_at < ? ORDER BY created_at LIMIT ?
     )`).bind(new Date(now.getTime() - NOTIFICATION_RULES.retentionDays * 86_400_000).toISOString(), MAINTENANCE_RULES.deleteLimit),
+    // Luck evidence photos are shown on the day only; the answer and results
+    // stay in game_rounds and predictions, so the image itself can go.
+    db.prepare('DELETE FROM luck_photos WHERE round_date < ?').bind(kstDate(now)),
     // 10-minute prices are kept 30 days; daily candles stay in stock_daily.
     db.prepare(`DELETE FROM stock_ticks WHERE (ticker, at) IN (
       SELECT ticker, at FROM stock_ticks WHERE at < ? LIMIT ?

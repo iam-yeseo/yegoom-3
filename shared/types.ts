@@ -12,6 +12,7 @@ export interface PhotoMetadata { url: string; version: number }
 export interface ProfileMetadata { displayName: string; photoVersion: number | null }
 export interface LuckPhotoResponse { photo: PhotoMetadata; serverTime: string }
 export type { AppNotification, NotificationSummary, NotificationsResponse } from './notifications';
+export type { AchievementsResponse, AchievementProgress, AchievementClaimInput, AchievementEventInput } from './achievements';
 import type { NotificationSummary } from './notifications';
 export interface User {
   id: string;
@@ -52,7 +53,6 @@ export interface GameResult {
 export interface GameHistoryRound {
   roundDate: string;
   answer: string;
-  photo: PhotoMetadata | null;
   results: GameResult[];
 }
 export interface GameState {
@@ -140,6 +140,8 @@ export type KujiGrade = typeof KUJI_RULES.grades[number]['grade'];
 export interface KujiCell { position: number; grade: KujiGrade | null; buyerId: string | null }
 /** Read-only card summary. No board yet: null/100; sold out awaiting creation: id/0. */
 export interface KujiSummary { boardId: number | null; remaining: number }
+/** One purchase on the board, newest first: who drew which grades. */
+export interface KujiDraw { id: string; userId: string; createdAt: string; cells: { position: number; grade: KujiGrade }[]; lastOne: boolean }
 export interface KujiState {
   boardId: number;
   cells: KujiCell[];
@@ -147,6 +149,8 @@ export interface KujiState {
   remainingByGrade: Record<KujiGrade, number>;
   purchasedToday: number;
   nextPrice: number;
+  /** The latest draws on this board (KUJI_RULES.historyLimit). */
+  recent: KujiDraw[];
 }
 export interface KujiPurchaseInput { requestId: string; boardId: number; positions: number[] }
 export interface KujiPurchase {

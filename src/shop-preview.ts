@@ -1,5 +1,5 @@
 import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, NICKNAME_TAG_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, attendanceTickets, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
-import type {
+import type { KujiDraw,
   Inventory, KujiCell, KujiGrade, KujiPurchase, KujiPurchaseInput, KujiResponse,
   LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoTicket, ShopKind, ShopPayment,
   ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotSpin, SlotSpinInput, SlotResponse,
@@ -71,6 +71,23 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     });
   }
   makeBoard(true);
+  // Recent draws on the sample board: the sold cells, grouped by buyer, newest first.
+  let draws_: KujiDraw[] = [];
+  function seedDraws() {
+    const sold = cells.filter(cell => cell.buyerId !== null);
+    const byBuyer = new Map<string, typeof sold>();
+    for (const cell of sold) byBuyer.set(cell.buyerId!, [...(byBuyer.get(cell.buyerId!) ?? []), cell]);
+    draws_ = [...byBuyer.entries()].flatMap(([buyer, owned], index) => {
+      const chunks: KujiDraw[] = [];
+      for (let start = 0; start < owned.length; start += 5) {
+        chunks.push({ id: `preview-draw-${buyer}-${start}`, userId: buyer, lastOne: false,
+          createdAt: new Date(Date.now() - (index * 5 + start) * 37 * 60_000).toISOString(),
+          cells: owned.slice(start, start + 5).map(cell => ({ position: cell.position, grade: cell.grade! })) });
+      }
+      return chunks;
+    }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  seedDraws();
 
   // A published previous draw gives the result screen an example before the
   // visitor buys a ticket. Its historical prize is already in the sample gold.
@@ -116,7 +133,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   }
   function begin(now: Date) {
     settle(now);
-    if (cells.every(cell => cell.buyerId !== null)) { boardId += 1; makeBoard(); }
+    if (cells.every(cell => cell.buyerId !== null)) { boardId += 1; makeBoard(); draws_ = []; }
   }
   function state(now: Date): ShopState {
     return { gold, inventory: { ...inventory }, canPurchase: true, serverTime: now.toISOString() };
@@ -125,7 +142,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     const remainingByGrade = Object.fromEntries(KUJI_RULES.grades.map(rule => [rule.grade, 0])) as Record<KujiGrade, number>;
     for (const cell of cells) if (cell.buyerId === null) remainingByGrade[layout[cell.position]] += 1;
     return structuredClone({ ...state(now), kuji: { boardId, cells, remaining: cells.filter(cell => cell.buyerId === null).length,
-      remainingByGrade, purchasedToday, nextPrice: kujiCost(purchasedToday, 1) }, ...(purchase ? { purchase } : {}) });
+      remainingByGrade, purchasedToday, nextPrice: kujiCost(purchasedToday, 1), recent: draws_.slice(0, KUJI_RULES.historyLimit) }, ...(purchase ? { purchase } : {}) });
   }
   function lotto(now: Date, purchase?: LottoTicket): LottoResponse {
     const today = kstDate(now);
@@ -228,6 +245,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     inventory.lottoTickets += reward.lottoTickets;
     inventory.speettoTickets += reward.speettoTickets;
     const purchase: KujiPurchase = { requestId: input.requestId, boardId, cells: won, cost, reward, lastOne };
+    draws_.unshift({ id: input.requestId, userId: 'preview', createdAt: now.toISOString(), cells: won, lastOne });
     receipts.set(input.requestId, { kind: 'kuji', payload, purchase });
     return kuji(now, purchase);
   }

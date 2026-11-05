@@ -18,7 +18,7 @@ async function navigate(page: Page, path: string) {
 async function captureWidths(page: Page, name: string, info: TestInfo, modal = false) {
   await mkdir('docs/screenshots', { recursive: true });
   for (let i = 0; i < 5 && await page.locator('.announcement-banner').count(); i++) {
-    await page.locator('.announcement-banner').click();
+    await page.locator('.announcement-close').click();
   }
   await expect(page.locator('.announcement-banner')).toHaveCount(0);
   for (const width of [390, 560]) {

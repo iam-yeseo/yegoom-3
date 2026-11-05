@@ -1,6 +1,7 @@
 import { addDays, mondayOf, rankingRange, scoreGameDate, weeksOverlapping } from '../shared/ranking-periods';
 import { RANKING_REWARDS, RANKING_SETTLEMENT_CATCHUP, rankScores, rankingReward, type RewardPeriod } from '../shared/ranking-rewards';
 import { notify } from './notifications';
+import { syncAchievementsFor } from './achievements';
 import { kstDate } from './rules';
 
 interface ScoreRow { user_id: string; amount: number; reference: string; created_at: string; game_date: string | null }
@@ -89,5 +90,7 @@ export async function settleDueRankingRewards(db: D1Database, now: Date): Promis
       db.prepare('INSERT OR IGNORE INTO ranking_settlements (period, key, settled_at) VALUES (?, ?, ?)')
         .bind(period.period, period.key, createdAt),
     ]);
+    // A first place or a podium finish is also an achievement.
+    await syncAchievementsFor(db, payouts.map(entry => entry.userId), now);
   }
 }

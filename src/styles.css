@@ -42,12 +42,26 @@
   --faint: #ada4b3;
   --coral: #f47c66;
   --card-shadow: 0 6px 24px rgba(120, 90, 60, 0.06);
+  /* Shared scale: every card title, control and corner reads from here, so a
+     screen added later lands on the same sizes as the rest. */
+  --fs-caption: calc(12px * var(--font-scale, 1));
+  --fs-small: calc(13px * var(--font-scale, 1));
+  --fs-body: calc(14px * var(--font-scale, 1));
+  --fs-card-title: calc(17px * var(--font-scale, 1));
+  --fs-sheet-title: calc(20px * var(--font-scale, 1));
+  --radius-card: 24px;
+  --radius-button: 20px;
+  --radius-input: 16px;
+  --card-pad: 18px;
 }
 * {
   box-sizing: border-box;
 }
 html {
   scrollbar-gutter: stable;
+  /* Phones must not pull the hero away from the top (rubber-band) and show
+     the page colour above it; the status-bar colour covers any remaining bounce. */
+  overscroll-behavior-y: none;
 }
 dialog {
   overscroll-behavior: contain;
@@ -237,7 +251,7 @@ button svg {
 }
 .card {
   background: #fff;
-  border-radius: 24px;
+  border-radius: var(--radius-card);
   box-shadow: var(--card-shadow);
 }
 .screen-body {
@@ -286,7 +300,7 @@ button svg {
   width: 100%;
   height: 56px;
   border: 0;
-  border-radius: 20px;
+  border-radius: var(--radius-button);
   background: #f47c66;
   color: #fff;
   font-size: 17px;
@@ -333,7 +347,7 @@ button svg {
   width: 100%;
   border: 1px solid transparent;
   background: #fff;
-  border-radius: 16px;
+  border-radius: var(--radius-input);
   padding: 16px;
   color: #3a3340;
   font-size: 15px;
@@ -650,7 +664,7 @@ button svg {
   gap: 14px;
 }
 .prediction-input h2 {
-  font-size: 17px;
+  font-size: var(--fs-card-title);
   font-weight: 800;
   letter-spacing: -0.2px;
 }
@@ -1007,7 +1021,10 @@ button svg {
    current screen (set from App), and the cream of the app below it. */
 @media (max-width: 599px) {
   :root {
-    background: linear-gradient(var(--top-color, #fff9ee) 50%, #fff9ee 50%);
+    background: var(--top-color, #fff9ee) linear-gradient(var(--top-color, #fff9ee) 50%, #fff9ee 50%) no-repeat;
+  }
+  body {
+    overscroll-behavior-y: none;
   }
 }
 @media (min-width: 600px) {
@@ -1126,11 +1143,11 @@ button svg {
 .wheel-unit { text-align: center; color: var(--muted); font-size: 13px; }
 .author-date { margin: 8px 20px 0; font-size: 13px; color: var(--muted); }
 .wake-author { display: flex; flex-direction: column; gap: 16px; padding: 24px 20px; text-align: center; }
-.wake-author h2, .prediction-history h2 { font-size: 17px; }
+.wake-author h2, .prediction-history h2 { font-size: var(--fs-card-title); }
 .wake-clock { font-size: clamp(24px, 7vw, 36px); font-variant-numeric: tabular-nums; word-break: keep-all; }
 .wake-confirmation { padding: 26px; width: min(400px, calc(100% - 32px)); border: 0; border-radius: 24px; color: var(--text); background: var(--cream); box-shadow: var(--card-shadow); }
 .wake-confirmation::backdrop { background: rgba(58, 51, 64, .4); }
-.wake-confirmation h2 { font-size: 20px; margin-bottom: 12px; }
+.wake-confirmation h2 { font-size: var(--fs-sheet-title); margin-bottom: 12px; }
 .wake-confirmation p { line-height: 1.7; margin-bottom: 20px; }
 .wake-confirmation .text-button { display: block; margin: 12px auto 0; }
 .prediction-history { display: flex; flex-direction: column; gap: 14px; padding-top: 24px; }
@@ -1170,3 +1187,16 @@ button svg {
   text-align: right;
 }
 .result-name strong { overflow-wrap: anywhere; }
+
+/* Recent results: one compact row per player under a date + answer heading. */
+.history-results { padding: 4px 14px; }
+.history-result { display: grid; grid-template-columns: 24px 32px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 48px; padding: 6px 0; }
+.history-result + .history-result { border-top: 1px solid #f3eee8; }
+.history-result .rank-badge { width: 24px; height: 24px; font-size: 12px; }
+.history-result-name { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.history-result-name strong { font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-result-name small { font-size: 12px; color: var(--muted); }
+.history-result-value { font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.history-result-score { font-size: 13px; font-weight: 800; color: #c9533e; white-space: nowrap; min-width: 40px; text-align: right; }
+.history-result.me { background: linear-gradient(90deg, transparent, #fff9ee 20%, #fff9ee 80%, transparent); }
+.empty-state.compact { padding: 18px; font-size: 13px; }

@@ -19,7 +19,7 @@
 .stock-badge.small {
   width: 22px;
   height: 22px;
-  font-size: 9.5px;
+  font-size: 10px;
 }
 .stock-badge.gray {
   background: #eee9e4;
@@ -88,7 +88,7 @@ em.warning {
 }
 .stock-news-item header b {
   margin-left: auto;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .news-stock {
   display: inline-flex;
@@ -104,7 +104,7 @@ em.warning {
   word-break: keep-all;
 }
 .stock-news-item p {
-  font-size: 13.5px;
+  font-size: 14px;
   line-height: 1.55;
   color: #7c7383;
   word-break: keep-all;
@@ -132,7 +132,7 @@ em.warning {
   border-radius: 16px;
   background: #fff4cc;
   color: #94700a;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1.5;
 }
@@ -148,7 +148,7 @@ em.warning {
   height: 38px;
   border-radius: 12px;
   background: #f6f1eb;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 700;
   color: #7c7383;
 }
@@ -192,7 +192,7 @@ em.warning {
   font-weight: 800;
 }
 .trade-sheet .trade-note {
-  font-size: 12.5px;
+  font-size: 13px;
   color: #ada4b3;
 }
 

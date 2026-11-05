@@ -17,9 +17,10 @@ import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-g
 import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
 import { PhotoError } from './photos';
 import { PROFILE_PHOTO, LUCK_PHOTO } from '../shared/profile';
-import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, getLuckPhotoMetadata, luckPhotoUrl } from './luck-photos';
+import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, luckPhotoUrl } from './luck-photos';
 import { notificationsRoute, readNotificationSummary, sendAdminNotification, NotificationError, notify } from './notifications';
 import { maintainDatabase } from './maintenance';
+import { AchievementError, claimAchievement, readAchievements, recordAchievementEvent, syncAchievements, syncAchievementsFor } from './achievements';
 import { settleDueRankingRewards } from './ranking-rewards';
 import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockSecret, tradeStock } from './stocks';
 import { aiWriters, isAiProvider, readAiStatus, saveAiSettings } from './stock-ai';
@@ -280,6 +281,8 @@ async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
   // One D1 binding call for the whole batch: rewards and completion markers
   // commit together, including rollbacks and concurrent idempotent retries.
   await db.batch(writes);
+  // A revealed answer can complete a daily achievement for each predictor.
+  await syncAchievementsFor(db, predictions.map(prediction => prediction.player_id), now);
 }
 
 async function readHistory(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameHistoryRound[]> {
@@ -287,11 +290,12 @@ async function readHistory(db: D1Database, user: UserRow, id: GameId, now: Date)
     WHERE game_id = ? AND round_date < ? AND answer IS NOT NULL
     AND (revealed_at IS NOT NULL OR reveal_at <= ?) ORDER BY round_date DESC LIMIT 3`)
     .bind(id, kstDate(now), now.getTime()).all<{ round_date: string; answer: string; settings_json: string | null }>()).results;
+  // Evidence photos are kept for the day only (nightly housekeeping deletes
+  // older ones), so history carries no photo.
   return Promise.all(rounds.map(async round => {
     const rules = await readGameRules(db, id, round.round_date, round.settings_json);
     return { roundDate: round.round_date, answer: round.answer,
-      results: await roundResults(db, id, round.round_date, round.answer, rules),
-      photo: id === 'luck' ? await getLuckPhotoMetadata(db, user, round.round_date, true) : null };
+      results: await roundResults(db, id, round.round_date, round.answer, rules) };
   }));
 }
 
@@ -615,6 +619,17 @@ async function api(request: Request, env: Env): Promise<Response> {
     return json({ ok: true }, 200, { 'Set-Cookie': cookie(request, '', 0) });
   }
   const user = await requireUser(request, env, now.getTime());
+  const response = await authenticatedApi(request, env, url, user, now);
+  // Any successful player write may have completed an achievement. The check
+  // runs after the write's own response is ready and never fails the request.
+  if (!['GET', 'HEAD'].includes(request.method) && user.role === 'player' && response.ok && !url.pathname.startsWith('/api/achievements')) {
+    await syncAchievements(env.DB, user.id, new Date(), url.pathname === '/api/me/password' ? ['password'] : []).catch(error => {
+      console.error('Achievement sync failed', error instanceof Error ? error.name : 'UnknownError');
+    });
+  }
+  return response;
+}
+async function authenticatedApi(request: Request, env: Env, url: URL, user: UserRow, now: Date): Promise<Response> {
   if (url.pathname === '/api/admin' || url.pathname.startsWith('/api/admin/')) {
     if (user.role !== 'admin') throw new HttpError(403, 'ADMIN_ONLY', '운영자만 사용할 수 있어요.');
     if (url.pathname === '/api/admin' && request.method === 'GET') return json(await adminState(env, now));
@@ -746,7 +761,19 @@ async function api(request: Request, env: Env): Promise<Response> {
     return json(await readCatchmindGallery(env.DB, before, limit));
   }
   if (url.pathname === '/api/notifications') {
-    return json(await notificationsRoute(env.DB, user, request.method, url.searchParams.get('before'), now));
+    const page = await notificationsRoute(env.DB, user, request.method, url.searchParams.get('before'), now);
+    // Opening the centre (its first page) is itself an achievement.
+    if (!url.searchParams.get('before') && user.role === 'player') await syncAchievements(env.DB, user.id, now).catch(() => undefined);
+    return json(page);
+  }
+  if (url.pathname === '/api/achievements') {
+    if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return json(await readAchievements(env.DB, user, now));
+  }
+  if (url.pathname === '/api/achievements/claim' || url.pathname === '/api/achievements/events') {
+    if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    const input = await body(request);
+    return json(await (url.pathname.endsWith('/claim') ? claimAchievement(env.DB, user, input, new Date()) : recordAchievementEvent(env.DB, user, input, new Date())));
   }
   if (url.pathname === '/api/ranking') {
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
@@ -766,7 +793,14 @@ async function api(request: Request, env: Env): Promise<Response> {
     if (rawSince !== null && (!/^\d{1,16}$/.test(rawSince) || !Number.isSafeInteger(Number(rawSince)))) {
       throw new HttpError(400, 'INVALID_VERSION', '판 버전을 확인해 주세요.');
     }
-    return json(await catchmindRoute(env.DB, user, catchmindMatch[1], request.method, input, new Date(), rawSince === null ? undefined : Number(rawSince)));
+    const result = await catchmindRoute(env.DB, user, catchmindMatch[1], request.method, input, new Date(), rawSince === null ? undefined : Number(rawSince));
+    // A guess that ends the round can complete the drawer's achievement too;
+    // the guesser's own check runs after every write.
+    if (catchmindMatch[1] === 'guess' && 'catchmind' in result) {
+      const round = result.catchmind.round;
+      if (round?.status === 'ended' && round.winner && round.drawer.id !== user.id) await syncAchievementsFor(env.DB, [round.drawer.id], new Date());
+    }
+    return json(result);
   }
   if (url.pathname === '/api/stock' || url.pathname.startsWith('/api/stock/')) {
     const secret = stockSecret(env.STOCK_SEED_SECRET);
@@ -833,7 +867,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

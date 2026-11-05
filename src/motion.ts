@@ -157,6 +157,27 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
   const entrance = anim(dialog, [{ translate: "0 30px", opacity: 0 }, { translate: "0 0", opacity: 1 }], {
     dur: dur.l, ease: "out", fill: "none",
   });
+  // On phones the software keyboard shrinks the visual viewport but not the
+  // layout viewport a bottom sheet is anchored to. The sheet reads this inset
+  // (see .password-dialog) to stay above the keyboard, and a focused field is
+  // brought into view once the keyboard has finished opening.
+  const viewport = window.visualViewport;
+  const updateInset = () => {
+    if (!viewport) return;
+    const inset = Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop));
+    dialog.style.setProperty("--keyboard-inset", `${inset}px`);
+  };
+  let reveal = 0;
+  const onFocus = (event: FocusEvent) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.matches("input, textarea, select")) return;
+    clearTimeout(reveal);
+    reveal = window.setTimeout(() => { updateInset(); target.scrollIntoView({ block: "nearest" }); }, 320);
+  };
+  viewport?.addEventListener("resize", updateInset);
+  viewport?.addEventListener("scroll", updateInset);
+  dialog.addEventListener("focusin", onFocus);
+  updateInset();
   let closed = false;
   // A close event is queued: React StrictMode can already have reopened this
   // element by the time an earlier close is dispatched.
@@ -165,6 +186,11 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
     if (closed) return;
     closed = true;
     dialog.removeEventListener("close", onClose);
+    dialog.removeEventListener("focusin", onFocus);
+    viewport?.removeEventListener("resize", updateInset);
+    viewport?.removeEventListener("scroll", updateInset);
+    clearTimeout(reveal);
+    dialog.style.removeProperty("--keyboard-inset");
     entrance?.cancel();
     openSheets.delete(dialog);
     if (dialog.open) dialog.close();

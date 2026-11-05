@@ -5,7 +5,7 @@
 .admin-body { display: grid; gap: 22px; }
 .admin-preview-note { margin: 0; padding: 14px 16px; border-radius: 16px; color: #7556c4; background: #eee8fc; font-size: 13px; line-height: 1.7; word-break: keep-all; }
 .admin-section-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0 4px; }
-.admin-section-heading h2, .admin-changes h2 { margin: 0 0 14px; font-size: 20px; }
+.admin-section-heading h2, .admin-changes h2 { margin: 0 0 14px; font-size: var(--fs-sheet-title); }
 .admin-section-heading > span { color: var(--muted); font-size: 12px; }
 .admin-predictions { display: grid; gap: 12px; }
 .admin-predictions .admin-section-heading h2 { margin-bottom: 0; }
@@ -178,7 +178,7 @@
   word-break: keep-all;
 }
 .admin-news-list li small {
-  font-size: 11.5px;
+  font-size: 12px;
   color: #ada4b3;
 }
 .admin-news-list li.hidden-news span {
@@ -193,7 +193,7 @@
   margin: 0 0 10px;
 }
 .admin-ai-engine p {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   color: #7c7383;
 }

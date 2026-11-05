@@ -16,8 +16,9 @@ export const NOTIFICATION_RULES = {
 } as const;
 
 import { subjectParticle } from './stock-news-templates';
+import { ACHIEVEMENT_BY_KEY, ACHIEVEMENTS_PATH } from './achievements';
 
-export type NotificationKind = 'lotto' | 'speetto' | 'rank' | 'game' | 'stock' | 'admin';
+export type NotificationKind = 'lotto' | 'speetto' | 'rank' | 'game' | 'stock' | 'admin' | 'achievement';
 
 export type NotificationPayload =
   | { kind: 'lotto'; rank: number; prize: number }
@@ -26,7 +27,9 @@ export type NotificationPayload =
   | { kind: 'game'; game: string; title: string; answer: string }
   | { kind: 'turn'; game: 'catchmind' }
   | { kind: 'stock'; event: 'delisted' | 'whale'; ticker: string; name: string; detail: string }
-  | { kind: 'admin'; title: string; body: string };
+  | { kind: 'admin'; title: string; body: string }
+  /** Wording comes from the achievement list, so a renamed title reads right later. */
+  | { kind: 'achievement'; key: string; periodKey: string };
 
 export interface AppNotification {
   id: number;
@@ -91,16 +94,22 @@ export function notificationText(notification: AppNotification, name: (userId: s
         : { title: `익명의 큰손이 ${payload.name}${objectParticle(payload.name)} 움직였어요`, body: payload.detail, link: '#/stock', emoji: '🐋' };
     case 'admin':
       return { title: payload.title, body: payload.body, link: null, emoji: '📣' };
+    case 'achievement': {
+      const definition = ACHIEVEMENT_BY_KEY.get(payload.key);
+      return { title: `도전과제 달성! ${definition?.title ?? payload.key}`,
+        body: definition ? `눌러서 ${gold(definition.reward)} 받기` : '눌러서 보상 받기', link: `#${ACHIEVEMENTS_PATH}`, emoji: '🏅' };
+    }
   }
 }
 
 /** Only news worth interrupting someone for pops up: a prize another player
- * just won and an administrator's notice. Everything else — a revealed answer,
- * a market event, a reward or a turn that is already mine — waits in the centre
- * behind the bell, so the toast stays as rare as it was before. */
-const TOAST_KINDS: ReadonlySet<NotificationPayload['kind']> = new Set(['lotto', 'speetto', 'admin']);
+ * just won, an administrator's notice and my own newly achieved challenge.
+ * Everything else — a revealed answer, a market event, a reward or a turn that
+ * is already mine — waits in the centre behind the bell. */
+const TOAST_KINDS: ReadonlySet<NotificationPayload['kind']> = new Set(['lotto', 'speetto', 'admin', 'achievement']);
 export function isToastWorthy(notification: AppNotification, viewerId: string, serverNow: number): boolean {
   const age = serverNow - Date.parse(notification.createdAt);
-  return TOAST_KINDS.has(notification.payload.kind)
-    && notification.actorId !== viewerId && age >= 0 && age < NOTIFICATION_RULES.toastMs;
+  const kind = notification.payload.kind;
+  if (!TOAST_KINDS.has(kind) || age < 0 || age >= NOTIFICATION_RULES.toastMs) return false;
+  return kind === 'achievement' ? notification.actorId === viewerId : notification.actorId !== viewerId;
 }

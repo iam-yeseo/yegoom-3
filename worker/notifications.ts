@@ -47,21 +47,30 @@ export function notifyPrize(db: D1Database, kind: 'lotto' | 'speetto', payoutRef
 
 /** Bell badge and toast queue in one indexed read, and always one row: the
  * capped unread count plus the notices the toast may actually show (another
- * player's prize or an administrator's notice, from the last ten minutes).
- * Carrying only those keeps a busy day of game and market news from pushing a
- * win out of the window, and keeps this read the size it was before. */
+ * player's prize, an administrator's notice or my own achievement, from the
+ * last ten minutes). Carrying only those keeps a busy day of game and market
+ * news from pushing a win out of the window, and keeps this read small. */
 export async function readNotificationSummary(db: D1Database, userId: string, now: Date): Promise<NotificationSummary> {
+  // Own achievements get their own window, so a first visit that completes
+  // several cannot push another player's prize out of the toast queue.
+  const since = new Date(now.getTime() - NOTIFICATION_RULES.toastMs).toISOString();
+  const until = now.toISOString();
   const row = await db.prepare(`SELECT
     (SELECT COUNT(*) FROM (SELECT 1 FROM notifications n WHERE ${VISIBLE} AND n.created_at > ${WATERMARK} LIMIT ?)) AS unread,
     (SELECT json_group_array(json_object('id', id, 'actorId', actor_id, 'payload', json(payload_json),
         'createdAt', created_at, 'unread', json(CASE WHEN created_at > ${WATERMARK} THEN 'true' ELSE 'false' END)))
-      FROM (SELECT n.id, n.actor_id, n.payload_json, n.created_at FROM notifications n
-        WHERE ${VISIBLE} AND n.kind IN ('lotto', 'speetto', 'admin')
-          AND n.created_at > ? AND n.created_at <= ? AND (n.actor_id IS NULL OR n.actor_id != ?)
-        ORDER BY n.created_at DESC, n.id DESC LIMIT ?)) AS recent`)
+      FROM (SELECT * FROM (SELECT n.id, n.actor_id, n.payload_json, n.created_at FROM notifications n
+          WHERE ${VISIBLE} AND n.kind IN ('lotto', 'speetto', 'admin')
+            AND n.created_at > ? AND n.created_at <= ? AND (n.actor_id IS NULL OR n.actor_id != ?)
+          ORDER BY n.created_at DESC, n.id DESC LIMIT ?)
+        UNION ALL
+        SELECT * FROM (SELECT n.id, n.actor_id, n.payload_json, n.created_at FROM notifications n
+          WHERE n.user_id = ? AND n.kind = 'achievement' AND n.created_at > ? AND n.created_at <= ?
+          ORDER BY n.created_at DESC, n.id DESC LIMIT ?)
+        ORDER BY created_at DESC, id DESC)) AS recent`)
     .bind(userId, userId, NOTIFICATION_RULES.unreadCap, userId,
-      userId, new Date(now.getTime() - NOTIFICATION_RULES.toastMs).toISOString(), now.toISOString(), userId,
-      NOTIFICATION_RULES.recentLimit)
+      userId, since, until, userId, NOTIFICATION_RULES.recentLimit,
+      userId, since, until, NOTIFICATION_RULES.recentLimit)
     .first<{ unread: number; recent: string }>();
   return { unread: row?.unread ?? 0, recent: JSON.parse(row?.recent ?? '[]') as AppNotification[] };
 }

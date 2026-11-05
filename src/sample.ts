@@ -2,7 +2,7 @@ import { ATTENDANCE_RULES, CATCHMIND_RULES, GAME_RULES, PREDICTION_REWARDS, KUJI
 import { defaultPredictionRules, predictionPointsForRules } from "../shared/game-settings";
 import type { PredictionRules } from "../shared/admin";
 import { defaultCharacter } from "../shared/characters";
-import type { AttendanceState, GameHistoryRound, GameId, GameResult, GameState, LedgerEntry, PhotoMetadata } from "../shared/types";
+import type { AttendanceState, GameHistoryRound, GameId, GameResult, GameState, LedgerEntry } from "../shared/types";
 import type { ArtKey } from "./components/UI";
 
 // Unimplemented games remain preview-only; prediction rewards use the shared rules.
@@ -95,11 +95,6 @@ export const previewGold = 12480;
 
 /** The preview's player also demonstrates the luck author's photo upload. */
 export const previewViewer = (_id: GameId) => "yeseo";
-/** A labeled local illustration for published preview evidence, with no API read. */
-function previewLuckPhoto(answer: string): PhotoMetadata {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480"><rect width="720" height="480" rx="28" fill="#eee8fc"/><rect x="145" y="40" width="430" height="400" rx="24" fill="#fff9ee"/><text x="360" y="105" text-anchor="middle" fill="#7c7383" font-family="sans-serif" font-size="20">미리보기 · 오늘의 행운</text><text x="360" y="280" text-anchor="middle" fill="#3a3340" font-family="sans-serif" font-size="120" font-weight="700">${answer}</text><text x="360" y="350" text-anchor="middle" fill="#7c7383" font-family="sans-serif" font-size="22">점</text><circle cx="195" cy="370" r="16" fill="#8fd9c0"/><circle cx="525" cy="125" r="13" fill="#ffd866"/></svg>`;
-  return { url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, version: 1 };
-}
 /**
  * Prediction rounds shown to the logged-out preview, fixed to the design's
  * frames: 기상시간 and 행운 점수 open (2a, 2b), 퇴근시간 revealed (2c).
@@ -171,7 +166,6 @@ export function previewHistory(id: GameId): GameHistoryRound[] {
   return [1, 2, 4].map((days, i) => ({
     roundDate: new Date(Date.now() + 9 * 60 * 60 * 1000 - days * 86_400_000).toISOString().slice(0, 10),
     answer,
-    photo: id === "luck" ? previewLuckPhoto(answer) : null,
     results: previewResults(id, answer, i === 1 ? [values[0], values[0]] : values),
   }));
 }

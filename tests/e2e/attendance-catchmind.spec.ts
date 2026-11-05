@@ -51,7 +51,7 @@ async function capture(page: Page, mode: string, state: string, width: number, i
   await page.evaluate(() => document.fonts.ready);
   await expect(page.locator('.fx-toast')).toHaveCount(0);
   if (!await page.getByRole('dialog').count()) {
-    for (let i = 0; i < 5 && await page.locator('.announcement-banner').count(); i++) await page.locator('.announcement-banner').click();
+    for (let i = 0; i < 5 && await page.locator('.announcement-banner').count(); i++) await page.locator('.announcement-close').click();
   }
   for (const img of await page.locator('.cm-gallery-tile img, .cm-previous-open img').all()) await img.scrollIntoViewIfNeeded();
   await page.evaluate(() => Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity)

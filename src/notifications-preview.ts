@@ -6,6 +6,8 @@ const MINUTE = 60_000;
 function seed(viewerId: string, now: Date): AppNotification[] {
   const at = (minutes: number) => new Date(now.getTime() - minutes * MINUTE).toISOString();
   return [
+    { id: 7, actorId: viewerId, createdAt: at(1), unread: true,
+      payload: { kind: 'achievement', key: 'welcome', periodKey: '' } },
     { id: 6, actorId: null, createdAt: at(3), unread: true,
       payload: { kind: 'admin', title: '이번 주 토요일은 쉬어요', body: '기상시간 맞히기는 일요일에 다시 열려요.' } },
     { id: 5, actorId: viewerId, createdAt: at(40), unread: true,

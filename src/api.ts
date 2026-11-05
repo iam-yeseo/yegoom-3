@@ -11,7 +11,8 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput,
-  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse, NotificationsResponse, NotificationSummary } from "../shared/types";
+  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse, NotificationsResponse, NotificationSummary,
+  AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
 import type { RankingPeriod } from "../shared/ranking-periods";
 import type { StockDetailView, StockMarketView, StockNewsPage, StockTradeInput, StockTradeResponse, StockUnchanged } from "../shared/stock-types";
 import type { ArtKey } from "../shared/characters";
@@ -108,6 +109,9 @@ export const api = {
     body: JSON.stringify({ roundDate }),
   }),
   bootstrap: () => request<BootstrapResponse>("/bootstrap"),
+  achievements: () => request<AchievementsResponse>("/achievements"),
+  claimAchievement: (input: AchievementClaimInput) => request<AchievementsResponse>("/achievements/claim", { method: "POST", body: JSON.stringify(input) }),
+  achievementEvent: (input: AchievementEventInput) => request<AchievementsResponse>("/achievements/events", { method: "POST", body: JSON.stringify(input) }),
   notifications: (before?: string) =>
     request<NotificationsResponse>(`/notifications${before ? `?before=${encodeURIComponent(before)}` : ""}`),
   ranking: (period: RankingPeriod, before?: string) => request<RankingResponse>(`/ranking?period=${period}${before ? `&before=${encodeURIComponent(before)}` : ""}`),
