@@ -145,7 +145,8 @@ for (const [width, username, motion] of [[390, 'min', 'no-preference'], [560, 's
     await gift(page).getByRole('button', { name: '수령하기', exact: true }).click();
     const receipt: LaunchGiftResponse = await (await receiptPromise).json();
     expect(receipt.awarded).toBe(true);
-    expect(receipt.inventory).toEqual({ lottoTickets: before.inventory.lottoTickets + 5, speettoTickets: before.inventory.speettoTickets + 5 });
+    expect(receipt.inventory).toEqual({ lottoTickets: before.inventory.lottoTickets + 5,
+      speettoTickets: before.inventory.speettoTickets + 5, tagTickets: before.inventory.tagTickets });
     await expect(gift(page).getByRole('status')).toHaveText('선물을 받았어요');
     await screenshot(page, 'authenticated', 'gift-after', width, info);
     await gift(page).getByRole('button', { name: '확인', exact: true }).click();
