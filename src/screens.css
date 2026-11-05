@@ -1229,6 +1229,17 @@
 .ranking-rules strong {
   color: var(--text);
 }
+.ranking-rules-projection {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #f3eee8;
+  font-size: 13px;
+  color: #7c7383;
+  word-break: keep-all;
+}
+.ranking-rules-projection strong {
+  color: #e0644e;
+}
 
 /* Attendance */
 .attendance-hero {

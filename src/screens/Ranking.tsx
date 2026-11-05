@@ -5,6 +5,7 @@ import { api } from "../api";
 import { formatDateTime } from "../format";
 import { previewRanking } from "../ranking-preview";
 import { RANKING_RULES, type RankingPeriod } from "../../shared/ranking-periods";
+import { RANKING_REWARDS, multiplierLabel, rankingReward, type RewardPeriod } from "../../shared/ranking-rewards";
 import type { RankingHistoryEntry, RankingResponse } from "../../shared/types";
 import { kstParts } from "../sample";
 import { anim, confetti, dropIn, reduced, tween } from "../motion";
@@ -168,19 +169,26 @@ function ScoreHistory({ entries, nextBefore, loading, onMore }: {
   </section>;
 }
 
-/** The reward rules as decided so far: weekly ranking gold is not paid yet
- * (docs/plan-v2.md "보류 사항", docs/decisions.md §주간 순위), so the card says so
- * instead of showing an amount. Add the amounts here once they are set. */
-function RankingRewards() {
+/** Every number comes from the shared reward rules, so the card cannot drift
+ * from what the settlement job actually pays. */
+const gold = (value: number) => `${value.toLocaleString("ko-KR")}G`;
+const rateLine = (period: RewardPeriod) =>
+  RANKING_REWARDS[period].multipliers.map((value, index) => `${index + 1}위 ×${value}`).join(" · ");
+const floorLine = (period: RewardPeriod) =>
+  RANKING_REWARDS[period].minimums.map((value, index) => `${index + 1}위 ${gold(value)}`).join(" · ");
+
+function RankingRewards({ period, mine }: { period: RankingPeriod; mine: { rank: number; score: number } | null }) {
+  const reward = period !== "day" && mine ? rankingReward(period, mine.rank, mine.score) : 0;
   return <details className="card ranking-rules">
     <summary>점수와 보상 규칙</summary>
     <ul>
       <li>주간 점수는 월요일부터 일요일(한국 시간)까지 모아 순위를 정하고, 다음 주에 0점부터 새로 시작해요. 골드 잔액은 그대로 남아요.</li>
-      <li>점수가 같으면 공동 순위예요. 1위가 두 명이면 그다음 사람은 3위예요.</li>
-      <li><strong>주간 순위 보상 골드는 아직 지급하지 않아요.</strong> 지금은 점수와 순위만 겨뤄요.</li>
-      <li>순위별 보상 액수와 월말 랭킹 추가 보상은 정해지면 이 자리에 적어요.</li>
+      <li><strong>주간 보상은 그 주 점수 × 순위 배수({rateLine("week")})</strong>를 월요일 0시에 골드로 받아요. 점수가 적어도 {floorLine("week")}는 받아요.</li>
+      <li><strong>월간 보상은 그 달 점수 × 순위 배수({rateLine("month")})</strong>를 매월 1일 0시에 받아요. 최소 {floorLine("month")}예요.</li>
+      <li>점수가 같으면 공동 순위예요. 공동 1위 두 명은 둘 다 {multiplierLabel("week", 1)}를 받고, 그다음 사람은 3위가 돼요.</li>
       <li>골드는 출석·게임 참여·1등 보상과 상점·주식에서 오고 가며, 점수와 따로 쌓여요. 주식 수익은 골드만 늘려요.</li>
     </ul>
+    {reward > 0 && <p className="ranking-rules-projection">지금 순위 그대로면 <strong>{gold(reward)}</strong>를 받아요.</p>}
   </details>;
 }
 
@@ -227,6 +235,8 @@ export function Ranking({
   }))) : null, [lastWeek, displayNameOf]);
   // Second place on the left, first in the middle, third on the right.
   const podium = [table[1], table[0], table[2]].filter(Boolean);
+  const viewer = table.find(row => row.username === me);
+  const myStanding = viewer ? { rank: viewer.rank, score: viewer.weeklyScore } : null;
   const buckets = loaded?.buckets ?? [];
   const max = Math.max(...buckets.map(bucket => bucket.score), 1);
   const lastWeekDate = new Date(now - 7 * 86_400_000);
@@ -329,7 +339,7 @@ export function Ranking({
             ))}
           </section>
         )}
-        <RankingRewards />
+        <RankingRewards period={period} mine={myStanding} />
       </div>
     </div>
   );

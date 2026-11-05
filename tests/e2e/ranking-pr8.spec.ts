@@ -48,6 +48,16 @@ test('preview ranking toggles day, week and month, remembers the choice and page
   await expect(page.locator('.ranking-table .list-row > strong')).toHaveText(['siwon', 'yeseo', 'min']);
   await expect(page.locator('.daily-card h2')).toHaveText('요일별 점수');
   await expect(page.locator('.daily-bars > div')).toHaveCount(7);
+  // The score and reward rules sit at the bottom, folded shut by default.
+  const rules = page.locator('details.ranking-rules');
+  await expect(rules.locator('summary')).toHaveText('점수와 보상 규칙');
+  await expect(rules.locator('ul')).toBeHidden();
+  await rules.locator('summary').click();
+  await expect(rules.locator('ul')).toBeVisible();
+  await expect(rules).toContainText('주간 보상은 그 주 점수 × 순위 배수(1위 ×5 · 2위 ×4 · 3위 ×3)');
+  await expect(rules).toContainText('월간 보상은 그 달 점수 × 순위 배수(1위 ×2 · 2위 ×1.5 · 3위 ×1)');
+  // The preview viewer sits second with 340 points: 340 × 4 = 1,360G.
+  await expect(rules.locator('.ranking-rules-projection')).toContainText('1,360G');
   // Photos (or the chosen character) sit next to every ranking name; no "님" in rankings.
   await expect(page.locator('.podium-block > .avatar')).toHaveCount(3);
   await expect(page.locator('.ranking-table .avatar')).toHaveCount(3);
@@ -67,6 +77,8 @@ test('preview ranking toggles day, week and month, remembers the choice and page
   await expect(page.locator('h1').first()).toContainText('일간 랭킹');
   await expect(page.locator('.daily-card h2')).toHaveText('게임별 점수');
   await expect(page.locator('.ranking-week')).toContainText('오늘 종료까지');
+  // Daily rankings pay nothing, so the projection is not shown at all.
+  await expect(page.locator('.ranking-rules-projection')).toHaveCount(0);
   await capture(page, 'preview-day', info);
   await tabs.getByRole('tab', { name: '월간' }).click();
   await expect(page.locator('h1').first()).toContainText('월간 랭킹');
@@ -74,13 +86,8 @@ test('preview ranking toggles day, week and month, remembers the choice and page
   await expect(page.locator('.daily-bars small')).toHaveText(['1주차', '2주차', '3주차', '4주차', '5주차']);
   await capture(page, 'preview-month', info);
 
-  // The score and reward rules close every period, folded shut by default.
-  const rules = page.locator('details.ranking-rules');
-  await expect(rules.locator('summary')).toHaveText('점수와 보상 규칙');
-  await expect(rules.locator('ul')).toBeHidden();
-  await rules.locator('summary').click();
-  await expect(rules.locator('ul')).toBeVisible();
-  await expect(rules).toContainText('주간 순위 보상 골드는 아직 지급하지 않아요.');
+  // The projection follows the chosen period and stays off for a single day.
+  await expect(page.locator('.ranking-rules-projection')).toHaveText(/^지금 순위 그대로면 [\d,]+G를 받아요\.$/);
 
   await page.reload();
   await expect(page.getByRole('tablist', { name: '랭킹 기간' }).getByRole('tab', { name: '월간' })).toHaveAttribute('aria-selected', 'true');

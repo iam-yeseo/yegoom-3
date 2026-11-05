@@ -20,6 +20,7 @@ import { PROFILE_PHOTO, LUCK_PHOTO } from '../shared/profile';
 import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, getLuckPhotoMetadata, luckPhotoUrl } from './luck-photos';
 import { readAnnouncements } from './announcements';
 import { maintainDatabase } from './maintenance';
+import { settleDueRankingRewards } from './ranking-rewards';
 import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockSecret, tradeStock } from './stocks';
 import { aiWriters, isAiProvider, readAiStatus, saveAiSettings } from './stock-ai';
 import { FEATURES } from '../shared/balance';
@@ -800,7 +801,14 @@ export default {
    * market's ticks while it is open (reads also catch up if a run is missed). */
   scheduled(event: ScheduledController, env: Env, context: ExecutionContext) {
     const at = new Date(event.scheduledTime);
-    if (kstTime(at) < '00:10:00') context.waitUntil(maintainDatabase(env.DB, at));
+    if (kstTime(at) < '00:10:00') {
+      context.waitUntil(maintainDatabase(env.DB, at));
+      // Pays the week that ended last night and, on the first of a month, that
+      // month. A missed night is caught up by the next run within the window.
+      context.waitUntil(settleDueRankingRewards(env.DB, at).then(() => undefined, error => {
+        console.error('Ranking reward settlement failed', error instanceof Error ? error.name : 'UnknownError');
+      }));
+    }
     if (FEATURES.stock && env.STOCK_SEED_SECRET && stockCronDue(at.getTime())) {
       const writers = aiWriters({ anthropic: env.ANTHROPIC_API_KEY, openai: env.OPENAI_API_KEY });
       context.waitUntil(runStockCron(env.DB, env.STOCK_SEED_SECRET, writers, at.getTime()).then(() => undefined, error => {

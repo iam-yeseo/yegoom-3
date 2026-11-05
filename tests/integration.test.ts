@@ -21,6 +21,8 @@ import { readAnnouncements } from '../worker/announcements';
 import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
 import { maintainDatabase } from '../worker/maintenance';
+import { settleDueRankingRewards } from '../worker/ranking-rewards';
+import { mondayOf } from '../shared/ranking-periods';
 import { rankSummary, standings } from '../src/ranking';
 import type { CatchmindGalleryResponse, RankingResponse, SlotResponse, TagResponse } from '../shared/types';
 import { TAG_TEXTS } from '../shared/nickname-tags';
@@ -1030,6 +1032,89 @@ describe('Worker and D1 integration', () => {
       }
       console.log(`Claw authenticated request metrics: ${JSON.stringify(measurements)}`);
     }, 30000);
+  });
+
+  describe('ranking reward settlement', () => {
+    const KST = '+09:00';
+    async function giveScore(userId: string, amount: number, date: string) {
+      await db.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
+        VALUES (?, ?, 'score', ?, '기상시간 맞히기', ?, ?, ?)`)
+        .bind(`score-${userId}-${date}-${amount}`, userId, amount, `score:wake:${date}:${userId}`,
+          `${date}T01:00:00.000Z`, mondayOf(date)).run();
+    }
+    const payouts = async (prefix: string) => (await db.prepare(
+      `SELECT user_id, amount, reason FROM ledger WHERE reference LIKE ? ORDER BY user_id`)
+      .bind(`${prefix}%`).all<{ user_id: string; amount: number; reason: string }>()).results;
+    const settled = async () => (await db.prepare('SELECT period, key FROM ranking_settlements ORDER BY period, key')
+      .all<{ period: string; key: string }>()).results;
+
+    it('pays the finished week by score and rank, keeps the floor and only pays once', async () => {
+      await giveScore('min', 100, '2026-11-03');
+      await giveScore('siwon', 80, '2026-11-05');
+      // The week after this one must not leak into the payout.
+      await giveScore('siwon', 500, '2026-11-10');
+      await settleDueRankingRewards(db, new Date(`2026-11-09T00:01:00${KST}`));
+      expect(await payouts('rank:week:2026-11-02:')).toEqual([
+        { user_id: 'min', amount: 500, reason: '주간 랭킹 보상' },      // 1위 100 × 5
+        { user_id: 'siwon', amount: 320, reason: '주간 랭킹 보상' },    // 2위 80 × 4
+        { user_id: 'yeseo', amount: 100, reason: '주간 랭킹 보상' },    // 3위 0 → 최소 보장
+      ]);
+      expect(await settled()).toEqual([{ period: 'week', key: '2026-11-02' }]);
+      // Weeks played before rewards existed are never paid.
+      expect(await payouts('rank:week:2026-10-26:')).toEqual([]);
+      await settleDueRankingRewards(db, new Date(`2026-11-09T00:11:00${KST}`));
+      await settleDueRankingRewards(db, new Date(`2026-11-10T00:01:00${KST}`));
+      expect(await payouts('rank:week:2026-11-02:')).toHaveLength(3);
+      expect(await settled()).toEqual([{ period: 'week', key: '2026-11-02' }]);
+    });
+
+    it('gives joint first place both top multipliers and moves the next player to third', async () => {
+      await giveScore('min', 60, '2026-11-03');
+      await giveScore('siwon', 60, '2026-11-04');
+      await giveScore('yeseo', 10, '2026-11-05');
+      await settleDueRankingRewards(db, new Date(`2026-11-09T00:01:00${KST}`));
+      expect(await payouts('rank:week:2026-11-02:')).toEqual([
+        { user_id: 'min', amount: 300, reason: '주간 랭킹 보상' },      // 공동 1위 60 × 5
+        { user_id: 'siwon', amount: 300, reason: '주간 랭킹 보상' },    // 공동 1위 60 × 5
+        { user_id: 'yeseo', amount: 100, reason: '주간 랭킹 보상' },    // 3위 10 × 3 → 최소 보장
+      ]);
+    });
+
+    it('settles the month on the first, counting every week of that month, and catches up missed weeks', async () => {
+      await giveScore('min', 100, '2026-11-03');
+      await giveScore('min', 300, '2026-11-24');
+      await giveScore('siwon', 200, '2026-11-17');
+      await settleDueRankingRewards(db, new Date(`2026-12-01T00:05:00${KST}`));
+      expect(await payouts('rank:month:2026-11:')).toEqual([
+        { user_id: 'min', amount: 800, reason: '월간 랭킹 보상' },      // 1위 400 × 2
+        { user_id: 'siwon', amount: 400, reason: '월간 랭킹 보상' },    // 2위 200 × 1.5 = 300 → 최소 보장
+        { user_id: 'yeseo', amount: 200, reason: '월간 랭킹 보상' },    // 3위 0 → 최소 보장
+      ]);
+      // The same run catches up every finished week of that month, including the
+      // quiet ones, where everyone ties on zero and takes the first-place floor.
+      expect((await settled()).map(row => `${row.period}:${row.key}`))
+        .toEqual(['month:2026-11', 'week:2026-11-02', 'week:2026-11-09', 'week:2026-11-16', 'week:2026-11-23']);
+      expect(await payouts('rank:week:2026-11-09:')).toEqual([
+        { user_id: 'min', amount: 300, reason: '주간 랭킹 보상' },
+        { user_id: 'siwon', amount: 300, reason: '주간 랭킹 보상' },
+        { user_id: 'yeseo', amount: 300, reason: '주간 랭킹 보상' },
+      ]);
+      expect(await payouts('rank:week:2026-11-16:')).toEqual([
+        { user_id: 'min', amount: 200, reason: '주간 랭킹 보상' },      // 0점 공동 2위 최소 보장
+        { user_id: 'siwon', amount: 1000, reason: '주간 랭킹 보상' },   // 1위 200 × 5
+        { user_id: 'yeseo', amount: 200, reason: '주간 랭킹 보상' },    // 공동 2위라 3위 자리는 비어요
+      ]);
+    });
+
+    it('leaves administrators and suspended accounts out of the payout', async () => {
+      await db.prepare("UPDATE users SET active = 0 WHERE username = 'yeseo'").run();
+      await giveScore('min', 100, '2026-11-03');
+      await settleDueRankingRewards(db, new Date(`2026-11-09T00:01:00${KST}`));
+      expect(await payouts('rank:week:2026-11-02:')).toEqual([
+        { user_id: 'min', amount: 500, reason: '주간 랭킹 보상' },      // 1위 100 × 5
+        { user_id: 'siwon', amount: 200, reason: '주간 랭킹 보상' },    // 2위 0 → 최소 보장
+      ]);
+    });
   });
 
   describe('nickname tags', () => {
