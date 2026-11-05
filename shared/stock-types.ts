@@ -18,7 +18,7 @@ export interface MarketClock {
   /** When prices next move (the next 10-minute tick), for polling. */
   nextTickAt: string | null;
 }
-export type StockNewsKind = 'news' | 'disclosure' | 'rumor' | 'confirm' | 'denied' | 'game' | 'mosquito' | 'whale' | 'close' | 'weekly';
+export type StockNewsKind = 'news' | 'disclosure' | 'rumor' | 'confirm' | 'denied' | 'game' | 'mosquito' | 'whale' | 'close' | 'comment' | 'weekly';
 export interface StockNewsItem {
   id: string; ticker: Ticker | null; kind: StockNewsKind;
   headline: string; body: string; publishAt: string;
@@ -33,6 +33,8 @@ export interface StockTradeView {
 export interface Candle { date: string; open: number; high: number; low: number; close: number }
 export interface StockMarketView {
   market: MarketClock; version: string; stocks: StockQuote[]; news: StockNewsItem[];
+  /** While the market is closed: the latest close summary, the viewer's own comment and (Fridays) the weekly report. */
+  closing: { summary: StockNewsItem | null; comment: StockNewsItem | null; weekly: StockNewsItem | null } | null;
   gold: number; canTrade: boolean; serverTime: string;
 }
 export interface StockUnchanged { unchanged: true; version: string; market: MarketClock; serverTime: string }

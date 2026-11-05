@@ -45,7 +45,7 @@ export function gameArticle(game: GameId, answer: string, author: string, usual:
   const up = effectBp > 0, flat = effectBp === 0;
   const mood = flat ? '보합' : up ? '들썩' : '주춤';
   if (game === 'luck') {
-    return { headline: `[속보] 오늘의 행운 ${answer}점, 예도어 ${mood}`,
+    return { headline: `[속보] 행운 점수 ${answer}점, 예도어 ${mood}`,
       body: flat ? `${author}님의 행운이 딱 중간이라 예도어 연습생들도 평소처럼 연습했다.`
         : up ? `${author}님의 행운 기운이 예도어 연습실까지 번졌다. 신곡 반응이 심상치 않다는 후문이다.`
           : `${author}님의 행운이 잠시 쉬어 가는 날, 예도어 연습실 거울에도 김이 서렸다.` };

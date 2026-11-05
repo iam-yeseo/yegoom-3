@@ -195,3 +195,48 @@ em.warning {
   font-size: 12.5px;
   color: #ada4b3;
 }
+
+.stock-closing {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.closing-label {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #eee8fc;
+  color: #6a4fb8;
+  font-size: 12px;
+  font-weight: 800;
+}
+.stock-closing.weekly .closing-label {
+  background: #fff4cc;
+  color: #94700a;
+}
+.stock-closing h3 {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.4;
+  word-break: keep-all;
+}
+.stock-closing p {
+  font-size: 14px;
+  line-height: 1.55;
+  color: #5c5162;
+  word-break: keep-all;
+}
+.stock-closing .closing-comment {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8f4f0;
+  color: #3a3340;
+  font-weight: 600;
+}
+.stock-summary:has(> div:nth-child(3)) {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+.whale-label {
+  color: #2a7f9e;
+}

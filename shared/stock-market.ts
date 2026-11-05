@@ -1,7 +1,7 @@
 import { STOCKS, STOCK_RULES, stockInfo, type Ticker } from './stocks';
 import { addTradingDays, isTradingDay, kstDateOf, kstTimestamp, nextDate, tickTimes, tradesOn, TICKS_PER_DAY } from './market-calendar';
 import { applyEffect, normalFrom, seededRandom, stepPrice } from './stock-engine';
-import { disclosureArticle, newsArticle, type DisclosureKind } from './stock-news-templates';
+import { disclosureArticle, newsArticle, rumorArticle, type DisclosureKind } from './stock-news-templates';
 import { mosquitoArticle, STOCK_GAME_RULES } from './stock-games';
 
 /** The market simulation shared by the Worker (HMAC day seeds, D1 state) and the
@@ -21,7 +21,7 @@ export interface MarketTick { at: number; date: string; index: number; ticker?: 
 /** A price event decided elsewhere (game results; rumors in PR 12). Its article,
  * if any, is published when the price moves. */
 export interface PendingEvent { id: string; ticker: Ticker; effectBp: number; applyAt: number; kind?: string; headline?: string; body?: string }
-export type NewsKind = 'news' | 'disclosure' | 'game' | 'mosquito';
+export type NewsKind = 'news' | 'disclosure' | 'game' | 'mosquito' | 'rumor' | 'confirm' | 'denied';
 export interface NewsRecord {
   id: string; ticker: Ticker; kind: NewsKind; publishAt: number;
   headline: string; body: string; effectBp: number | null;
@@ -129,6 +129,50 @@ export function scheduledMosquito(seed: string, date: string): ScheduledMosquito
   });
 }
 
+export interface ScheduledRumor { id: string; ticker: Ticker; index: number; effectBp: number; outcomeId: string; outcomeIndex: number;
+  outcomeBp: number; truth: boolean; variant: number }
+/** 1–2 rumors (찌라시) a day: ±2–3% when they spread, then 2–4 hours later a
+ * confirmation (true 60%: ±4–8% the same way) or a denial (undo the rumor plus
+ * 1–2% the other way). Decided together so both articles tell one story. */
+export function scheduledRumors(seed: string, date: string): ScheduledRumor[] {
+  const random = seededRandom(`${seed}|rumor`);
+  const { perDay: [min, max], truthRate, spread, confirm, deny, delayTicks: [early, late] } = STOCK_RULES.rumor;
+  const count = min + Math.floor(random() * (max - min + 1));
+  const out: ScheduledRumor[] = [];
+  for (let n = 0; n < count; n++) {
+    const stock = STOCKS[Math.floor(random() * STOCKS.length)]!;
+    const index = 1 + Math.floor(random() * (TICKS_PER_DAY - 2 - late));
+    const delay = early + Math.floor(random() * (late - early + 1));
+    const sign = random() < 0.5 ? -1 : 1;
+    const truth = random() < truthRate;
+    const effectBp = Math.round(sign * (spread[0] + random() * (spread[1] - spread[0])) * 10_000);
+    const outcomeBp = truth ? Math.round(sign * (confirm[0] + random() * (confirm[1] - confirm[0])) * 10_000)
+      : -effectBp - Math.round(sign * (deny[0] + random() * (deny[1] - deny[0])) * 10_000);
+    const variant = Math.floor(random() * 1000);
+    if (!tradesOn(stock.ticker, date)) continue;
+    out.push({ id: `rumor:${date}:${n}`, ticker: stock.ticker, index, effectBp, truth, outcomeBp, variant,
+      outcomeId: `${truth ? 'confirm' : 'denied'}:${date}:${n}`, outcomeIndex: index + delay });
+  }
+  return out;
+}
+/** Every price-moving item scheduled for a day, with its template article. The
+ * AI morning batch (PR 12) rewrites these articles before they are published. */
+export interface DayItem { id: string; ticker: Ticker; index: number; effectBp: number; kind: 'news' | 'mosquito' | 'rumor' | 'confirm' | 'denied'; headline: string; body: string; relatedId?: string }
+export function dayItems(seed: string, date: string): DayItem[] {
+  const items: DayItem[] = scheduledNews(seed, date).map(item => ({ id: item.id, ticker: item.ticker, index: item.index, effectBp: item.effectBp, kind: 'news',
+    ...newsArticle(item.ticker, item.effectBp > 0, item.variant) }));
+  for (const hunt of scheduledMosquito(seed, date)) {
+    items.push({ id: hunt.id, ticker: 'YEGM', index: hunt.index, effectBp: hunt.effectBp, kind: 'mosquito', ...mosquitoArticle(hunt.success, hunt.variant) });
+  }
+  for (const rumor of scheduledRumors(seed, date)) {
+    const up = rumor.effectBp > 0;
+    items.push({ id: rumor.id, ticker: rumor.ticker, index: rumor.index, effectBp: rumor.effectBp, kind: 'rumor', ...rumorArticle(rumor.ticker, 'rumor', up, rumor.variant) });
+    items.push({ id: rumor.outcomeId, ticker: rumor.ticker, index: rumor.outcomeIndex, effectBp: rumor.outcomeBp, kind: rumor.truth ? 'confirm' : 'denied',
+      relatedId: rumor.id, ...rumorArticle(rumor.ticker, rumor.truth ? 'confirm' : 'denied', up, rumor.variant) });
+  }
+  return items.filter(item => tradesOn(item.ticker, date));
+}
+
 function disclosure(ticker: Ticker, kind: DisclosureKind, date: string, at: number): NewsRecord {
   return { id: `disclosure:${kind}:${ticker}:${date}`, ticker, kind: 'disclosure', publishAt: at, effectBp: null, ...disclosureArticle(ticker, kind) };
 }
@@ -139,18 +183,15 @@ export function advanceMarket(input: readonly StockRow[], ticks: readonly Market
   const rows = input.map(row => ({ ...row }));
   const result: AdvanceResult = { rows, ticks: [], daily: [], news: [], appliedEvents: [], delisted: [] };
   const applied = new Set<string>();
-  const newsOf = new Map<string, ScheduledNews[]>();
-  const mosquitoOf = new Map<string, ScheduledMosquito[]>();
+  const itemsOf = new Map<string, DayItem[]>();
   const eventNews = (event: PendingEvent, at: number) => {
     if (event.headline && event.body) result.news.push({ id: `event:${event.id}`, ticker: event.ticker, kind: event.kind === 'mosquito' ? 'mosquito' : 'game',
       publishAt: at, headline: event.headline, body: event.body, effectBp: event.effectBp });
   };
   for (const tick of ticks) {
     const seed = seedOf(tick.date);
-    let todays = newsOf.get(tick.date);
-    if (!todays) newsOf.set(tick.date, todays = scheduledNews(seed, tick.date));
-    let hunts = mosquitoOf.get(tick.date);
-    if (!hunts) mosquitoOf.set(tick.date, hunts = scheduledMosquito(seed, tick.date));
+    let todays = itemsOf.get(tick.date);
+    if (!todays) itemsOf.set(tick.date, todays = dayItems(seed, tick.date));
     const closing = tick.index === TICKS_PER_DAY - 1;
     if (tick.index === -1) {
       // Event step: only the event's stock moves, at the publication instant.
@@ -181,9 +222,7 @@ export function advanceMarket(input: readonly StockRow[], ticks: readonly Market
         result.news.push(disclosure(row.ticker, 'relist', tick.date, tick.at));
       }
       const scheduled = todays.filter(item => item.ticker === row.ticker && item.index === tick.index);
-      const hunted = row.ticker === 'YEGM' ? hunts.filter(item => item.index === tick.index) : [];
-      const effect = (due.reduce((sum, event) => sum + event.effectBp, 0) + scheduled.reduce((sum, item) => sum + item.effectBp, 0)
-        + hunted.reduce((sum, item) => sum + item.effectBp, 0)) / 10_000;
+      const effect = (due.reduce((sum, event) => sum + event.effectBp, 0) + scheduled.reduce((sum, item) => sum + item.effectBp, 0)) / 10_000;
       if (tick.index === 0) {
         row.prevClose = row.price;
         row.price = applyEffect(row.price, row.prevClose, effect);
@@ -196,10 +235,7 @@ export function advanceMarket(input: readonly StockRow[], ticks: readonly Market
       }
       result.ticks.push({ ticker: row.ticker, at: tick.at, price: row.price });
       for (const item of scheduled) {
-        result.news.push({ id: item.id, ticker: item.ticker, kind: 'news', publishAt: tick.at, effectBp: item.effectBp, ...newsArticle(item.ticker, item.effectBp > 0, item.variant) });
-      }
-      for (const item of hunted) {
-        result.news.push({ id: item.id, ticker: 'YEGM', kind: 'mosquito', publishAt: tick.at, effectBp: item.effectBp, ...mosquitoArticle(item.success, item.variant) });
+        result.news.push({ id: item.id, ticker: item.ticker, kind: item.kind, publishAt: tick.at, effectBp: item.effectBp, headline: item.headline, body: item.body });
       }
       for (const event of due) eventNews(event, tick.at);
       if (!closing) continue;

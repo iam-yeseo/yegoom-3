@@ -1,4 +1,8 @@
 import type { MarketHoliday } from './stock-types';
+export interface AdminStockState {
+  ai: { enabled: boolean; keyConfigured: boolean; today: { calls: number; costMicroUsd: number }; month: { calls: number; costMicroUsd: number } };
+  news: { id: string; ticker: string | null; kind: string; headline: string; publishAt: string; source: 'ai' | 'template'; hidden: boolean }[];
+}
 import type { GameId } from './types';
 
 export interface PredictionRules {
@@ -40,5 +44,7 @@ export interface AdminState {
   catchmindWordsRemaining: number;
   /** Administrator-added market holidays from today on. */
   marketHolidays: MarketHoliday[];
+  /** Stock AI switch and spend, and recently published news (never future news). */
+  stock: AdminStockState;
   serverTime: string;
 }

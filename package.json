@@ -23,6 +23,7 @@
     "launch:profiles:preflight:remote": "node scripts/launch-profile-preflight.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.5.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

@@ -51,6 +51,9 @@ export const STOCK_RULES = {
   /** Scheduled template news per trading day, and their effect range (fraction) by class. */
   newsPerDay: [4, 7] as const,
   newsEffect: { stable: [0.01, 0.04], normal: [0.02, 0.06], wild: [0.03, 0.10] } as Record<Volatility, readonly [number, number]>,
+  /** 찌라시: spreads at ±2–3%; 2–4 hours (12–24 ticks) later true 60% (±4–8% the same
+   * way) or denied (the rumor undone plus 1–2% the other way). */
+  rumor: { perDay: [1, 2], truthRate: 0.6, spread: [0.02, 0.03], confirm: [0.04, 0.08], deny: [0.01, 0.02], delayTicks: [12, 24] } as const,
   /** YEGM trades only on this weekday (0 = Sunday … 3 = Wednesday) in December–February. */
   yegmWinterWeekday: 3,
   /** Free-plan budget: ticks are kept this long, daily candles forever. */

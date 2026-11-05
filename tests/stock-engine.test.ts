@@ -28,7 +28,8 @@ describe('market calendar', () => {
     expect(addTradingDays('2026-11-05', 2, extra)).toBe('2026-11-10');
   });
   it('runs the stock Cron only on weekdays from the open through the close tick', () => {
-    expect(stockCronDue(at('2026-11-05', '08:50'))).toBe(false);
+    expect(stockCronDue(at('2026-11-05', '08:40'))).toBe(false);
+    expect(stockCronDue(at('2026-11-05', '08:50'))).toBe(true); // morning AI news
     expect(stockCronDue(at('2026-11-05', '09:00'))).toBe(true);
     expect(stockCronDue(at('2026-11-05', '18:00'))).toBe(true);
     expect(stockCronDue(at('2026-11-05', '18:10'))).toBe(false);

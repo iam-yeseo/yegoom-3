@@ -250,7 +250,7 @@ describe('stock market API', () => {
     expect(statements).toBeLessThanOrEqual(12);
     statements = 0;
     const view = await readStockMarket(counted, SECRET, { id: 'min', role: 'player', username: 'min' }, now) as StockMarketView;
-    expect(statements).toBe(7); // state + holidays + new game results + pending events, then holdings + news + gold
+    expect(statements).toBe(8); // state + holidays + new game results + pending events, then holdings + news + gold + closing
     statements = 0;
     expect(await readStockMarket(counted, SECRET, { id: 'min', role: 'player', username: 'min' }, now, view.version)).toMatchObject({ unchanged: true });
     expect(statements).toBe(4);
@@ -306,6 +306,46 @@ describe('stock market API', () => {
     const off = await market.request<StockDetailView>(kst('2026-11-06', '09:00') + 1000, 'siwon', '/api/stock/SIWN');
     expect(off.data.tradeBlock).toBeNull();
     await market.expectBalanced();
+  });
+
+  it('reports whale trades anonymously, at most once an hour per person and stock, with no price effect', async () => {
+    const market = await Market.create(yesterdayClose);
+    const now = kst('2026-11-05', '10:03');
+    const view = (await market.request<StockMarketView>(now, 'min', '/api/stock')).data;
+    const yegm = view.stocks.find(stock => stock.ticker === 'YEGM')!;
+    const buy = (requestId: string, quantity: number) => market.request<StockTradeResponse>(now, 'min', '/api/stock/trade', 'POST',
+      { requestId, ticker: 'YEGM', side: 'buy', quantity, expectedVersion: yegm.version });
+    expect((await buy('small', 10)).status).toBe(200);
+    expect((await buy('whale-1', 100)).status).toBe(200);
+    expect((await buy('whale-2', 60)).status).toBe(200);
+    const whales = (await market.db.prepare("SELECT headline, body, ticker, effect_bp FROM stock_news WHERE kind = 'whale'").all<{ headline: string; body: string; ticker: string; effect_bp: number | null }>()).results;
+    expect(whales).toHaveLength(1);
+    expect(whales[0]).toMatchObject({ headline: '익명의 큰손, 예굼 100주 매수', ticker: 'YEGM', effect_bp: null });
+    expect(`${whales[0]!.headline}${whales[0]!.body}`).not.toMatch(/min|민/);
+    const after = (await market.request<StockMarketView>(now, 'siwon', '/api/stock')).data;
+    expect(after.stocks.find(stock => stock.ticker === 'YEGM')!.price).toBe(yegm.price);
+    expect(after.news[0]).toMatchObject({ kind: 'whale' });
+  });
+
+  it('lets the administrator hide published news and switch AI news, never touching future news', async () => {
+    const market = await Market.create(yesterdayClose);
+    const now = kst('2026-11-05', '10:03');
+    await market.request(now, 'min', '/api/stock');
+    await market.db.prepare(`INSERT INTO stock_news (id, ticker, kind, publish_at, headline, body, source, created_at)
+      VALUES ('future-ai', 'YEGM', 'news', ?, '미래', '아직', 'ai', 'x'), ('news:2026-11-05:9', 'YEGM', 'news', ?, '공개됨', '본문', 'template', 'x')`).bind(now + 3_600_000, now - 60_000).run();
+    const admin = await market.request<AdminState>(now, 'admin', '/api/admin');
+    expect(admin.status, JSON.stringify(admin.data)).toBe(200);
+    expect(admin.data.stock.ai).toMatchObject({ enabled: true, keyConfigured: false, today: { calls: 0, costMicroUsd: 0 } });
+    expect(admin.data.stock.news.map(item => item.id)).not.toContain('future-ai');
+    const target = admin.data.stock.news[0]!;
+    const hidden = await market.request<AdminState>(now, 'admin', `/api/admin/stock/news/${encodeURIComponent(target.id)}`, 'PUT', { hidden: true });
+    expect(hidden.data.stock.news.find(item => item.id === target.id)!.hidden).toBe(true);
+    const page = await market.request<StockNewsPage>(now, 'min', '/api/stock/news');
+    expect(page.data.news.map(item => item.id)).not.toContain(target.id);
+    expect((await market.request(now, 'admin', '/api/admin/stock/news/future-ai', 'PUT', { hidden: true })).status).toBe(404);
+    expect((await market.request(now, 'min', `/api/admin/stock/news/${encodeURIComponent(target.id)}`, 'PUT', { hidden: false })).status).toBe(403);
+    const off = await market.request<AdminState>(now, 'admin', '/api/admin/stock/ai', 'PUT', { enabled: false });
+    expect(off.data.stock.ai.enabled).toBe(false);
   });
 
   it('returns 503 until the seed secret is configured', async () => {
