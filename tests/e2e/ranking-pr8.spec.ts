@@ -49,7 +49,7 @@ test('preview ranking toggles day, week and month, remembers the choice and page
   await expect(page.locator('.daily-card h2')).toHaveText('요일별 점수');
   await expect(page.locator('.daily-bars > div')).toHaveCount(7);
   // Photos (or the chosen character) sit next to every ranking name; no "님" in rankings.
-  await expect(page.locator('.podium-name .avatar')).toHaveCount(3);
+  await expect(page.locator('.podium-block > .avatar')).toHaveCount(3);
   await expect(page.locator('.ranking-table .avatar')).toHaveCount(3);
   await expect(page.locator('.ranking-table')).not.toContainText('님');
   await expect(page.locator('.podium')).not.toContainText('님');
@@ -73,6 +73,14 @@ test('preview ranking toggles day, week and month, remembers the choice and page
   await expect(page.locator('.daily-card h2')).toHaveText('주차별 점수');
   await expect(page.locator('.daily-bars small')).toHaveText(['1주차', '2주차', '3주차', '4주차', '5주차']);
   await capture(page, 'preview-month', info);
+
+  // The score and reward rules close every period, folded shut by default.
+  const rules = page.locator('details.ranking-rules');
+  await expect(rules.locator('summary')).toHaveText('점수와 보상 규칙');
+  await expect(rules.locator('ul')).toBeHidden();
+  await rules.locator('summary').click();
+  await expect(rules.locator('ul')).toBeVisible();
+  await expect(rules).toContainText('주간 순위 보상 골드는 아직 지급하지 않아요.');
 
   await page.reload();
   await expect(page.getByRole('tablist', { name: '랭킹 기간' }).getByRole('tab', { name: '월간' })).toHaveAttribute('aria-selected', 'true');

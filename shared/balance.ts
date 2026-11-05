@@ -40,7 +40,7 @@ export const ATTENDANCE_RULES = {
 /** date is the server's KST attendance day (the local KST day in previews). */
 export function attendanceTickets(date: string): Inventory {
   const active = date >= ATTENDANCE_RULES.ticketsFrom;
-  return { lottoTickets: active ? ATTENDANCE_RULES.lottoTickets : 0, speettoTickets: active ? ATTENDANCE_RULES.speettoTickets : 0 };
+  return { lottoTickets: active ? ATTENDANCE_RULES.lottoTickets : 0, speettoTickets: active ? ATTENDANCE_RULES.speettoTickets : 0, tagTickets: 0 };
 }
 export function attendanceRewardLabel(gold: number, date: string): string {
   const tickets = attendanceTickets(date);
@@ -85,7 +85,9 @@ export const LOTTO_RULES = {
 } as const;
 export const SHOP_HISTORY_DAYS = 7;
 /** Nickname tags: buying draws one tag immediately (grades and phrases in shared/nickname-tags.ts). */
-export const NICKNAME_TAG_RULES = { price: 300, dailyLimit: 5 } as const;
+/** `welcomeTickets` is the one-off grant every active player received in
+ * migration 0018; a draw spends a ticket first and only then gold. */
+export const NICKNAME_TAG_RULES = { price: 300, dailyLimit: 5, welcomeTickets: 5 } as const;
 export const SLOT_RULES = {
   price: 500, jackpotPercent: 7, jackpotPrize: 2000,
   symbols: ['banana', 'apple', 'strawberry', 'grape', 'watermelon', 'chamoe', 'seven'],

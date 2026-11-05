@@ -83,6 +83,3 @@
 .tag-tile-icon i { display: flex; align-items: center; width: 36px; height: 17px; padding-left: 7px; box-sizing: border-box; border-radius: 6px; background: linear-gradient(90deg, #ffd3e6, #cdf3e2 50%, #e6d6ff); }
 .tag-tile-icon i::after { content: ""; width: 16px; height: 4px; border-radius: 2px; background: #6a4fb8; opacity: .55; }
 
-/* The podium column is too narrow for photo + tag + nickname; the full ranking
-   card right below shows each tag, so the podium keeps the nickname whole. */
-.podium-name .nick-tag { display: none; }

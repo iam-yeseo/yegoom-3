@@ -91,7 +91,7 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   useEffect(() => {
     if (!preview && !writeInFlight.current) setState(initial);
-  }, [preview, initial.gold, initial.inventory.lottoTickets, initial.inventory.speettoTickets, initial.canPurchase, initial.serverTime]);
+  }, [preview, initial.gold, initial.inventory.lottoTickets, initial.inventory.speettoTickets, initial.inventory.tagTickets, initial.canPurchase, initial.serverTime]);
   const remember = useCallback((value: PendingPurchase | null) => {
     pendingRef.current = value;
     if (mounted.current) setPending(value);

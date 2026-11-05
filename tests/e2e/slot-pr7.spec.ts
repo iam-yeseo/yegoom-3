@@ -34,7 +34,7 @@ async function fixture(page: Page, options: { gold?: number; recent?: SlotSpin[]
   expect(login.status(), 'isolated local slot fixture login').toBe(200);
   const initial = await (await page.request.get('/api/bootstrap')).json() as BootstrapResponse;
   let snapshot: BootstrapResponse = { ...initial, serverTime: NOW, announcements: [], lottoNotice: null,
-    user: { ...initial.user, gold: options.gold ?? 12000 }, inventory: { lottoTickets: 3, speettoTickets: 3 } };
+    user: { ...initial.user, gold: options.gold ?? 12000 }, inventory: { lottoTickets: 3, speettoTickets: 3, tagTickets: 0 } };
   const recent = options.recent ?? sampleHistory();
   const receipts = new Map<string, SlotSpin>();
   const attempts: SlotSpinInput[] = [];

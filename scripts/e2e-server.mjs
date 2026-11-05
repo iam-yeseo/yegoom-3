@@ -62,6 +62,9 @@ for (const username of ['min', 'siwon', 'yeseo']) {
     statements.push(`INSERT INTO inventory_ledger (id, user_id, item, amount, reason, reference, created_at) VALUES ('fixture-${item}-${username}', 'e2e-${username}', '${item}', 2, '브라우저 테스트 이용권', 'fixture:${item}:${username}', '2026-10-23T00:00:00.000Z');`);
   }
 }
+// Only min holds nickname draw tickets here, so the other fixtures keep paying
+// gold. The real grant is migration 0018, which runs before these users exist.
+statements.push(`INSERT INTO tag_ticket_ledger (id, user_id, amount, reason, reference, created_at) VALUES ('fixture-tag-ticket-min', 'e2e-min', 2, '브라우저 테스트 뽑기권', 'fixture:tag_ticket:min', '2026-10-23T00:00:00.000Z');`);
 // The migration seeds the stock cursor at the real clock; start it at the
 // frozen fixture's previous close so prices replay deterministically.
 statements.push(`UPDATE stock_state SET last_tick_at = ${Date.parse('2026-10-29T18:00:00+09:00')};`);

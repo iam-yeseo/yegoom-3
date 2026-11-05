@@ -205,8 +205,8 @@ test('real profile crop respects EXIF, shares nickname and photo, and deletes ba
     await expect(row.locator('img.avatar-photo')).toHaveAttribute('src', url);
     for (const width of [390, 560]) await capture(viewer, 'authenticated', 'ranking', width, info);
     await navigate(viewer, '/ranking'); await expect(viewer.locator('.podium-name').filter({ hasText: '해피민' })).toHaveText('해피민');
-    // PR 8: the podium shows each player's photo next to the nickname; the large character stays a sprite.
-    await expect(viewer.locator('.podium-name').filter({ hasText: '해피민' }).locator('img.avatar-photo')).toHaveAttribute('src', url);
+    // The podium stacks the photo above the tag + nickname; the large character stays a sprite.
+    await expect(viewer.locator('.podium-place').filter({ hasText: '해피민' }).locator('img.avatar-photo')).toHaveAttribute('src', url);
     await expect(viewer.locator('.podium-character img.avatar-photo')).toHaveCount(0);
     await navigate(viewer, '/game/wake'); await expect(viewer.locator('.prediction-hero')).toContainText('해피민님');
     await expect(viewer.locator('.prediction-hero img.avatar-photo')).toHaveCount(0);

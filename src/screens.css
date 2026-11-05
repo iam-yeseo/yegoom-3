@@ -1071,7 +1071,7 @@
 .podium-name {
   font-size: 14px;
   font-weight: 700;
-  margin-top: 4px;
+  margin-top: 2px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1086,8 +1086,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.podium-name .avatar {
+.podium-block > .avatar {
   flex: none;
+}
+/* The tag sits before the nickname; a pair too wide for the column wraps so the
+   nickname stays whole instead of being cut. */
+.podium-name .tagged-name {
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px 4px;
+  overflow: visible;
+}
+.podium-name .nick-tag {
+  max-width: 100%;
+}
+.podium-name .tagged-name__text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .podium-block strong {
   font-size: 24px;
@@ -1186,6 +1202,32 @@
 }
 .last-week .card-head {
   padding-bottom: 6px;
+}
+.ranking-rules {
+  padding: 16px 18px;
+}
+.ranking-rules summary {
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 800;
+  border-radius: 8px;
+}
+.ranking-rules summary:focus-visible {
+  outline: 3px solid #7556c4;
+  outline-offset: 4px;
+}
+.ranking-rules ul {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+  word-break: keep-all;
+}
+.ranking-rules strong {
+  color: var(--text);
 }
 
 /* Attendance */

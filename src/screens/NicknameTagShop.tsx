@@ -25,7 +25,7 @@ function DrawResult({ tag, name, drawsToday, busy, onEquip, onClose }: {
       <h2 id="tag-draw-title" className="sr-only">새 별명 태그를 뽑았어요</h2>
       <small className="tag-draw-grade">{gradeLabel(tag.grade)}</small>
       <div className="tag-draw-card" ref={chip}><NickTag tag={tag} /><strong>{name}</strong></div>
-      <p className="tag-draw-meta">-{NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G · 오늘 {drawsToday}/{NICKNAME_TAG_RULES.dailyLimit}회</p>
+      <p className="tag-draw-meta">{tag.payment === "ticket" ? "뽑기권 1장" : `-${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`} · 오늘 {drawsToday}/{NICKNAME_TAG_RULES.dailyLimit}회</p>
       {tag.equipped && <p className="tag-note">지금 달고 있어요.</p>}
       <div className="tag-draw-actions">
         <button type="button" className="secondary-button" onClick={() => dialog.current?.close()}>닫기</button>
@@ -52,8 +52,10 @@ export function NicknameTagShop({ username, displayName, onBack, go }: {
   const pending = shop.pending?.kind === "tag" ? shop.pending.input as TagDrawInput : null;
   const drawsToday = tags?.drawsToday ?? 0;
   const left = NICKNAME_TAG_RULES.dailyLimit - drawsToday;
+  /** A draw ticket pays before gold, exactly as the server decides it. */
+  const tickets = shop.inventory.tagTickets;
   const canDraw = Boolean(tags) && shop.canPurchase && !busy && !shop.loading && (!shop.pending || Boolean(pending))
-    && (Boolean(pending) || (left > 0 && shop.gold >= NICKNAME_TAG_RULES.price));
+    && (Boolean(pending) || (left > 0 && (tickets > 0 || shop.gold >= NICKNAME_TAG_RULES.price)));
   async function draw() {
     if (!canDraw) return;
     setBusy(true);
@@ -90,12 +92,12 @@ export function NicknameTagShop({ username, displayName, onBack, go }: {
       </section>
       <div className="shop-purchase-actions slot-purchase-actions">
         {shop.canPurchase && !pending && left <= 0 && <p className="subtle-note">오늘은 모두 뽑았어요. 내일 다시 뽑을 수 있어요.</p>}
-        {shop.canPurchase && !pending && left > 0 && shop.gold < NICKNAME_TAG_RULES.price && <p className="subtle-note">골드가 부족해요.</p>}
+        {shop.canPurchase && !pending && left > 0 && tickets <= 0 && shop.gold < NICKNAME_TAG_RULES.price && <p className="subtle-note">골드가 부족해요.</p>}
         <button type="button" className="primary-button" disabled={!canDraw} onClick={() => void draw()}>
-          {busy ? "뽑는 중…" : pending ? "뽑기 결과 다시 확인" : `뽑기 · ${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`}
+          {busy ? "뽑는 중…" : pending ? "뽑기 결과 다시 확인" : tickets > 0 ? "뽑기 · 뽑기권 1장" : `뽑기 · ${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`}
         </button>
       </div>
-      <p className="subtle-note">오늘 {drawsToday}/{NICKNAME_TAG_RULES.dailyLimit}회 · 모은 태그 {tags?.tags.length ?? 0}개</p>
+      <p className="subtle-note">뽑기권 {tickets}장 · 오늘 {drawsToday}/{NICKNAME_TAG_RULES.dailyLimit}회 · 모은 태그 {tags?.tags.length ?? 0}개</p>
       {!shop.canPurchase && !shop.loading && <p className="subtle-note">운영자 계정은 별명 태그를 뽑지 않아요.</p>}
       {(error || shop.error) && <p className="form-message error" role="alert">{error || shop.error}</p>}
       <button type="button" className="text-button" onClick={() => go("/profile")}>내 별명 태그 보러 가기</button>

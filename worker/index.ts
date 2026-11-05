@@ -29,7 +29,7 @@ interface UserRow { id: string; username: string; display_name: string; password
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null; settings_json: string | null }
 interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null; photo_version: number | null }
 interface ProfileRow { id: string; username: string; display_name: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
-interface BootstrapProfile extends ProfileRow { gold: number; weeklyScore: number; lottoTickets: number; speettoTickets: number; tag_grade: NicknameTagGrade | null; tag_text: string | null }
+interface BootstrapProfile extends ProfileRow { gold: number; weeklyScore: number; lottoTickets: number; speettoTickets: number; tagTickets: number; tag_grade: NicknameTagGrade | null; tag_text: string | null }
 interface UnsettledRound extends RoundRow { game_id: GameId; round_date: string }
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
@@ -455,6 +455,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   const profiles = env.DB.prepare(`SELECT u.id, u.username, u.display_name, u.role, u.active, u.character,
       CASE WHEN p.user_id IS NOT NULL THEN u.photo_version ELSE NULL END AS photo_version,
       COALESCE(b.gold, 0) AS gold, COALESCE(b.lotto_tickets, 0) AS lottoTickets, COALESCE(b.speetto_tickets, 0) AS speettoTickets,
+      COALESCE(b.tag_tickets, 0) AS tagTickets,
       COALESCE((SELECT SUM(amount) FROM ledger WHERE currency = 'score' AND week_start = ? AND user_id = u.id), 0) AS weeklyScore,
       t.grade AS tag_grade, t.text AS tag_text
     FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id ${EQUIPPED_TAG_JOIN}
@@ -482,7 +483,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
       character: player.character ?? defaultCharacter(player.username), photoVersion: player.photo_version, weeklyScore: player.weeklyScore, tag: tagOf(player) }));
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
-    inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0 },
+    inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0, tagTickets: viewer?.tagTickets ?? 0 },
     kuji, lottoNotice, catchmind, claw, launchGift, announcements, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {

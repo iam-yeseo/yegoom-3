@@ -124,7 +124,7 @@ export interface GameMutationInput { roundDate: string }
 export interface PredictionInput extends GameMutationInput { value: string }
 export interface AnswerInput extends GameMutationInput { value: string; hint?: string }
 
-export interface Inventory { lottoTickets: number; speettoTickets: number }
+export interface Inventory { lottoTickets: number; speettoTickets: number; tagTickets: number }
 export interface LaunchGiftState { available: boolean; claimed: boolean }
 export interface LaunchGiftResponse {
   launchGift: LaunchGiftState;
@@ -268,7 +268,7 @@ export interface RankingResponse {
   serverTime: string;
 }
 
-export interface NicknameTag { id: string; grade: NicknameTagGrade; text: string; equipped: boolean; createdAt: string }
+export interface NicknameTag { id: string; grade: NicknameTagGrade; text: string; equipped: boolean; createdAt: string; payment: ShopPayment }
 export interface NicknameTagState {
   /** Equipped first, then S→C, newest first. */
   tags: NicknameTag[];

@@ -38,14 +38,17 @@ test('preview draws a tag, wears it and shows it before the nickname without API
   await page.goto('/#/preview/shop');
   const tile = page.locator('.shop-tile').filter({ hasText: '별명 태그 뽑기' });
   await expect(tile).toContainText('1회 300G');
+  // Every player was granted five draw tickets; the preview starts with them too.
+  await expect(tile).toContainText('뽑기권 5장');
   await tile.click();
   await expect(page.locator('h1').first()).toHaveText('별명 태그 뽑기');
   await expect(page.locator('.tag-shop-odds')).toContainText('S등급');
   await capture(page, 'preview-shop', info);
   await page.setViewportSize({ width: 390, height: 900 });
-  await page.getByRole('button', { name: '뽑기 · 300G' }).click();
+  await page.getByRole('button', { name: '뽑기 · 뽑기권 1장' }).click();
   const sheet = page.locator('dialog.tag-draw-dialog');
   await expect(sheet).toBeVisible();
+  await expect(sheet.locator('.tag-draw-meta')).toContainText('뽑기권 1장');
   await expect(sheet.locator('.nick-tag')).toHaveCount(1);
   await expect(sheet.locator('small')).toHaveText(/^[SABC]등급 · (홀로그램|금빛|은빛|테두리)$/);
   const text = (await sheet.locator('.nick-tag').textContent())!;
@@ -54,7 +57,7 @@ test('preview draws a tag, wears it and shows it before the nickname without API
   await sheet.getByRole('button', { name: '지금 달기' }).click();
   await expect(sheet).toContainText('지금 달고 있어요.');
   await sheet.getByRole('button', { name: '닫기' }).click();
-  await expect(page.locator('.subtle-note').filter({ hasText: '오늘 1/5회' })).toBeVisible();
+  await expect(page.locator('.subtle-note').filter({ hasText: '오늘 1/5회' })).toContainText('뽑기권 4장');
 
   await navigate(page, '/preview');
   await expect(page.locator('.room-name .nick-tag')).toHaveText(text);
@@ -72,6 +75,22 @@ test('preview draws a tag, wears it and shows it before the nickname without API
   await navigate(page, '/preview');
   await expect(page.locator('.room-name .nick-tag')).toHaveCount(0);
   expect(apiCalls).toEqual([]);
+});
+
+test('a draw ticket pays before gold and the shop counts the tickets left', async ({ page }) => {
+  await login(page, 'min');
+  const before = await (await page.request.get('/api/bootstrap')).json() as { user: { gold: number }; inventory: { tagTickets: number } };
+  expect(before.inventory.tagTickets).toBe(2);
+  await page.goto('/#/shop/tag');
+  await expect(page.locator('.subtle-note').filter({ hasText: '오늘' })).toContainText('뽑기권 2장');
+  await page.getByRole('button', { name: /^뽑기 · 뽑기권 1장$|^뽑기 결과 다시 확인$/ }).click();
+  const sheet = page.locator('dialog.tag-draw-dialog');
+  await expect(sheet.locator('.tag-draw-meta')).toContainText('뽑기권 1장');
+  await sheet.getByRole('button', { name: '닫기' }).click();
+  await expect(page.locator('.subtle-note').filter({ hasText: '오늘' })).toContainText('뽑기권 1장');
+  const after = await (await page.request.get('/api/bootstrap')).json() as { user: { gold: number }; inventory: { tagTickets: number } };
+  expect(after.inventory.tagTickets).toBe(1);
+  expect(after.user.gold).toBe(before.user.gold);
 });
 
 test('a signed-in player draws and wears a tag that other players then see', async ({ page, browser }, info) => {
@@ -98,6 +117,10 @@ test('a signed-in player draws and wears a tag that other players then see', asy
     await expect(viewer.locator('.ranking-preview-row').filter({ hasText: text }).locator('.nick-tag')).toHaveText(text);
     await navigate(viewer, '/ranking');
     await expect(viewer.locator('.ranking-table .nick-tag').filter({ hasText: text })).toHaveCount(1);
+    // The podium shows the tag too, above the nickname and below the photo.
+    const place = viewer.locator('.podium-place').filter({ hasText: 'yeseo' });
+    await expect(place.locator('.podium-name .nick-tag')).toHaveText(text);
+    await expect(place.locator('.podium-name')).toContainText('yeseo');
     await capture(viewer, 'authenticated-ranking', info);
   } finally { await other.close(); }
 

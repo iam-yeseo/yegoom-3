@@ -959,12 +959,13 @@ export default function App() {
       previewGoldBonus={previewAttendance.goldBonus}
       previewGameGold={demo ? previewCatchmind.gold + previewClaw.gold + previewStock.gold : 0}
       previewAttendanceDate={previewAttendance.attendance.today}
-      initial={{ gold: demo ? previewGold : me?.gold ?? 0, inventory: data?.inventory ?? { lottoTickets: 0, speettoTickets: 0 },
+      initial={{ gold: demo ? previewGold : me?.gold ?? 0, inventory: data?.inventory ?? { lottoTickets: 0, speettoTickets: 0, tagTickets: 0 },
         canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
       transact={transactShop}
       onServerRead={state => {
         if (data) markViewedLottoDraw(data.user.id, path, "lotto" in state ? state.lotto.todayDraw : null, state.serverTime);
         if (data && (state.gold !== data.user.gold || state.inventory.lottoTickets !== data.inventory.lottoTickets || state.inventory.speettoTickets !== data.inventory.speettoTickets
+          || state.inventory.tagTickets !== data.inventory.tagTickets
           || "kuji" in state && (state.kuji.boardId !== data.kuji.boardId || state.kuji.remaining !== data.kuji.remaining))) void refresh();
       }}
       onPreviewChange={(state, ledger, score, lottoNotice, tag) => {

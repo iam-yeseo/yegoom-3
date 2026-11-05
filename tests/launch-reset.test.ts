@@ -19,6 +19,8 @@ const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventor
 // The launch-era reset does not cover the later slot-machine receipts.
 // Post-launch records (slot receipts, nickname tags) are outside the launch-era reset.
 const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins', 'nickname_tags',
+  // Nickname draw tickets (0018) are granted after launch, so the launch-era reset leaves them alone.
+  'tag_ticket_ledger',
   // The stock market (0015) starts after launch; a launch reset never touches it.
   'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays', 'ai_usage', 'stock_settings'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
@@ -100,6 +102,7 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO claw_coin_purchases (id, user_id, request_id, quantity, cost, created_at) VALUES ('old-coins', 'min', 'old-coins-request', 5, 500, '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at) VALUES ('retained-slot', 'min', 'retained-slot-request', 500, '[\"banana\",\"apple\",\"seven\"]', 0, '2026-11-01', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at) VALUES ('retained-tag', 'min', 'retained-tag-request', 'A', '반짝이는', 1, '2026-11-01', '2026-11-01T00:00:00Z')"),
+      db.prepare("INSERT INTO tag_ticket_ledger (id, user_id, amount, reason, reference, created_at) VALUES ('retained-tag-ticket', 'min', 5, '별명 뽑기권 지급', 'tag:grant:welcome:min', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO stock_ticks (ticker, at, price) VALUES ('YEGM', 1, 500)"),
       db.prepare("INSERT INTO stock_daily (ticker, date, open, high, low, close) VALUES ('YEGM', '2026-11-05', 500, 510, 490, 505)"),
       db.prepare("INSERT INTO stock_events (id, ticker, kind, effect_bp, apply_at, created_at) VALUES ('retained-event', 'MINJ', 'game', 400, 1, 'x')"),

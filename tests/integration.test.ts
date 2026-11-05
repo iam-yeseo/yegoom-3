@@ -1064,6 +1064,53 @@ describe('Worker and D1 integration', () => {
       expect(state.tags.tags).toHaveLength(5);
       expect(state.tags.drawsToday).toBe(5);
     });
+    it('grants five draw tickets to the players that existed when the migration ran', async () => {
+      const instance = runtime(script);
+      try {
+        const database = await instance.getD1Database('DB');
+        const oldMigration = (await Promise.all((await readdir(new URL('../migrations/', import.meta.url)))
+          .filter(name => name.endsWith('.sql') && name < '0018_tag_tickets.sql').sort()
+          .map(name => readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8')))).join('\n');
+        await provision(database, oldMigration, passwordHash);
+        await database.prepare("UPDATE users SET active = 0 WHERE username = 'yeseo'").run();
+        const file = await readFile(new URL('../migrations/0018_tag_tickets.sql', import.meta.url), 'utf8');
+        await applyMigration(database, file);
+        const granted = async () => (await database.prepare(`SELECT u.username, COALESCE(b.tag_tickets, 0) AS tickets
+          FROM users u LEFT JOIN user_balances b ON b.user_id = u.id ORDER BY u.username`).all<{ username: string; tickets: number }>()).results;
+        // Administrators and suspended accounts are left out; the rest get five.
+        expect(await granted()).toEqual([
+          { username: 'admin', tickets: 0 }, { username: 'min', tickets: 5 },
+          { username: 'siwon', tickets: 5 }, { username: 'yeseo', tickets: 0 },
+        ]);
+        // The fixed reference keeps a re-run from granting the same tickets twice.
+        await applyMigration(database, file.slice(file.indexOf('INSERT OR IGNORE INTO tag_ticket_ledger')));
+        expect(await granted()).toEqual([
+          { username: 'admin', tickets: 0 }, { username: 'min', tickets: 5 },
+          { username: 'siwon', tickets: 5 }, { username: 'yeseo', tickets: 0 },
+        ]);
+        expect(await database.prepare("SELECT COUNT(*) AS n FROM tag_ticket_ledger").first<number>('n')).toBe(2);
+      } finally { await instance.dispose(); }
+    });
+    it('spends a draw ticket before gold and charges gold once the tickets run out', async () => {
+      await giveGold(db, 'yeseo', 1000);
+      await db.prepare(`INSERT INTO tag_ticket_ledger (id, user_id, amount, reason, reference, created_at)
+        VALUES ('grant-yeseo', 'yeseo', 2, '별명 뽑기권 지급', 'tag:grant:test:yeseo', ?)`).bind(`${TODAY}T00:00:00.000Z`).run();
+      const { cookie } = await login('yeseo');
+      const first = await (await draw(cookie, 'ticket-1')).json() as TagResponse;
+      expect(first.draw!.payment).toBe('ticket');
+      expect(first.gold).toBe(1000);
+      expect(first.inventory.tagTickets).toBe(1);
+      // A replayed request returns the first draw without spending a second ticket.
+      expect((await (await draw(cookie, 'ticket-1')).json() as TagResponse).inventory.tagTickets).toBe(1);
+      expect((await (await draw(cookie, 'ticket-2')).json() as TagResponse).inventory.tagTickets).toBe(0);
+      const third = await (await draw(cookie, 'ticket-3')).json() as TagResponse;
+      expect(third.draw!.payment).toBe('gold');
+      expect(third.gold).toBe(700);
+      expect(third.inventory.tagTickets).toBe(0);
+      expect(await db.prepare("SELECT SUM(amount) AS total FROM tag_ticket_ledger WHERE user_id = 'yeseo'").first<number>('total')).toBe(0);
+      expect(await db.prepare("SELECT tag_tickets AS n FROM user_balances WHERE user_id = 'yeseo'").first<number>('n')).toBe(0);
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM ledger WHERE user_id = 'yeseo' AND reason = '별명 태그 뽑기'").first<number>('n')).toBe(1);
+    });
     it('refuses without enough gold and for administrators, without charging', async () => {
       await giveGold(db, 'min', 299);
       const { cookie } = await login('min');
