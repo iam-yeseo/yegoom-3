@@ -93,7 +93,7 @@ test('short 390 by 700 viewport keeps all enabled machine controls above the tab
   await page.getByRole('button', { name: '코인 넣기', exact: true }).click();
   await fullWidth(page);
   const bounds = await page.locator('.claw-console').evaluate(node => ({ bottom: node.getBoundingClientRect().bottom, top: node.getBoundingClientRect().top,
-    limit: document.querySelector('.tabbar')?.getBoundingClientRect().top ?? innerHeight }));
+    limit: document.querySelector('.tabbar:not([hidden])')?.getBoundingClientRect().top ?? innerHeight }));
   expect(bounds.top).toBeGreaterThanOrEqual(0);
   expect(bounds.bottom).toBeLessThanOrEqual(bounds.limit);
   await expect(page.getByRole('button', { name: '집게 내리기', exact: true })).toBeEnabled();

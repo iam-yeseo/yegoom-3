@@ -53,7 +53,7 @@ test('mobile and desktop previews render all game screens without errors or over
           expect(await page.locator('.pg-machine').evaluate(element => element.getBoundingClientRect().width)).toBe(appWidth - 32);
         }
         if (await page.locator('.tabbar:not([hidden])').count()) {
-          expect(await page.locator('.tabbar').evaluate(element => element.getBoundingClientRect().width)).toBe(appWidth);
+          expect(await page.locator('.tabbar:not([hidden])').evaluate(element => element.getBoundingClientRect().width)).toBe(appWidth);
         }
       }
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
