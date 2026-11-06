@@ -1122,9 +1122,11 @@
 .kuji-recent-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
 .kuji-recent-head h3 { font-size: 15px; font-weight: 800; }
 .kuji-recent-head span { font-size: 12px; color: #ada4b3; }
-.kuji-recent-row { display: grid; grid-template-columns: 28px auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 44px; padding: 6px 0; }
+.kuji-recent-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 52px; padding: 8px 0; }
+.kuji-recent-who { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0; }
 .kuji-recent-row + .kuji-recent-row { border-top: 1px solid #f3eee8; }
-.kuji-recent-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 96px; }
+.kuji-recent-name { display: block; max-width: 100%; font-size: 14px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
+.kuji-recent-name .tagged-name { flex-wrap: wrap; row-gap: 3px; }
 .kuji-recent-grades { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .kuji-recent-grades b { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 800; }
 .kuji-recent-grades .kuji-recent-last { background: #ffd866; color: #5c4300; }

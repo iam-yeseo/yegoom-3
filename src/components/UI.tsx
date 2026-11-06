@@ -46,6 +46,11 @@ export function useDisplayNameByIdLookup() {
     return profile?.tag?.text ? `${profile.tag.text} ${name}` : name;
   }, [profiles]);
 }
+/** A player's username from their id (for lists that only carry ids). */
+export function useUsernameByIdLookup() {
+  const { profiles } = useContext(ProfileDirectory);
+  return useCallback((id: string) => profiles.find(entry => entry.id === id)?.username ?? null, [profiles]);
+}
 /** The nickname and tag separately, for styled labels. */
 export function useNameParts(username: string, fallback?: string): { name: string; tag: NicknameTagView | null } {
   const profile = useContext(ProfileDirectory).profiles.find(entry => entry.username === username);

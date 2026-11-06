@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { KUJI_RULES, kujiCost } from "../../shared/balance";
 import type { KujiDraw, KujiGrade, KujiPurchase } from "../../shared/types";
 import { ApiFailure } from "../api";
-import { Avatar, Toolbar, artSrc, honorific, useDisplayNameByIdLookup } from "../components/UI";
+import { Avatar, PersonName, Toolbar, artSrc, honorific, useDisplayNameByIdLookup, useUsernameByIdLookup } from "../components/UI";
 import { formatTime } from "../format";
 import { anim, confetti, flipY, hop, openSheet, pop, reduced, sparkle } from "../motion";
 import { useShop } from "../shop";
@@ -84,6 +84,7 @@ function PurchaseSheet({ purchase, onClose }: { purchase: KujiPurchase; onClose:
  * shown as small chips so a five-ticket draw still fits on one line. */
 function KujiRecent({ draws }: { draws: KujiDraw[] }) {
   const nameOf = useDisplayNameByIdLookup();
+  const usernameOf = useUsernameByIdLookup();
   const [open, setOpen] = useState(false);
   const shown = open ? draws : draws.slice(0, 5);
   return <section className="pg-card kuji-recent" aria-label="이 판의 최근 뽑기">
@@ -93,12 +94,17 @@ function KujiRecent({ draws }: { draws: KujiDraw[] }) {
         const counts = new Map<KujiGrade, number>();
         for (const cell of draw.cells) counts.set(cell.grade, (counts.get(cell.grade) ?? 0) + 1);
         const grades = [...counts.entries()].sort((a, b) => gradeIndex(a[0]) - gradeIndex(b[0]));
+        const username = usernameOf(draw.userId);
+        // The tag shows as its chip (as everywhere else) and the whole name
+        // stays visible; the drawn grades sit on the line below it.
         return <div className="kuji-recent-row" key={draw.id}>
-          <Avatar userId={draw.userId} username={nameOf(draw.userId, "")} size={28} nameFormat="plain" />
-          <span className="kuji-recent-name">{honorific(nameOf(draw.userId, "")) || "누군가"}</span>
-          <span className="kuji-recent-grades" aria-label={grades.map(([grade, n]) => `${grade}상 ${n}장`).join(", ")}>
-            {grades.map(([grade, n]) => <b key={grade} style={{ background: gradeColors[gradeIndex(grade)], color: gradeText[gradeIndex(grade)] }}>{grade}{n > 1 ? `×${n}` : ""}</b>)}
-            {draw.lastOne && <b className="kuji-recent-last">★</b>}
+          <Avatar userId={draw.userId} username={username ?? nameOf(draw.userId, "")} size={28} nameFormat="plain" />
+          <span className="kuji-recent-who">
+            <span className="kuji-recent-name">{username ? <PersonName username={username} /> : honorific(nameOf(draw.userId, "")) || "누군가"}</span>
+            <span className="kuji-recent-grades" aria-label={grades.map(([grade, n]) => `${grade}상 ${n}장`).join(", ")}>
+              {grades.map(([grade, n]) => <b key={grade} style={{ background: gradeColors[gradeIndex(grade)], color: gradeText[gradeIndex(grade)] }}>{grade}{n > 1 ? `×${n}` : ""}</b>)}
+              {draw.lastOne && <b className="kuji-recent-last">★</b>}
+            </span>
           </span>
           <small>{formatTime(draw.createdAt)}</small>
         </div>;
