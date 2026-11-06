@@ -1,5 +1,6 @@
 import { ACHIEVEMENT_BY_KEY, ACHIEVEMENT_RULES, ACHIEVEMENTS, isAchievementKey, type AchievementClientEvent, type AchievementProgress, type AchievementsResponse } from '../shared/achievements';
 import { CATCHMIND_RULES } from '../shared/balance';
+import { STOCK_RULES } from '../shared/stocks';
 import type { GameId } from '../shared/types';
 import { readBalances } from './balances';
 import { notify } from './notifications';
@@ -23,7 +24,23 @@ interface Facts {
   tag_first: number; tag_s: number; tag_equip: number;
   claw_first: number; claw_clear: number; rank_month: number;
   rank_weeks: string; games: string; lotto_zero: string; slots: string; catchmind: string;
+  stock_buy: number; stock_sell: number; stock_delisted: number;
+  /** Best and worst realized gold on a single sell (null without a sell). */
+  stock_best: number | null; stock_worst: number | null;
+  stock_limit_up: number; stock_limit_down: number;
 }
+/** Limit prices in SQL, matching isLimitUp/isLimitDown in shared/stock-engine.ts:
+ * floor(prev × 1.15) and ceil(prev × 0.85). */
+const UP = 1 + STOCK_RULES.dailyLimit, DOWN = 1 - STOCK_RULES.dailyLimit;
+const limitUpSql = (prev: string) => `CAST(${prev} * ${UP} AS INTEGER)`;
+const limitDownSql = (prev: string) => `(CAST(${prev} * ${DOWN} AS INTEGER) + (${prev} * ${DOWN} > CAST(${prev} * ${DOWN} AS INTEGER)))`;
+/** A limit move counts when the player held the stock that day: shares left
+ * from earlier days, or a buy on the day itself. Today's move counts from the
+ * live price while they hold it. */
+const heldOnDay = `(EXISTS (SELECT 1 FROM stock_trades t WHERE t.user_id = u.id AND t.ticker = c.ticker AND t.date = c.date AND t.side = 'buy')
+      OR (SELECT COALESCE(SUM(CASE t.side WHEN 'buy' THEN t.quantity ELSE -t.quantity END), 0) FROM stock_trades t
+        WHERE t.user_id = u.id AND t.ticker = c.ticker AND t.date < c.date) > 0)`;
+const dailyWithPrev = `(SELECT ticker, date, high, low, LAG(close) OVER (PARTITION BY ticker ORDER BY date) AS prev FROM stock_daily)`;
 const FACTS_SQL = `SELECT
     u.display_name != u.username COLLATE NOCASE AS nickname,
     EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) AS photo,
@@ -63,7 +80,18 @@ const FACTS_SQL = `SELECT
       WHERE EXISTS (SELECT 1 FROM slot_spins WHERE user_id = u.id AND date = d.value LIMIT 1 OFFSET ?)) AS slots,
     (SELECT json_group_array(json_object('d', round_date, 'drawer', drawer_id = u.id, 'winner', winner_id = u.id, 'w', wrong_count))
       FROM catchmind_rounds WHERE status = 'ended' AND round_date >= ? AND winner_id IS NOT NULL
-        AND (drawer_id = u.id OR winner_id = u.id)) AS catchmind
+        AND (drawer_id = u.id OR winner_id = u.id)) AS catchmind,
+    EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id AND side = 'buy') AS stock_buy,
+    EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id AND side = 'sell') AS stock_sell,
+    EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id AND side = 'delist') AS stock_delisted,
+    (SELECT MAX(total - cost_basis) FROM stock_trades WHERE user_id = u.id AND side = 'sell') AS stock_best,
+    (SELECT MIN(total - cost_basis) FROM stock_trades WHERE user_id = u.id AND side = 'sell') AS stock_worst,
+    (EXISTS (SELECT 1 FROM ${dailyWithPrev} c WHERE c.prev IS NOT NULL AND c.high >= ${limitUpSql('c.prev')} AND ${heldOnDay})
+      OR EXISTS (SELECT 1 FROM stock_holdings h JOIN stock_state s ON s.ticker = h.ticker WHERE h.user_id = u.id AND h.quantity > 0
+        AND s.status != 'delisted' AND s.day_open IS NOT NULL AND s.day_high >= ${limitUpSql('s.prev_close')})) AS stock_limit_up,
+    (EXISTS (SELECT 1 FROM ${dailyWithPrev} c WHERE c.prev IS NOT NULL AND c.low <= ${limitDownSql('c.prev')} AND ${heldOnDay})
+      OR EXISTS (SELECT 1 FROM stock_holdings h JOIN stock_state s ON s.ticker = h.ticker WHERE h.user_id = u.id AND h.quantity > 0
+        AND s.status != 'delisted' AND s.day_open IS NOT NULL AND s.day_low <= ${limitDownSql('s.prev_close')})) AS stock_limit_down
   FROM users u WHERE u.id = ? AND u.role = 'player' AND u.active = 1`;
 
 /** Which achievements the facts satisfy. Pure, so the rules are unit-testable. */
@@ -84,6 +112,12 @@ export function unlockedAchievements(facts: Facts, events: ReadonlySet<string>):
     ...once('slot_jackpot', facts.slot_jackpot),
     ...once('tag_first', facts.tag_first), ...once('tag_s', facts.tag_s), ...once('tag_equip', facts.tag_equip),
     ...once('claw_first', facts.claw_first), ...once('claw_clear', facts.claw_clear), ...once('rank_month', facts.rank_month),
+    ...once('stock_buy', facts.stock_buy), ...once('stock_sell', facts.stock_sell), ...once('stock_delisted', facts.stock_delisted),
+    ...once('stock_limit_up', facts.stock_limit_up), ...once('stock_limit_down', facts.stock_limit_down),
+    ...ACHIEVEMENT_RULES.stockTiers.flatMap(tier => [
+      ...once(`stock_gain_${tier}`, (facts.stock_best ?? 0) >= tier),
+      ...once(`stock_loss_${tier}`, (facts.stock_worst ?? 0) <= -tier),
+    ]),
   ];
   for (const reference of JSON.parse(facts.rank_weeks) as string[]) {
     const week = /^notification:rank:week:(\d{4}-\d{2}-\d{2}):/.exec(reference)?.[1];

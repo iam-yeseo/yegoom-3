@@ -72,3 +72,16 @@
 .slot-tile-icon i::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #ff8e7a; }
 .slot-tile-icon i:nth-child(2)::after { background: #ffd866; }
 .slot-tile-icon i:nth-child(3)::after { background: #b9a3f0; }
+/* Shop tab: one wide row per item with its description. */
+.shop-item-list { display: flex; flex-direction: column; gap: 12px; }
+.shop-item-list .shop-item { display: flex; align-items: center; gap: 14px; width: 100%; padding: 18px; text-align: left; }
+.shop-item-list .shop-item .solo-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.shop-item-list .shop-item-desc { font-size: 13px; line-height: 1.5; color: #7c7383; word-break: keep-all; }
+.shop-item-list .shop-item-meta { font-size: 12px; font-weight: 700; color: #ada4b3; }
+.shop-item-list .shop-item-meta:empty { display: none; }
+/* "정말 살까요?" confirmation before a shop purchase. */
+.purchase-confirm { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.purchase-confirm > strong { font-size: 18px; font-weight: 800; }
+.purchase-confirm-cost { margin: 0; padding: 8px 16px; border-radius: 999px; background: #fff4cc; color: #7a5a00; font-size: 15px; font-weight: 800; }
+.purchase-confirm-detail { margin: 0; font-size: 13px; line-height: 1.5; color: #7c7383; word-break: keep-all; }
+.purchase-confirm .sheet-actions { width: 100%; margin-top: 6px; }

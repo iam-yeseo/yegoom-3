@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES } from "../../shared/balance";
 import type { LottoPurchaseInput, LottoTicket, ShopKind, ShopPayment, SpeettoPurchaseInput, SpeettoTicket } from "../../shared/types";
 import { Gold, SectionTitle, Toolbar } from "../components/UI";
+import { usePurchaseConfirm } from "../components/PurchaseConfirm";
 import { ScratchTicket } from "../components/ScratchTicket";
 import { anim, reduced, shake, toast, useCountUp } from "../motion";
 import { useShop } from "../shop";
@@ -40,8 +41,8 @@ export function ShopMain({ go, gold }: { go: (path: string) => void; gold: numbe
     <header className="tab-header with-gold"><h1>상점</h1><Gold value={gold} /></header>
     <div className="screen-body stack">
       <InventoryCard />
-      <SectionTitle title="복권" />
-      <ShopCards go={go} />
+      <SectionTitle title="구매 가능한 아이템" />
+      <ShopCards go={go} detailed />
       <ShopNotice />
     </div>
   </div>;
@@ -130,6 +131,7 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pendingClick = useRef(false);
+  const [confirmSheet, ask] = usePurchaseConfirm();
   const balls = useRef<HTMLDivElement>(null);
   const now = useServerNow(shop.serverTime);
   const round = shop.lotto;
@@ -170,6 +172,9 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
   async function purchase(payment: ShopPayment) {
     if (pendingClick.current || !shop.canPurchase || !full || shop.pending && !pending) return;
     pendingClick.current = true;
+    // A retry of an unconfirmed purchase never charges twice, so only a new one asks.
+    if (!pending && !(await ask({ title: "데일리 로또를 살까요?", cost: payment === "ticket" ? "이용권 1장" : `골드 ${LOTTO_RULES.price}G`,
+      detail: `고른 번호 ${[...picks].sort((a, b) => a - b).join(" · ")}` }))) { pendingClick.current = false; return; }
     setBusy(true);
     setError("");
     try {
@@ -212,6 +217,7 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
         <table><thead><tr><th>일치</th><th>당첨금</th></tr></thead><tbody>{Object.entries(LOTTO_RULES.prizes).reverse().map(([matches, prize]) => <tr key={matches}><td>{matches}개</td><td>{prize.toLocaleString("ko-KR")}G</td></tr>)}</tbody></table>
       </details>
     </div>
+    {confirmSheet}
   </div>;
 }
 
@@ -224,6 +230,7 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pendingClick = useRef(false);
+  const [confirmSheet, ask] = usePurchaseConfirm();
   const tickets = shop.speetto?.tickets ?? [];
   const groups = useMemo(() => purchaseGroups(tickets, entry => revealedIds.has(entry.id) ? entry.prize : 0), [tickets, revealedIds]);
   const ticket = tickets.find(entry => entry.id === selectedId) ?? tickets[0];
@@ -236,6 +243,7 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
   async function purchase(payment: ShopPayment) {
     if (pendingClick.current || !shop.canPurchase || shop.pending && !pending) return;
     pendingClick.current = true;
+    if (!pending && !(await ask({ title: "스피또를 살까요?", cost: payment === "ticket" ? "이용권 1장" : `골드 ${SPEETTO_RULES.price}G` }))) { pendingClick.current = false; return; }
     setBusy(true);
     setError("");
     try {
@@ -276,5 +284,6 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
         <p className="subtle-note shop-history-note">{`최근 ${SHOP_HISTORY_DAYS}일 기록만 보여요`}</p>
       </section>
     </div>
+    {confirmSheet}
   </div>;
 }

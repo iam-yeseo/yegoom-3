@@ -54,7 +54,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   // Slot receipts have their own table/request namespace on the server too.
   const slotReceipts = new Map<string, SlotSpin>();
   // Nickname tags drawn in this preview visit only.
-  const tags: (NicknameTag & { date: string })[] = [];
+  const tags: (NicknameTag & { date: string; discarded?: boolean })[] = [];
   const tagReceipts = new Map<string, NicknameTag & { date: string }>();
   const GRADE_RANK = { S: 0, A: 1, B: 2, C: 3 } as const;
   const draws = new Map<string, number[]>();
@@ -165,9 +165,9 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   }
   function tagState(now: Date): NicknameTagState {
     const today = kstDate(now);
-    const list = [...tags].sort((left, right) => Number(right.equipped) - Number(left.equipped)
+    const list = tags.filter(tag => !tag.discarded).sort((left, right) => Number(right.equipped) - Number(left.equipped)
       || GRADE_RANK[left.grade] - GRADE_RANK[right.grade] || right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id))
-      .map(({ date: _date, ...tag }) => tag);
+      .map(({ date: _date, discarded: _discarded, ...tag }) => tag);
     return { tags: list, equipped: list.find(tag => tag.equipped) ?? null,
       drawsToday: tags.filter(tag => tag.date === today).length, dailyLimit: NICKNAME_TAG_RULES.dailyLimit, price: NICKNAME_TAG_RULES.price };
   }
@@ -323,11 +323,19 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   }
   function equipTag(tagId: string | null): TagResponse {
     const now = new Date();
-    if (tagId !== null && !tags.some(tag => tag.id === tagId)) throw new Error('내가 모은 별명 태그가 아니에요.');
+    if (tagId !== null && !tags.some(tag => tag.id === tagId && !tag.discarded)) throw new Error('내가 모은 별명 태그가 아니에요.');
     for (const tag of tags) tag.equipped = tag.id === tagId;
     return tagResponse(now);
   }
-  return { read, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, lottoNotice,
+  function discardTag(tagId: string): TagResponse {
+    const now = new Date();
+    const tag = tags.find(entry => entry.id === tagId && !entry.discarded);
+    if (!tag) throw new Error('내가 모은 별명 태그가 아니에요.');
+    if (tag.equipped) throw new Error('달고 있는 별명 태그는 먼저 떼고 버려 주세요.');
+    tag.discarded = true;
+    return tagResponse(now);
+  }
+  return { read, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, discardTag, lottoNotice,
     get equippedTag() { const tag = tags.find(entry => entry.equipped); return tag ? { grade: tag.grade, text: tag.text } : null; },
     claimLaunchGift() {
       const now = new Date();

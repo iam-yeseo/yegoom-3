@@ -9,7 +9,7 @@ import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readKujiSummary, readLottoNotice, settleDueLotto, ShopError, shopRoute } from './shop';
 import { RankingError, readRanking } from './ranking';
-import { equipTag, tagShopRoute } from './nickname-tags';
+import { equipTag, tagShopRoute, discardTag } from './nickname-tags';
 import type { NicknameTagGrade } from '../shared/nickname-tags';
 import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary, readRemainingWords } from './catchmind';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
@@ -811,7 +811,11 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (url.pathname === '/api/stock') {
       const since = url.searchParams.get('since');
-      return json(await readStockMarket(env.DB, secret, user, now.getTime(), since && since.length <= 64 ? since : undefined));
+      const view = await readStockMarket(env.DB, secret, user, now.getTime(), since && since.length <= 64 ? since : undefined);
+      // A full read (prices moved) may have brought a limit move or a
+      // delisting on a stock the player holds: those are achievements too.
+      if (!('unchanged' in view) && user.role === 'player') await syncAchievements(env.DB, user.id, now).catch(() => undefined);
+      return json(view);
     }
     if (url.pathname === '/api/stock/news') return json(await readStockNews(env.DB, secret, user, url.searchParams.get('before'), now.getTime()));
     const stockMatch = /^\/api\/stock\/([A-Z]{4})$/.exec(url.pathname);
@@ -821,6 +825,10 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
   if (url.pathname === '/api/shop/tag') {
     const input = request.method === 'POST' ? await body(request) : undefined;
     return json(await tagShopRoute(env.DB, user, request.method, input, new Date()));
+  }
+  if (url.pathname === '/api/me/nickname-tag/discard') {
+    if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return json(await discardTag(env.DB, user, await body(request), new Date()));
   }
   if (url.pathname === '/api/me/nickname-tag') {
     if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');

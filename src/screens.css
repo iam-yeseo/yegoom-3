@@ -105,8 +105,8 @@
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-bottom: 28px;
+  gap: 14px;
+  padding-bottom: 32px;
 }
 .tab-header {
   padding: calc(28px + env(safe-area-inset-top)) 20px 4px;
@@ -122,11 +122,13 @@
   font-weight: 800;
   letter-spacing: -0.6px;
 }
+/* Section titles keep air both above and below, so the card under a title
+   never sits right against it (2026-11-07 spacing update). */
 .section-title {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  padding: 16px 4px 2px;
+  padding: 20px 4px 6px;
 }
 .section-title h2 {
   font-size: 20px;
@@ -2908,9 +2910,10 @@ em.ring::after {
 .achievement-claim { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 36px; padding: 0 14px; border-radius: 999px; background: #f47c66; color: #fff; font-size: 13px; font-weight: 800; white-space: nowrap; box-shadow: 0 6px 14px rgba(244, 124, 102, 0.3); }
 .achievement-claim:disabled { background: #f1ece6; color: var(--faint); box-shadow: none; }
 .achievement-claim.all { min-height: 40px; padding: 0 16px; }
-.achievement-group .section-title { padding-top: 6px; }
-.achievement-list { padding: 4px 16px; }
-.achievement-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 60px; padding: 10px 0; }
+.achievement-group { display: flex; flex-direction: column; gap: 10px; }
+.achievement-group .section-title { padding-top: 14px; }
+.achievement-list { padding: 6px 18px; }
+.achievement-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 64px; padding: 12px 0; }
 .achievement-row + .achievement-row { border-top: 1px solid #f3eee8; }
 .achievement-mark { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #f3eee8; color: var(--faint); font-size: 18px; }
 .achievement-row.unlocked .achievement-mark { background: #fff4cc; }

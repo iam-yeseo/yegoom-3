@@ -8,7 +8,7 @@ export interface AchievementClient {
   load: () => Promise<AchievementsResponse>;
   claim: (key: string, periodKey: string) => Promise<AchievementsResponse>;
 }
-const GROUP_ORDER: readonly AchievementGroup[] = ["welcome", "games", "attendance", "shop", "claw", "ranking", "misc"];
+const GROUP_ORDER: readonly AchievementGroup[] = ["welcome", "games", "attendance", "shop", "stock", "claw", "ranking", "misc"];
 const gold = (value: number) => `${value.toLocaleString("ko-KR")}G`;
 
 function Row({ item, busy, onClaim }: { item: AchievementView; busy: boolean; onClaim: (button: HTMLButtonElement) => void }) {
@@ -21,7 +21,9 @@ function Row({ item, busy, onClaim }: { item: AchievementView; busy: boolean; on
     </span>
     <span className="achievement-text">
       <strong>{item.title}{repeat && <em className="achievement-repeat">{repeat}</em>}</strong>
-      <small>{item.condition}{item.repeat !== "once" && item.claimedCount > 0 ? ` · ${item.claimedCount}회 받음` : ""}</small>
+      {/* A one-time achievement keeps its condition secret until it is earned;
+          daily and weekly ones show it, since they are meant to be repeated. */}
+      <small>{item.status === "locked" && item.repeat === "once" ? "달성하면 조건이 공개돼요" : item.condition}{item.repeat !== "once" && item.claimedCount > 0 ? ` · ${item.claimedCount}회 받음` : ""}</small>
     </span>
     {item.status === "unlocked"
       ? <button ref={button} type="button" className="achievement-claim" disabled={busy} onClick={() => onClaim(button.current!)}

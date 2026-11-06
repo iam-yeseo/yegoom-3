@@ -5,10 +5,11 @@ import type { NicknameTag, TagDrawInput } from "../../shared/types";
 import { NickTag, Toolbar, honorific, useDisplayName } from "../components/UI";
 import { confetti, flipY, openSheet, reduced, toast, useCountUp } from "../motion";
 import { useShop } from "../shop";
+import { usePurchaseConfirm } from "../components/PurchaseConfirm";
 
 /** The drawn tag, with a shortcut to wear it right away. */
-function DrawResult({ tag, name, drawsToday, busy, onEquip, onClose }: {
-  tag: NicknameTag; name: string; drawsToday: number; busy: boolean; onEquip: () => void; onClose: () => void;
+function DrawResult({ tag, name, drawsToday, busy, onEquip, onDiscard, onClose }: {
+  tag: NicknameTag; name: string; drawsToday: number; busy: boolean; onEquip: () => void; onDiscard: () => Promise<boolean>; onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const chip = useRef<HTMLDivElement>(null);
@@ -26,10 +27,13 @@ function DrawResult({ tag, name, drawsToday, busy, onEquip, onClose }: {
       <small className="tag-draw-grade">{gradeLabel(tag.grade)}</small>
       <div className="tag-draw-card" ref={chip}><NickTag tag={tag} /><strong>{name}</strong></div>
       <p className="tag-draw-meta">{tag.payment === "ticket" ? "뽑기권 1장" : `-${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`} · 오늘 {drawsToday}/{NICKNAME_TAG_RULES.dailyLimit}회</p>
-      {tag.equipped && <p className="tag-note">지금 달고 있어요.</p>}
+      {tag.equipped ? <p className="tag-note">지금 달고 있어요.</p> : <p className="tag-note">마음에 안 들면 버릴 수 있어요. 버린 태그는 내 정보에 들어가지 않아요.</p>}
       <div className="tag-draw-actions">
-        <button type="button" className="secondary-button cancel-button" onClick={() => dialog.current?.close()}>닫기</button>
-        {!tag.equipped && <button type="button" className="primary-button" disabled={busy} onClick={onEquip}>{busy ? "다는 중…" : "지금 달기"}</button>}
+        {tag.equipped
+          ? <button type="button" className="secondary-button cancel-button" onClick={() => dialog.current?.close()}>닫기</button>
+          : <button type="button" className="secondary-button cancel-button" disabled={busy} onClick={() => void onDiscard().then(done => { if (done) dialog.current?.close(); })}>버리기</button>}
+        {!tag.equipped && <button type="button" className="secondary-button" disabled={busy} onClick={() => dialog.current?.close()}>보관하기</button>}
+        {!tag.equipped && <button type="button" className="primary-button" disabled={busy} onClick={onEquip}>{busy ? "처리 중…" : "지금 달기"}</button>}
       </div>
     </div>
   </dialog>;
@@ -47,6 +51,7 @@ export function NicknameTagShop({ username, displayName, onBack, go }: {
   const [equipping, setEquipping] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<NicknameTag | null>(null);
+  const [confirmSheet, ask] = usePurchaseConfirm();
   useEffect(() => { void latest.current.refresh("tag").catch(() => {}); }, []);
   const tags = shop.tags;
   const pending = shop.pending?.kind === "tag" ? shop.pending.input as TagDrawInput : null;
@@ -58,6 +63,8 @@ export function NicknameTagShop({ username, displayName, onBack, go }: {
     && (Boolean(pending) || (left > 0 && (tickets > 0 || shop.gold >= NICKNAME_TAG_RULES.price)));
   async function draw() {
     if (!canDraw) return;
+    if (!pending && !(await ask({ title: "별명 태그를 뽑을까요?", cost: tickets > 0 ? "뽑기권 1장" : `골드 ${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`,
+      detail: `오늘 ${drawsToday + 1}/${NICKNAME_TAG_RULES.dailyLimit}번째 뽑기예요.`, confirmLabel: "뽑기" }))) return;
     setBusy(true);
     setError("");
     try {
@@ -66,6 +73,17 @@ export function NicknameTagShop({ username, displayName, onBack, go }: {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "별명 태그를 뽑지 못했어요. 같은 버튼으로 다시 확인해 주세요.");
     } finally { setBusy(false); }
+  }
+  async function discard(tag: NicknameTag): Promise<boolean> {
+    setEquipping(true);
+    try {
+      await shop.discardTag(tag.id);
+      toast("별명 태그를 버렸어요");
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "별명 태그를 버리지 못했어요.");
+      return false;
+    } finally { setEquipping(false); }
   }
   async function equip(tag: NicknameTag) {
     setEquipping(true);
@@ -102,6 +120,7 @@ export function NicknameTagShop({ username, displayName, onBack, go }: {
       {(error || shop.error) && <p className="form-message error" role="alert">{error || shop.error}</p>}
       <button type="button" className="text-button" onClick={() => go("/profile")}>내 별명 태그 보러 가기</button>
     </div>
-    {result && <DrawResult tag={result} name={name} drawsToday={drawsToday} busy={equipping} onEquip={() => void equip(result)} onClose={() => setResult(null)} />}
+    {result && <DrawResult tag={result} name={name} drawsToday={drawsToday} busy={equipping} onEquip={() => void equip(result)} onDiscard={() => discard(result)} onClose={() => setResult(null)} />}
+    {confirmSheet}
   </div>;
 }

@@ -38,6 +38,7 @@ test('preview draws a tag, wears it and shows it before the nickname without API
   await page.goto('/#/preview/shop');
   const tile = page.locator('.shop-tile').filter({ hasText: '별명 태그 뽑기' });
   await expect(tile).toContainText('1회 300G');
+  await expect(tile).toContainText('나를 가장 잘 나타내는 그 한 단어');
   // Every player was granted five draw tickets; the preview starts with them too.
   await expect(tile).toContainText('뽑기권 5장');
   await tile.click();

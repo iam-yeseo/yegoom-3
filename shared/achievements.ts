@@ -3,7 +3,7 @@
  * tables it already keeps; this file holds the wording, the reward and how
  * often each one can be earned, so every screen reads the same list. */
 export type AchievementRepeat = 'once' | 'daily' | 'weekly';
-export type AchievementGroup = 'welcome' | 'games' | 'attendance' | 'shop' | 'claw' | 'ranking' | 'misc';
+export type AchievementGroup = 'welcome' | 'games' | 'attendance' | 'shop' | 'claw' | 'ranking' | 'misc' | 'stock';
 
 export interface AchievementDefinition {
   key: string;
@@ -20,7 +20,7 @@ export interface AchievementDefinition {
 export const ACHIEVEMENTS_PATH = '/games/achievements';
 
 export const ACHIEVEMENT_GROUPS: Record<AchievementGroup, string> = {
-  welcome: '환영인사', games: '게임하기', attendance: '출석', shop: '상점', claw: '캐릭터 뽑기', ranking: '랭킹', misc: '기타',
+  welcome: '환영인사', games: '게임하기', attendance: '출석', shop: '상점', claw: '캐릭터 뽑기', ranking: '랭킹', misc: '기타', stock: '주식',
 };
 export const ACHIEVEMENT_REPEAT_LABEL: Record<AchievementRepeat, string | null> = { once: null, daily: '매일', weekly: '매주' };
 
@@ -31,6 +31,8 @@ export const ACHIEVEMENT_RULES = {
   wake: { near: 600, close: 180 }, offwork: { near: 180, close: 60 }, luck: { near: 3 },
   attendance: { streak: 30, total: 100 },
   slot: { dailySpins: 10 },
+  /** Realized gold on one sell (received minus the cost it used up), by tier. */
+  stockTiers: [100, 500, 1000, 2000, 5000, 10000] as const,
   /** Client-reported events the Worker accepts as unlocks. */
   clientEvents: ['font_size'] as const,
 } as const;
@@ -92,6 +94,24 @@ export const ACHIEVEMENTS: readonly AchievementDefinition[] = [
   // 기타
   once('notifications', 'misc', '알림 0개 강박', '알림센터 처음 열기', 50),
   once('font_size', 'misc', '눈이 편안해졌어요', '글자 크기 바꾸기', 50),
+  // 주식
+  once('stock_buy', 'stock', '쥐꼬리 월급으로 어떻게 먹고 살아요.', '주식을 처음 매수함', 100),
+  once('stock_sell', 'stock', '오늘 저녁은 소고기다!', '주식을 처음 매도함', 100),
+  once('stock_loss_100', 'stock', '똥 밟았다 진짜', '주식 거래 손실 - 100G 이상', 150),
+  once('stock_loss_500', 'stock', '사장 나오라고 해', '주식 거래 손실 - 500G 이상', 200),
+  once('stock_loss_1000', 'stock', '열심히 일해서 개나 줬다', '주식 거래 손실 - 1000G 이상', 250),
+  once('stock_loss_2000', 'stock', '내 눈이 잘못됐나?', '주식 거래 손실 - 2000G 이상', 500),
+  once('stock_loss_5000', 'stock', '야마존 물류 알바 다녀오실 분?', '주식 거래 손실 - 5000G 이상', 750),
+  once('stock_loss_10000', 'stock', '하... 씨X', '주식 거래 손실 - 10000G 이상', 1000),
+  once('stock_delisted', 'stock', '환불해주세요', '내가 보유한 주식이 상장폐지됨', 2000),
+  once('stock_gain_100', 'stock', '달달해서 이가 썩겠어요.', '주식 거래 이득 - 100G 이상', 150),
+  once('stock_gain_500', 'stock', '어쩌면 내가 워렌 버핏?', '주식 거래 이득 - 500G 이상', 200),
+  once('stock_gain_1000', 'stock', '사직서를 준비해볼까?', '주식 거래 이득 - 1000G 이상', 250),
+  once('stock_gain_2000', 'stock', '나의 안목은 틀리지 않았다', '주식 거래 이득 - 2000G 이상', 500),
+  once('stock_gain_5000', 'stock', '미래에서 왔습니다. 풀매수 하세요.', '주식 거래 이득 - 5000G 이상', 750),
+  once('stock_gain_10000', 'stock', '일 왜 함? 주식으로 돈 벌면 되는데요', '주식 거래 이득 - 10000G 이상', 1000),
+  once('stock_limit_up', 'stock', '이 맛에 주식하거든', '내가 가진 주식이 상한가', 300),
+  once('stock_limit_down', 'stock', '나라 망하냐?', '내가 가진 주식이 하한가', 300),
 ];
 
 export const ACHIEVEMENT_BY_KEY: ReadonlyMap<string, AchievementDefinition> = new Map(ACHIEVEMENTS.map(item => [item.key, item]));

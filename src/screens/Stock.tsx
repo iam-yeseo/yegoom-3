@@ -102,6 +102,42 @@ function StockRow({ stock, go }: { stock: StockQuote; go: (path: string) => void
   );
 }
 
+/** One of my holdings: shares and average price, value now and the return. */
+function HoldingRow({ stock, go }: { stock: StockQuote; go: (path: string) => void }) {
+  const company = info(stock.ticker);
+  const delisted = stock.status === "delisted";
+  const value = delisted ? 0 : stock.held * stock.price;
+  const pnl = value - stock.costBasis;
+  const rate = stock.costBasis ? (pnl / stock.costBasis) * 100 : 0;
+  const average = stock.held ? Math.round(stock.costBasis / stock.held) : 0;
+  return (
+    <button onClick={() => go(`/stock/${stock.ticker}`)} className={`stock-row holding-row ${delisted ? "delisted" : ""}`}>
+      <StockBadge stock={company} gray={delisted} />
+      <span className="stock-name">
+        <span><strong>{company.name}</strong><Badge stock={stock} /></span>
+        <small>{won(stock.held)}주 · 평균 {won(average)}G</small>
+      </span>
+      <span className="stock-price">
+        <strong>{won(value)}G</strong>
+        <small className={upDown(pnl)}>{signed(pnl)}G ({percent(rate)})</small>
+      </span>
+    </button>
+  );
+}
+type ListMode = "all" | "mine";
+const LIST_MODE_KEY = "yegoom3:stock-list-mode";
+function readListMode(): ListMode {
+  try { return localStorage.getItem(LIST_MODE_KEY) === "mine" ? "mine" : "all"; } catch { return "all"; }
+}
+function useListMode() {
+  const [mode, setMode] = useState<ListMode>(readListMode);
+  const change = useCallback((next: ListMode) => {
+    setMode(next);
+    try { localStorage.setItem(LIST_MODE_KEY, next); } catch { /* private mode */ }
+  }, []);
+  return [mode, change] as const;
+}
+
 function NewsCard({ item, go }: { item: StockNewsItem; go?: (path: string) => void }) {
   const company = item.ticker ? info(item.ticker) : null;
   return (
@@ -167,6 +203,7 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
     }
   }, [client, announce]);
   useTickPolling(load);
+  const [mode, setMode] = useListMode();
   const totals = holdingsTotal(view?.stocks ?? []);
   const value = useCountUp(totals.value);
   if (!view) {
@@ -192,7 +229,23 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
       {view.news.length ? view.news.map((item) => <NewsCard key={item.id} item={item} go={go} />) : <p className="empty">아직 뉴스가 없어요.</p>}
     </section>
   );
-  const list = (
+  const mine = view.stocks.filter((stock) => stock.held > 0);
+  const toggle = (
+    <Segmented label="종목 보기" value={mode}
+      options={[{ value: "all", label: "전체 종목" }, { value: "mine", label: `내 주식${mine.length ? ` ${mine.length}` : ""}` }]}
+      onChange={(next) => setMode(next as ListMode)} />
+  );
+  const list = mode === "mine" ? (
+    <section className="card stock-list mine" aria-label="내 주식">
+      {mine.length ? <>
+        <div className="holding-summary">
+          <span>평가금액 <strong>{won(totals.value)}G</strong></span>
+          <span>수익률 <strong className={upDown(pnl)}>{percent(totals.cost ? (pnl / totals.cost) * 100 : 0)}</strong></span>
+        </div>
+        {mine.map((stock) => <HoldingRow key={stock.ticker} stock={stock} go={go} />)}
+      </> : <p className="empty">아직 가진 주식이 없어요. 전체 종목에서 골라 보세요.</p>}
+    </section>
+  ) : (
     <section className="card stock-list" aria-label="종목">
       {view.stocks.map((stock) => <StockRow key={stock.ticker} stock={stock} go={go} />)}
     </section>
@@ -229,6 +282,7 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
               <p>{view.closing.weekly.body}</p>
             </section>
           )}
+          {toggle}
           {list}
           {newsCard}
         </div>
@@ -250,6 +304,7 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
       </div>
       <div className="screen-body stack">
         {error && <p className="form-message error" role="alert">{error}</p>}
+        {toggle}
         {list}
         {newsCard}
       </div>

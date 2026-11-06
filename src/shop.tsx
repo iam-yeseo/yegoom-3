@@ -29,6 +29,7 @@ interface ShopContextValue extends ShopState {
   drawTag: (input: TagDrawInput) => Promise<TagResponse>;
   /** Not a purchase: wearing or removing a tag never changes a balance. */
   equipTag: (tagId: string | null) => Promise<TagResponse>;
+  discardTag: (tagId: string) => Promise<TagResponse>;
   claimPreviewLaunchGift: () => { inventory: Inventory; awarded: boolean };
 }
 const ShopContext = createContext<ShopContextValue | null>(null);
@@ -209,6 +210,21 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
       throw e;
     } finally { writeInFlight.current = false; }
   }, [apply, syncPreview]);
+  const discardTag = useCallback(async (tagId: string) => {
+    if (writeInFlight.current || pendingRef.current) throw new Error("진행 중인 구매 결과를 먼저 확인해 주세요.");
+    generation.current++;
+    writeInFlight.current = true;
+    setError("");
+    try {
+      const engine = syncPreview();
+      const next = await callbacks.current.transact(async () => engine ? engine.discardTag(tagId) : api.discardTag(tagId));
+      apply(next);
+      return next;
+    } catch (e) {
+      if (mounted.current) setError(e instanceof Error ? e.message : "별명 태그를 버리지 못했어요.");
+      throw e;
+    } finally { writeInFlight.current = false; }
+  }, [apply, syncPreview]);
   const claimPreviewLaunchGift = useCallback(() => {
     const engine = syncPreview();
     if (!engine) throw new Error("미리보기에서만 사용할 수 있어요.");
@@ -218,5 +234,5 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     apply(result.state);
     return { inventory: result.state.inventory, awarded: result.awarded };
   }, [syncPreview, apply]);
-  return <ShopContext.Provider value={{ ...state, kuji, lotto, speetto, slot, tags, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, claimPreviewLaunchGift }}>{children}</ShopContext.Provider>;
+  return <ShopContext.Provider value={{ ...state, kuji, lotto, speetto, slot, tags, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, discardTag, claimPreviewLaunchGift }}>{children}</ShopContext.Provider>;
 }

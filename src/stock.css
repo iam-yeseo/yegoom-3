@@ -257,3 +257,30 @@ em.warning {
 .whale-label {
   color: #2a7f9e;
 }
+/* 내 주식 view: totals strip, then one row per holding. */
+.stock-list.mine .holding-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 4px 12px;
+  border-bottom: 1px solid #f3eee8;
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: #7c7383;
+}
+.stock-list.mine .holding-summary strong {
+  margin-left: 6px;
+  font-size: 15px;
+}
+.stock-list.mine .holding-summary strong:not(.up):not(.down) {
+  color: #3a3340;
+}
+.stock-list.mine .empty {
+  padding: 20px 8px;
+  text-align: center;
+  color: #ada4b3;
+  font-size: 14px;
+}
+.holding-row .stock-price small {
+  white-space: nowrap;
+}

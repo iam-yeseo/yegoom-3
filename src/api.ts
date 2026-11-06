@@ -93,6 +93,7 @@ export const api = {
   spinSlot: (input: SlotSpinInput) => request<SlotResponse>("/shop/slot", { method: "POST", body: JSON.stringify(input) }),
   drawTag: (input: TagDrawInput) => request<TagResponse>("/shop/tag", { method: "POST", body: JSON.stringify(input) }),
   equipTag: (tagId: string | null) => request<TagResponse>("/me/nickname-tag", { method: "PUT", body: JSON.stringify({ tagId }) }),
+  discardTag: (tagId: string) => request<TagResponse>("/me/nickname-tag/discard", { method: "POST", body: JSON.stringify({ tagId }) }),
   stock: (since?: string) => request<StockMarketView | StockUnchanged>(`/stock${since ? `?since=${encodeURIComponent(since)}` : ""}`),
   stockDetail: (ticker: string) => request<StockDetailView>(`/stock/${ticker}`),
   stockNews: (before?: string) => request<StockNewsPage>(`/stock/news${before ? `?before=${encodeURIComponent(before)}` : ""}`),

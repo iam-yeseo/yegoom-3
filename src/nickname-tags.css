@@ -76,7 +76,7 @@
 .tag-draw-card strong { flex: none; font-size: 22px; font-weight: 800; }
 .tag-draw-meta { margin: 0; font-size: 13px; font-weight: 600; color: #ada4b3; }
 .tag-draw-actions { display: flex; gap: 10px; width: 100%; }
-.tag-draw-actions .secondary-button { flex: 1; color: #7c7383; background: #f1ece6; box-shadow: none; }
+.tag-draw-actions .secondary-button { flex: 1; box-shadow: none; padding-inline: 8px; font-size: 14px; white-space: nowrap; }
 .tag-draw-actions .primary-button { flex: 1.5; }
 /* Shop tile: a little holo tag on lavender (Claude Design 3i). */
 .tag-tile-icon { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 16px; background: #eee8fc; flex: none; }

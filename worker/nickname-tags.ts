@@ -4,7 +4,7 @@ import type { NicknameTag, NicknameTagState, TagResponse } from '../shared/types
 import { readBalances } from './balances';
 import { dayWindow, randomInt, readShopState, requestId, ShopError, type ShopUser } from './shop';
 
-interface TagRow { id: string; user_id: string; request_id: string; grade: string; text: string; equipped: number; date: string; created_at: string; payment: string }
+interface TagRow { id: string; user_id: string; request_id: string; grade: string; text: string; equipped: number; date: string; created_at: string; payment: string; discarded?: number }
 
 function tagView(row: TagRow): NicknameTag {
   if (!isTagGrade(row.grade)) throw new Error('Stored nickname tag has an invalid grade');
@@ -18,7 +18,8 @@ export async function readTagState(db: D1Database, user: ShopUser, now: Date): P
   const today = dayWindow(now).date;
   const rows = (await db.prepare(`SELECT * FROM nickname_tags WHERE user_id = ?
     ORDER BY equipped DESC, ${GRADE_ORDER}, created_at DESC, id`).bind(user.id).all<TagRow>()).results;
-  const tags = rows.map(tagView);
+  // Discarded tags still count toward today's draws but leave the collection.
+  const tags = rows.filter(row => !row.discarded).map(tagView);
   return { tags, equipped: tags.find(tag => tag.equipped) ?? null,
     drawsToday: rows.filter(row => row.date === today).length,
     dailyLimit: NICKNAME_TAG_RULES.dailyLimit, price: NICKNAME_TAG_RULES.price };
@@ -101,14 +102,28 @@ export async function equipTag(db: D1Database, user: ShopUser, input: Record<str
     throw new ShopError(400, 'INVALID_TAG', '달 별명 태그를 골라 주세요.');
   }
   if (tagId !== null) {
-    const owned = await db.prepare('SELECT 1 FROM nickname_tags WHERE id = ? AND user_id = ?').bind(tagId, user.id).first();
+    const owned = await db.prepare('SELECT 1 FROM nickname_tags WHERE id = ? AND user_id = ? AND discarded = 0').bind(tagId, user.id).first();
     if (!owned) throw new ShopError(404, 'TAG_NOT_FOUND', '내가 모은 별명 태그가 아니에요.');
   }
   // Take off first, then wear, in one transaction: the partial unique index
   // allows at most one equipped tag even when two requests race.
   await db.batch([
     db.prepare('UPDATE nickname_tags SET equipped = 0 WHERE user_id = ? AND equipped = 1 AND id IS NOT ?').bind(user.id, tagId),
-    ...(tagId === null ? [] : [db.prepare('UPDATE nickname_tags SET equipped = 1 WHERE id = ? AND user_id = ?').bind(tagId, user.id)]),
+    ...(tagId === null ? [] : [db.prepare('UPDATE nickname_tags SET equipped = 1 WHERE id = ? AND user_id = ? AND discarded = 0').bind(tagId, user.id)]),
   ]);
+  return tagResponse(db, user, now);
+}
+
+/** POST /api/me/nickname-tag/discard { tagId }: throw away a tag I am not
+ * wearing (typically one I just drew), so it never shows in my collection.
+ * Discarding again is harmless. */
+export async function discardTag(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<TagResponse> {
+  if (user.role !== 'player') throw new ShopError(403, 'CANNOT_EQUIP', '플레이어만 별명 태그를 버릴 수 있어요.');
+  const tagId = input.tagId;
+  if (typeof tagId !== 'string' || !tagId || tagId.length > 128) throw new ShopError(400, 'INVALID_TAG', '버릴 별명 태그를 골라 주세요.');
+  const row = await db.prepare('SELECT equipped FROM nickname_tags WHERE id = ? AND user_id = ?').bind(tagId, user.id).first<{ equipped: number }>();
+  if (!row) throw new ShopError(404, 'TAG_NOT_FOUND', '내가 모은 별명 태그가 아니에요.');
+  if (row.equipped) throw new ShopError(409, 'TAG_EQUIPPED', '달고 있는 별명 태그는 먼저 떼고 버려 주세요.');
+  await db.prepare('UPDATE nickname_tags SET discarded = 1 WHERE id = ? AND user_id = ? AND equipped = 0').bind(tagId, user.id).run();
   return tagResponse(db, user, now);
 }

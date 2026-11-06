@@ -274,7 +274,14 @@ export function SoloGames({ go, claw, stock }: { go: Go; claw: ClawSummary; stoc
   );
 }
 
-export function ShopCards({ go }: { go: Go }) {
+/** Shop tab descriptions (operations update 2026-11-07); home keeps the short line. */
+const SHOP_DESCRIPTIONS = {
+  lotto: "혹시 당첨 되겠어? 라는 생각은 버리고 일단 사보세요!",
+  speetto: "언제 17시 30분까지 기다립니까? 지금 바로 긁어서 당첨되세요!",
+  slot: "카지노 가는 게 죄책감이 든다면 예굼방 아케이드에서.",
+  tag: "나를 가장 잘 나타내는 그 한 단어를 바로 내 이름 옆에 달아보세요.",
+} as const;
+export function ShopCards({ go, detailed = false }: { go: Go; detailed?: boolean }) {
   const { inventory } = useShop();
   const tiles = [
     { path: "/shop/lotto", title: "데일리 로또", schedule: `${formatTime(LOTTO_RULES.drawTime)} 추첨`, tickets: inventory.lottoTickets, icon: "lotto" },
@@ -282,6 +289,23 @@ export function ShopCards({ go }: { go: Go }) {
     { path: "/shop/slot", title: "슬롯머신", schedule: `1회 ${SLOT_RULES.price.toLocaleString("ko-KR")}G`, tickets: null, icon: "slot" },
     { path: "/shop/tag", title: "별명 태그 뽑기", schedule: `1회 ${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`, tickets: inventory.tagTickets, icon: "tag" },
   ] as const;
+  if (detailed) return (
+    <div className="shop-item-list">
+      {tiles.map(tile => <button key={tile.path} className="card shop-tile shop-item" onClick={() => go(tile.path)}>
+        {tile.icon === "lotto" ? <span className="lotto-icon" aria-hidden="true"><i>7</i><i>12</i><i>21</i></span>
+          : tile.icon === "speetto" ? <span className="speetto-icon" aria-hidden="true"><i><b /></i></span>
+          : tile.icon === "tag" ? <span className="tag-tile-icon" aria-hidden="true"><i /></span>
+          : <span className="slot-tile-icon" aria-hidden="true"><i /><i /><i /></span>}
+        <span className="solo-text">
+          <strong>{tile.title}</strong>
+          <small className="shop-item-desc">{SHOP_DESCRIPTIONS[tile.icon]}</small>
+          <small className="shop-item-meta">{tile.icon === "slot" || tile.icon === "tag" ? tile.schedule : null}
+            {tile.icon === "slot" || tile.icon === "tag" ? tile.tickets !== null && " · " : null}
+            {tile.tickets !== null && `${tile.icon === "tag" ? "뽑기권" : "이용권"} ${tile.tickets}장`}</small>
+        </span>
+      </button>)}
+    </div>
+  );
   return (
     <div className="tile-grid shop-tile-grid">
       {tiles.map(tile => <button key={tile.path} className="card shop-tile" onClick={() => go(tile.path)}>
