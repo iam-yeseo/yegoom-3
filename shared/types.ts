@@ -183,7 +183,7 @@ export interface SpeettoState { tickets: SpeettoTicket[] }
 export interface SpeettoResponse extends ShopState { speetto: SpeettoState; purchase?: SpeettoTicket }
 
 export type SlotSymbol = typeof SLOT_RULES.symbols[number];
-export interface SlotSpinInput { requestId: string }
+export interface SlotSpinInput { requestId: string; /** Spend one of today's free spins. */ free?: boolean }
 export interface SlotSpin {
   id: string; requestId: string; reels: SlotSymbol[]; cost: number; prize: number; date: string; createdAt: string;
   /** One of today's free spins (cost 0). */
@@ -285,6 +285,6 @@ export interface NicknameTagState {
   equipped: NicknameTag | null;
   drawsToday: number; dailyLimit: number; price: number;
 }
-export interface TagDrawInput { requestId: string }
+export interface TagDrawInput { requestId: string; /** Spend one of today's free draws. */ free?: boolean }
 export interface TagEquipInput { tagId: string | null }
 export interface TagResponse extends ShopState { tags: NicknameTagState; draw?: NicknameTag }

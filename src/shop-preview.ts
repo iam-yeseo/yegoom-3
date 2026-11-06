@@ -302,7 +302,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     if (typeof input.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.requestId)) throw new Error('구매 요청을 다시 시도해 주세요.');
     const previous = slotReceipts.get(input.requestId);
     if (previous) return slot(now, previous);
-    const free = freeLeft('slot', now) > 0;
+    const free = input.free === true;
     if (!free && gold < SLOT_RULES.price) throw new Error('골드가 부족해요');
     if (free) useFree('slot', now);
     const result = slotResult(max => Math.floor(Math.random() * max));
@@ -323,7 +323,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     const today = kstDate(now);
     if (tags.filter(tag => tag.date === today).length >= NICKNAME_TAG_RULES.dailyLimit) throw new Error(`별명 태그는 하루 ${NICKNAME_TAG_RULES.dailyLimit}번까지 뽑을 수 있어요.`);
     // A draw ticket pays before gold, as it does on the server.
-    const payment: ShopPayment = freeLeft('tag', now) > 0 ? 'free' : inventory.tagTickets > 0 ? 'ticket' : 'gold';
+    const payment: ShopPayment = input.free === true ? 'free' : inventory.tagTickets > 0 ? 'ticket' : 'gold';
     if (payment === 'gold' && gold < NICKNAME_TAG_RULES.price) throw new Error('골드가 부족해요');
     const tag = { id: crypto.randomUUID(), ...drawNicknameTag(max => Math.floor(Math.random() * max)), equipped: false, createdAt: now.toISOString(), date: today, payment };
     if (payment === 'free') useFree('tag', now); else pay(payment, 'tagTickets', NICKNAME_TAG_RULES.price, '별명 태그 뽑기', now);

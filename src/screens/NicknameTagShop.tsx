@@ -70,7 +70,7 @@ export function NicknameTagShop({ username, displayName, onBack, go }: {
     setBusy(true);
     setError("");
     try {
-      const next = await shop.drawTag(pending ?? { requestId: crypto.randomUUID() });
+      const next = await shop.drawTag(pending ?? { requestId: crypto.randomUUID(), ...(freeDraws > 0 ? { free: true } : {}) });
       if (next.draw) setResult(next.draw);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "별명 태그를 뽑지 못했어요. 같은 버튼으로 다시 확인해 주세요.");

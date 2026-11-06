@@ -1137,8 +1137,8 @@ describe('Worker and D1 integration', () => {
       await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
         VALUES (?, ?, 'gold', ?, 'tag fixture gold', ?, ?)`).bind(`gold-${userId}-${amount}`, userId, amount, `fixture:tag-gold:${userId}:${amount}`, `${TODAY}T00:00:00.000Z`).run();
     }
-    const draw = (cookie: string, requestId: string, instance?: Miniflare) =>
-      request('/api/shop/tag', { method: 'POST', body: { requestId }, cookie, instance });
+    const draw = (cookie: string, requestId: string, instance?: Miniflare, free?: boolean) =>
+      request('/api/shop/tag', { method: 'POST', body: { requestId, ...(free ? { free } : {}) }, cookie, instance });
     const equip = (cookie: string, tagId: string | null) => request('/api/me/nickname-tag', { method: 'PUT', body: { tagId }, cookie });
 
     it('draws a tag for 300 gold, replays the same request and caps five draws a day', async () => {
@@ -1163,6 +1163,51 @@ describe('Worker and D1 integration', () => {
       const state = await (await request('/api/shop/tag', { cookie })).json() as TagResponse;
       expect(state.tags.tags).toHaveLength(5);
       expect(state.tags.drawsToday).toBe(5);
+    });
+    it('gives three free uses a day of each item without charging, then refuses a fourth free use', async () => {
+      const { cookie } = await login('min');
+      const shop = async () => (await (await request('/api/shop', { cookie })).json() as ShopState);
+      expect((await shop()).free).toEqual({ lotto: 3, speetto: 3, slot: 3, tag: 3 });
+      for (let index = 0; index < 3; index++) {
+        const lotto = await request('/api/shop/lotto', { method: 'POST', cookie, body: { requestId: `free-lotto-${index}`, numbers: [1, 2, 3, 4, 5 + index], payment: 'free' } });
+        expect(lotto.status).toBe(200);
+        expect((await lotto.json() as LottoResponse).purchase).toMatchObject({ payment: 'free', cost: 0 });
+        expect((await request('/api/shop/speetto', { method: 'POST', cookie, body: { requestId: `free-speetto-${index}`, payment: 'free' } })).status).toBe(200);
+        const slot = await request('/api/shop/slot', { method: 'POST', cookie, body: { requestId: `free-slot-${index}`, free: true } });
+        expect(slot.status).toBe(200);
+        expect((await slot.json() as SlotResponse).spin).toMatchObject({ cost: 0, free: true });
+        const tag = await draw(cookie, `free-tag-${index}`, undefined, true);
+        expect(tag.status).toBe(200);
+        expect((await tag.json() as TagResponse).draw).toMatchObject({ payment: 'free' });
+      }
+      expect((await shop()).free).toEqual({ lotto: 0, speetto: 0, slot: 0, tag: 0 });
+      const refused = await Promise.all([
+        request('/api/shop/lotto', { method: 'POST', cookie, body: { requestId: 'free-lotto-x', numbers: [9, 10, 11, 12, 13], payment: 'free' } }),
+        request('/api/shop/speetto', { method: 'POST', cookie, body: { requestId: 'free-speetto-x', payment: 'free' } }),
+        request('/api/shop/slot', { method: 'POST', cookie, body: { requestId: 'free-slot-x', free: true } }),
+        draw(cookie, 'free-tag-x', undefined, true),
+      ]);
+      expect(refused.map(response => response.status)).toEqual([409, 409, 409, 409]);
+      // Free uses never touch gold or tickets (speetto prizes are the only gold).
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM ledger WHERE user_id = 'min' AND amount < 0").first('n')).toBe(0);
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM inventory_ledger WHERE user_id = 'min' AND amount < 0").first('n')).toBe(0);
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM tag_ticket_ledger WHERE user_id = 'min' AND amount < 0").first('n')).toBe(0);
+    });
+    it('throws away a drawn tag: it leaves the collection but still counts toward the day', async () => {
+      await giveGold(db, 'yeseo', 1000);
+      const { cookie } = await login('yeseo');
+      const kept = (await (await draw(cookie, 'keep-1')).json() as TagResponse).draw!;
+      const drawn = (await (await draw(cookie, 'toss-1')).json() as TagResponse).draw!;
+      const discard = (tagId: string) => request('/api/me/nickname-tag/discard', { method: 'POST', body: { tagId }, cookie });
+      const after = await discard(drawn.id);
+      expect(after.status).toBe(200);
+      const state = (await after.json() as TagResponse).tags;
+      expect(state.tags.map(tag => tag.id)).toEqual([kept.id]);
+      expect(state.drawsToday).toBe(2);
+      expect((await equip(cookie, drawn.id)).status).toBe(404);
+      expect((await equip(cookie, kept.id)).status).toBe(200);
+      expect((await discard(kept.id)).status).toBe(409);
+      expect((await discard('someone-else')).status).toBe(404);
     });
     it('grants five draw tickets to the players that existed when the migration ran', async () => {
       const instance = runtime(script);
@@ -5464,7 +5509,7 @@ describe('Worker and D1 integration', () => {
       }
       for (const kind of ['lotto', 'speetto']) {
         expect((await request(`/api/shop/${kind}`, { method: 'POST', cookie: min.cookie,
-          body: { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'free' } })).status).toBe(400);
+          body: { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'coupon' } })).status).toBe(400);
       }
       expect(await ledgerRows()).toEqual([]);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(0);
@@ -5474,7 +5519,7 @@ describe('Worker and D1 integration', () => {
   const scoringCases: { game: GameId; player: Username; thresholds: [number, number][] }[] = [
     { game: 'wake', player: 'siwon', thresholds: [[0, 30], [60, 25], [180, 20], [600, 15], [1800, 10], [3600, 5], [7200, 3]] },
     { game: 'offwork', player: 'min', thresholds: [[0, 30], [15, 25], [30, 20], [60, 15], [180, 10], [300, 5], [600, 1]] },
-    { game: 'luck', player: 'min', thresholds: [[0, 30], [1, 25], [2, 20], [3, 15], [4, 10], [5, 5], [10, 3], [15, 1]] },
+    { game: 'luck', player: 'min', thresholds: [[0, 15], [1, 12], [2, 10], [3, 8], [4, 6], [5, 4], [10, 2], [15, 1]] },
   ];
   it.each(scoringCases)('settles every $game score threshold and threshold + 1 through D1', async ({ game, player, thresholds }) => {
     const { cookie } = await login(player);
@@ -5535,10 +5580,10 @@ describe('Worker and D1 integration', () => {
     expect((await request('/api/games/luck/reveal', { method: 'POST', cookie: yeseo.cookie, body: {} })).status).toBe(200);
     const result = (await bootstrap(min.cookie)).games.find(game => game.id === 'luck')!;
     expect(result.results).toHaveLength(2);
-    for (const row of result.results) expect(row).toMatchObject({ difference: 7, score: 3, isFirst: true, participationGold: 100, firstGold: 100, gold: 200 });
+    for (const row of result.results) expect(row).toMatchObject({ difference: 7, score: 2, isFirst: true, participationGold: 100, firstGold: 100, gold: 200 });
     expect((await ledgerRows()).filter(row => row.reference.startsWith('first:')).map(row => [row.user_id, row.amount])).toEqual([['min', 100], ['siwon', 100]]);
-    expect((await bootstrap(min.cookie)).user).toMatchObject({ gold: 200, weeklyScore: 3 });
-    expect((await bootstrap(siwon.cookie)).user).toMatchObject({ gold: 200, weeklyScore: 3 });
+    expect((await bootstrap(min.cookie)).user).toMatchObject({ gold: 200, weeklyScore: 2 });
+    expect((await bootstrap(siwon.cookie)).user).toMatchObject({ gold: 200, weeklyScore: 2 });
   });
 
   it('marks an empty revealed round settled without creating payouts', async () => {
@@ -5658,7 +5703,7 @@ describe('Worker and D1 integration', () => {
     expect(history.map(round => round.roundDate)).toEqual(['2026-10-27', '2026-10-25', '2026-10-22']);
     for (const round of history) {
       expect(round.answer).toBe('50');
-      expect(round.results).toMatchObject([{ playerId: 'min', value: '49', difference: 1, score: 25, isFirst: true }]);
+      expect(round.results).toMatchObject([{ playerId: 'min', value: '49', difference: 1, score: 12, isFirst: true }]);
     }
     expect(JSON.stringify(history)).not.toContain('88');
     expect((await request('/api/games/luck/history')).status).toBe(401);
@@ -5694,8 +5739,8 @@ describe('Worker and D1 integration', () => {
     await seedRound({ game: 'luck', date: '2026-10-29', answer: '50',
       revealAt: Date.parse('2026-10-29T09:00:00Z'), predictions: [['min', '51']] });
     const view = await bootstrap(cookie);
-    expect(view.user.weeklyScore).toBe(55);
-    expect(view.dailyScores).toEqual([0, 30, 0, 25, 0, 0, 0]);
+    expect(view.user.weeklyScore).toBe(42);
+    expect(view.dailyScores).toEqual([0, 30, 0, 12, 0, 0, 0]);
     expect(view.ledger).toHaveLength(50);
     expect(view.ledger.some(entry => entry.id === 'older-score')).toBe(false);
     expect(view.ledger.find(entry => entry.currency === 'score')?.createdAt).toBe(`${TODAY}T00:00:00.000Z`);
@@ -5972,7 +6017,7 @@ describe('Worker and D1 integration', () => {
       const view = await response.json() as BootstrapResponse;
       expect(view.games.find(game => game.id === 'luck')).toMatchObject({ phase, answer: phase === 'revealed' ? '50' : null });
       expect(view.user.gold).toBe(gold);
-      expect(view.user.weeklyScore).toBe(phase === 'revealed' ? 30 : 0);
+      expect(view.user.weeklyScore).toBe(phase === 'revealed' ? 15 : 0);
     } finally { await instance.dispose(); }
   });
 

@@ -40,20 +40,24 @@ async function previousDraw(db: D1Database, userId: string, id: string): Promise
  * either side and no extra read is needed to decide. */
 async function drawTag(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<TagRow> {
   const id = requestId(input);
+  if (input.free !== undefined && typeof input.free !== 'boolean') throw new ShopError(400, 'INVALID_PAYMENT', '무료 이용 여부를 확인해 주세요.');
+  const free = input.free === true;
   const previous = await previousDraw(db, user.id, id);
   if (previous) return previous;
   const tag = drawNicknameTag(randomInt);
   const attempt = crypto.randomUUID();
   const window = dayWindow(now);
   const tickets = 'COALESCE((SELECT tag_tickets FROM user_balances WHERE user_id = u.id), 0)';
-  // Today's free draws go first, then a draw ticket, then gold.
+  // A free draw (`free: true`) spends one of today's free uses; otherwise a
+  // draw ticket pays before gold.
   const freeLeft = `(SELECT COUNT(*) FROM nickname_tags WHERE user_id = u.id AND date = '${window.date}' AND payment = 'free') < ${DAILY_FREE.tag}`;
+  const paid = `(${tickets} >= 1 OR COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?)`;
   await db.batch([
     db.prepare(`INSERT OR IGNORE INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at, payment)
-      SELECT ?, u.id, ?, ?, ?, 0, ?, ?, CASE WHEN ${freeLeft} THEN 'free' WHEN ${tickets} >= 1 THEN 'ticket' ELSE 'gold' END FROM users u
+      SELECT ?, u.id, ?, ?, ?, 0, ?, ?, ${free ? `'free'` : `CASE WHEN ${tickets} >= 1 THEN 'ticket' ELSE 'gold' END`} FROM users u
       WHERE u.id = ? AND u.role = 'player' AND u.active = 1
         AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
-        AND (${freeLeft} OR ${tickets} >= 1 OR COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?)
+        AND ${free ? `(${freeLeft} OR ? IS NULL)` : paid}
         AND (SELECT COUNT(*) FROM nickname_tags WHERE user_id = u.id AND date = ?) < ?`)
       .bind(attempt, id, tag.grade, tag.text, window.date, now.toISOString(),
         user.id, window.start, window.end, NICKNAME_TAG_RULES.price,
@@ -81,8 +85,8 @@ async function drawTag(db: D1Database, user: ShopUser, input: Record<string, unk
   const balances = await readBalances(db, user.id);
   // Only a draw with neither a ticket nor the price in gold is out of funds; any
   // other rejection raced another write and is worth retrying with the same id.
-  const freeUsed = await db.prepare("SELECT COUNT(*) AS n FROM nickname_tags WHERE user_id = ? AND date = ? AND payment = 'free'").bind(user.id, window.date).first<{ n: number }>();
-  if ((freeUsed?.n ?? 0) < DAILY_FREE.tag || balances.inventory.tagTickets > 0 || balances.gold >= NICKNAME_TAG_RULES.price) {
+  if (free) throw new ShopError(409, 'NO_FREE_LEFT', '오늘 무료 뽑기를 모두 썼어요.');
+  if (balances.inventory.tagTickets > 0 || balances.gold >= NICKNAME_TAG_RULES.price) {
     throw new ShopError(409, 'PURCHASE_REJECTED', '뽑기권과 골드를 다시 확인하고 같은 버튼으로 시도해 주세요.');
   }
   throw new ShopError(409, 'INSUFFICIENT_GOLD', '골드가 부족해요');

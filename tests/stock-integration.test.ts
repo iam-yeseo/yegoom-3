@@ -7,6 +7,7 @@ import { hashPassword } from '../worker/crypto';
 import { kstTimestamp } from '../shared/market-calendar';
 import { readStockMarket } from '../worker/stocks';
 import type { AdminState } from '../shared/admin';
+import type { AchievementsResponse } from '../shared/achievements';
 import type { StockDetailView, StockMarketView, StockNewsPage, StockTradeResponse, StockUnchanged } from '../shared/stock-types';
 
 const ORIGIN = 'http://localhost';
@@ -349,6 +350,37 @@ describe('stock market API', () => {
     const claude = await market.request<AdminState>(now, 'admin', '/api/admin/stock/ai', 'PUT', { provider: 'anthropic' });
     expect(claude.data.stock.ai).toMatchObject({ enabled: false, provider: 'anthropic' });
     expect((await market.request(now, 'admin', '/api/admin/stock/ai', 'PUT', { provider: 'gemini' })).status).toBe(400);
+  });
+
+  it('unlocks the stock achievements: first buy and sell, realized gain and loss tiers, a delisting and limit moves while holding', async () => {
+    const market = await Market.create(yesterdayClose);
+    const now = kst('2026-11-05', '10:03');
+    const unlocked = async () => (await market.request<AchievementsResponse>(now, 'min', '/api/achievements')).data.progress.map(row => row.key).filter(key => key.startsWith('stock_')).sort();
+    expect(await unlocked()).toEqual([]);
+    const view = (await market.request<StockMarketView>(now, 'min', '/api/stock')).data;
+    const ykhx = view.stocks.find(stock => stock.ticker === 'YKHX')!;
+    expect((await market.request(now, 'min', '/api/stock/trade', 'POST', { requestId: 'a-buy', ticker: 'YKHX', side: 'buy', quantity: 2, expectedVersion: ykhx.version })).status).toBe(200);
+    expect(await unlocked()).toEqual(['stock_buy']);
+    expect((await market.request(now, 'min', '/api/stock/trade', 'POST', { requestId: 'a-sell', ticker: 'YKHX', side: 'sell', quantity: 1, expectedVersion: ykhx.version })).status).toBe(200);
+    // Selling one of two at the same price loses only the fees: no loss tier yet.
+    expect(await unlocked()).toEqual(['stock_buy', 'stock_sell']);
+
+    const trade = (id: string, ticker: string, side: string, total: number, costBasis: number, date: string) => market.db.prepare(`INSERT INTO stock_trades
+      (id, user_id, request_id, ticker, side, quantity, price, fee, total, cost_basis, date, created_at) VALUES (?, 'min', ?, ?, ?, 1, 1, 0, ?, ?, ?, ?)`)
+      .bind(id, id, ticker, side, total, costBasis, date, `${date}T01:00:00.000Z`);
+    await market.db.batch([
+      trade('gain', 'MDRG', 'sell', 3600, 1000, '2026-11-03'), // +2,600G
+      trade('loss', 'DWSC', 'sell', 100, 1300, '2026-11-03'), // -1,200G
+      trade('gone', 'RIAN', 'delist', 0, 400, '2026-11-03'),
+      // Bought SOAR on 11/4, the day it closed at the +15% limit over 11/3.
+      trade('soar', 'SOAR', 'buy', 750, 750, '2026-11-04'),
+      market.db.prepare("INSERT INTO stock_daily (ticker, date, open, high, low, close) VALUES ('SOAR', '2026-11-03', 750, 760, 740, 750), ('SOAR', '2026-11-04', 760, 862, 760, 862)"),
+      // Holding GEUU now while it trades at today's -15% limit.
+      market.db.prepare("INSERT INTO stock_holdings (user_id, ticker, quantity, cost_basis) VALUES ('min', 'GEUU', 1, 500)"),
+      market.db.prepare("UPDATE stock_state SET prev_close = 500, day_open = 480, day_high = 480, day_low = 425, price = 425 WHERE ticker = 'GEUU'"),
+    ]);
+    expect(await unlocked()).toEqual(['stock_buy', 'stock_delisted', 'stock_gain_100', 'stock_gain_1000', 'stock_gain_2000', 'stock_gain_500',
+      'stock_limit_down', 'stock_limit_up', 'stock_loss_100', 'stock_loss_1000', 'stock_loss_500', 'stock_sell']);
   });
 
   it('returns 503 until the seed secret is configured', async () => {

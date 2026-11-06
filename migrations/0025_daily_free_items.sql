@@ -5,3 +5,8 @@
 ALTER TABLE shop_purchases ADD COLUMN free INTEGER NOT NULL DEFAULT 0 CHECK (free IN (0, 1));
 ALTER TABLE slot_spins ADD COLUMN free INTEGER NOT NULL DEFAULT 0 CHECK (free IN (0, 1));
 -- nickname_tags.payment has no CHECK; a free draw stores payment 'free'.
+-- Counting today's free uses touches only free rows (partial indexes), so a
+-- player with many paid spins or purchases today costs no extra reads.
+CREATE INDEX shop_purchases_free_idx ON shop_purchases(user_id, kind, date) WHERE free = 1;
+CREATE INDEX slot_spins_free_idx ON slot_spins(user_id, date) WHERE free = 1;
+CREATE INDEX nickname_tags_free_idx ON nickname_tags(user_id, date) WHERE payment = 'free';

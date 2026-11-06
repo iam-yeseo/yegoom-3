@@ -35,12 +35,15 @@ const UP = 1 + STOCK_RULES.dailyLimit, DOWN = 1 - STOCK_RULES.dailyLimit;
 const limitUpSql = (prev: string) => `CAST(${prev} * ${UP} AS INTEGER)`;
 const limitDownSql = (prev: string) => `(CAST(${prev} * ${DOWN} AS INTEGER) + (${prev} * ${DOWN} > CAST(${prev} * ${DOWN} AS INTEGER)))`;
 /** A limit move counts when the player held the stock that day: shares left
- * from earlier days, or a buy on the day itself. Today's move counts from the
- * live price while they hold it. */
+ * from earlier days, or a buy on the day itself. Only the player's traded
+ * tickers from their first trade on are read (the (ticker, date) key), and the
+ * previous close is one key seek. Today's move counts from the live price. */
 const heldOnDay = `(EXISTS (SELECT 1 FROM stock_trades t WHERE t.user_id = u.id AND t.ticker = c.ticker AND t.date = c.date AND t.side = 'buy')
       OR (SELECT COALESCE(SUM(CASE t.side WHEN 'buy' THEN t.quantity ELSE -t.quantity END), 0) FROM stock_trades t
         WHERE t.user_id = u.id AND t.ticker = c.ticker AND t.date < c.date) > 0)`;
-const dailyWithPrev = `(SELECT ticker, date, high, low, LAG(close) OVER (PARTITION BY ticker ORDER BY date) AS prev FROM stock_daily)`;
+const prevClose = `(SELECT p.close FROM stock_daily p WHERE p.ticker = c.ticker AND p.date < c.date ORDER BY p.date DESC LIMIT 1)`;
+const myCandles = `stock_daily c WHERE c.ticker IN (SELECT ticker FROM stock_trades WHERE user_id = u.id)
+        AND c.date >= (SELECT MIN(date) FROM stock_trades WHERE user_id = u.id)`;
 const FACTS_SQL = `SELECT
     u.display_name != u.username COLLATE NOCASE AS nickname,
     EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) AS photo,
@@ -86,12 +89,12 @@ const FACTS_SQL = `SELECT
     EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id AND side = 'delist') AS stock_delisted,
     (SELECT MAX(total - cost_basis) FROM stock_trades WHERE user_id = u.id AND side = 'sell') AS stock_best,
     (SELECT MIN(total - cost_basis) FROM stock_trades WHERE user_id = u.id AND side = 'sell') AS stock_worst,
-    (EXISTS (SELECT 1 FROM ${dailyWithPrev} c WHERE c.prev IS NOT NULL AND c.high >= ${limitUpSql('c.prev')} AND ${heldOnDay})
-      OR EXISTS (SELECT 1 FROM stock_holdings h JOIN stock_state s ON s.ticker = h.ticker WHERE h.user_id = u.id AND h.quantity > 0
-        AND s.status != 'delisted' AND s.day_open IS NOT NULL AND s.day_high >= ${limitUpSql('s.prev_close')})) AS stock_limit_up,
-    (EXISTS (SELECT 1 FROM ${dailyWithPrev} c WHERE c.prev IS NOT NULL AND c.low <= ${limitDownSql('c.prev')} AND ${heldOnDay})
-      OR EXISTS (SELECT 1 FROM stock_holdings h JOIN stock_state s ON s.ticker = h.ticker WHERE h.user_id = u.id AND h.quantity > 0
-        AND s.status != 'delisted' AND s.day_open IS NOT NULL AND s.day_low <= ${limitDownSql('s.prev_close')})) AS stock_limit_down
+    (CASE WHEN EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id) THEN (EXISTS (SELECT 1 FROM ${myCandles} AND c.high >= ${limitUpSql(prevClose)} AND ${heldOnDay})
+      OR EXISTS (SELECT 1 FROM stock_holdings h WHERE h.user_id = u.id AND h.quantity > 0 AND EXISTS (SELECT 1 FROM stock_state s
+        WHERE s.ticker = h.ticker AND s.status != 'delisted' AND s.day_open IS NOT NULL AND s.day_high >= ${limitUpSql('s.prev_close')}))) ELSE 0 END) AS stock_limit_up,
+    (CASE WHEN EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id) THEN (EXISTS (SELECT 1 FROM ${myCandles} AND c.low <= ${limitDownSql(prevClose)} AND ${heldOnDay})
+      OR EXISTS (SELECT 1 FROM stock_holdings h WHERE h.user_id = u.id AND h.quantity > 0 AND EXISTS (SELECT 1 FROM stock_state s
+        WHERE s.ticker = h.ticker AND s.status != 'delisted' AND s.day_open IS NOT NULL AND s.day_low <= ${limitDownSql('s.prev_close')}))) ELSE 0 END) AS stock_limit_down
   FROM users u WHERE u.id = ? AND u.role = 'player' AND u.active = 1`;
 
 /** Which achievements the facts satisfy. Pure, so the rules are unit-testable. */

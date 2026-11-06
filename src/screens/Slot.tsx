@@ -127,7 +127,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
       return;
     }
     if (!current.canPurchase || current.loading || current.pending && current.pending.kind !== "slot" || !pending && (current.free?.slot ?? 0) <= 0 && current.gold < SLOT_RULES.price) return;
-    const input = pending ?? { requestId: crypto.randomUUID() };
+    const input = pending ?? { requestId: crypto.randomUUID(), ...((current.free?.slot ?? 0) > 0 ? { free: true } : {}) };
     unresolved.current = input;
     const run = ++generation.current;
     running.current = true;

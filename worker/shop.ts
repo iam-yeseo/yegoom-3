@@ -54,16 +54,6 @@ export const FREE_USED_SQL = {
   slot: `(SELECT COUNT(*) FROM slot_spins WHERE user_id = u.id AND date = ? AND free = 1)`,
   tag: `(SELECT COUNT(*) FROM nickname_tags WHERE user_id = u.id AND date = ? AND payment = 'free')`,
 } as const;
-/** Today's free uses left for each item (none for administrators). */
-export async function readFreeLeft(db: D1Database, user: ShopUser, now: Date): Promise<DailyFreeLeft> {
-  if (user.role !== 'player') return { lotto: 0, speetto: 0, slot: 0, tag: 0 };
-  const date = dayWindow(now).date;
-  const row = await db.prepare(`SELECT ${FREE_USED_SQL.lotto} AS lotto, ${FREE_USED_SQL.speetto} AS speetto,
-    ${FREE_USED_SQL.slot} AS slot, ${FREE_USED_SQL.tag} AS tag FROM users u WHERE u.id = ?`)
-    .bind(date, date, date, date, user.id).first<DailyFreeLeft>();
-  const left = (kind: keyof DailyFreeLeft) => Math.max(0, DAILY_FREE[kind] - (row?.[kind] ?? 0));
-  return { lotto: left('lotto'), speetto: left('speetto'), slot: left('slot'), tag: left('tag') };
-}
 export function dayWindow(now: Date): { date: string; start: number; end: number } {
   const date = kstDate(now);
   const start = kstTimestamp(date, '00:00:00');
@@ -92,9 +82,22 @@ async function rejectedPurchase(db: D1Database, user: ShopUser, start: number, e
 export async function readInventory(db: D1Database, userId: string): Promise<Inventory> {
   return (await readBalances(db, userId)).inventory;
 }
+/** Wallet, tickets and today's free uses in one statement (the free counts are
+ * index probes on today's rows). */
 export async function readShopState(db: D1Database, user: ShopUser, now: Date): Promise<ShopState> {
-  const [balances, free] = await Promise.all([readBalances(db, user.id), readFreeLeft(db, user, now)]);
-  return { ...balances, free, canPurchase: user.role === 'player', serverTime: now.toISOString() };
+  const date = dayWindow(now).date;
+  // No users row is read: a one-row constant drives the wallet join and the counts.
+  const counts = (Object.keys(FREE_USED_SQL) as (keyof typeof FREE_USED_SQL)[])
+    .map(kind => `${FREE_USED_SQL[kind].replace('u.id', 'me.id')} AS ${kind}`).join(', ');
+  const row = await db.prepare(`SELECT COALESCE(b.gold, 0) AS gold, COALESCE(b.lotto_tickets, 0) AS lottoTickets,
+      COALESCE(b.speetto_tickets, 0) AS speettoTickets, COALESCE(b.tag_tickets, 0) AS tagTickets, ${counts}
+    FROM (SELECT ? AS id) me LEFT JOIN user_balances b ON b.user_id = me.id`)
+    .bind(date, date, date, date, user.id).first<Inventory & DailyFreeLeft & { gold: number }>();
+  const player = user.role === 'player';
+  const left = (kind: keyof DailyFreeLeft) => player ? Math.max(0, DAILY_FREE[kind] - (row?.[kind] ?? 0)) : 0;
+  return { gold: row?.gold ?? 0, inventory: { lottoTickets: row?.lottoTickets ?? 0, speettoTickets: row?.speettoTickets ?? 0, tagTickets: row?.tagTickets ?? 0 },
+    free: { lotto: left('lotto'), speetto: left('speetto'), slot: left('slot'), tag: left('tag') },
+    canPurchase: player, serverTime: now.toISOString() };
 }
 
 function chargeStatements(db: D1Database, attempt: string, kind: ShopKind): D1PreparedStatement[] {
@@ -377,20 +380,23 @@ async function previousSlotSpin(db: D1Database, userId: string, id: string): Pro
 }
 async function spinSlot(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<SlotRow> {
   const id = requestId(input);
+  if (input.free !== undefined && typeof input.free !== 'boolean') throw new ShopError(400, 'INVALID_PAYMENT', '무료 이용 여부를 확인해 주세요.');
+  const free = input.free === true;
   const previous = await previousSlotSpin(db, user.id, id);
   if (previous) return previous;
   const result = slotResult(randomInt);
   const attempt = crypto.randomUUID();
   const window = dayWindow(now);
   const writes = [
-    // Today's free spins go first; after them a spin needs the price in gold.
+    // A free spin (`free: true`) spends one of today's free uses; any other
+    // spin needs the price in gold.
     db.prepare(`INSERT OR IGNORE INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at, free)
-      SELECT ?, u.id, ?, ?, ?, ?, ?, ?, ${FREE_USED_SQL.slot} < ? FROM users u
+      SELECT ?, u.id, ?, ?, ?, ?, ?, ?, ? FROM users u
       WHERE u.id = ? AND u.role = 'player' AND u.active = 1
         AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
-        AND (${FREE_USED_SQL.slot} < ? OR COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?)`)
-      .bind(attempt, id, SLOT_RULES.price, JSON.stringify(result.reels), result.prize, window.date, now.toISOString(), window.date, DAILY_FREE.slot,
-        user.id, window.start, window.end, window.date, DAILY_FREE.slot, SLOT_RULES.price),
+        AND CASE WHEN ? THEN ${FREE_USED_SQL.slot} < ? ELSE COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ? END`)
+      .bind(attempt, id, SLOT_RULES.price, JSON.stringify(result.reels), result.prize, window.date, now.toISOString(), free ? 1 : 0,
+        user.id, window.start, window.end, free ? 1 : 0, window.date, DAILY_FREE.slot, SLOT_RULES.price),
     db.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
       SELECT ?, user_id, 'gold', -cost, '슬롯머신', 'slot:buy:' || user_id || ':' || request_id, created_at
       FROM slot_spins WHERE id = ? AND free = 0`).bind(crypto.randomUUID(), attempt),
@@ -409,6 +415,7 @@ async function spinSlot(db: D1Database, user: ShopUser, input: Record<string, un
   if (!clock || clock.now < window.start || clock.now >= window.end) {
     throw new ShopError(409, 'PURCHASE_TIME_CHANGED', '구매 날짜가 바뀌었어요. 새로고침하고 다시 시도해 주세요.');
   }
+  if (free) throw new ShopError(409, 'NO_FREE_LEFT', '오늘 무료 이용을 모두 썼어요.');
   throw new ShopError(409, 'INSUFFICIENT_GOLD', '골드가 부족해요');
 }
 
