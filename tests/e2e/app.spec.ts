@@ -167,7 +167,7 @@ test('preview seconds, history and help work without API access at both target w
   await expect(help).toContainText('동점이면 모두');
   await expect(help.getByRole('row', { name: '1분 이내 25점' })).toBeVisible();
   await expect(help.getByRole('row', { name: '1시간 이내 5점' })).toBeVisible();
-  await expect(help.getByRole('row', { name: '정확히 일치 30점' })).toBeVisible();
+  await expect(help.getByRole('row', { name: '정확히 일치 15점' })).toBeVisible();
   await captureWidths(page, 'help-wake', info, 2);
   await page.goto('/#/preview/game/offwork');
   await expect(page.locator('.result-list .result-card')).not.toHaveCount(0);
@@ -176,8 +176,8 @@ test('preview seconds, history and help work without API access at both target w
   await expect(help.getByRole('row', { name: '15초 이내 25점' })).toBeVisible();
   await page.goto('/#/preview/game/luck');
   await page.getByText('게임 방법', { exact: true }).click();
-  await expect(help.getByRole('row', { name: '10점 차이 이내 3점' })).toBeVisible();
-  await expect(help.getByRole('row', { name: '정확히 일치 30점' })).toBeVisible();
+  await expect(help.getByRole('row', { name: '10점 차이 이내 2점' })).toBeVisible();
+  await expect(help.getByRole('row', { name: '정확히 일치 15점' })).toBeVisible();
   // Reduced motion has no indefinitely repeating sprite animations.
   expect(await page.locator('.hero-character').evaluate(element => element.getAnimations().some(animation => animation.effect?.getTiming().iterations === Infinity))).toBe(false);
   for (const route of ['/preview', '/preview/ranking']) {
