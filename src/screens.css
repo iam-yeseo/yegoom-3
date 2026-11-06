@@ -64,8 +64,11 @@
   position: fixed;
   z-index: 10;
   bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
+  /* Centered without a transform: a transformed fixed bar gets its own layer,
+     which iOS home-screen apps can carry along with a page transition. */
+  left: 0;
+  right: 0;
+  margin: 0 auto;
   width: 100%;
   height: calc(78px + env(safe-area-inset-bottom));
   padding: 12px 0 env(safe-area-inset-bottom);
@@ -92,6 +95,7 @@
   color: #f47c66;
   font-weight: 700;
 }
+.tabbar[hidden] { display: none; }
 .tabbar-admin { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .tabbar-admin button { min-width: 0; padding-inline: 2px; white-space: nowrap; }
 .tabbar button:not(:disabled):active {
@@ -106,6 +110,12 @@
 }
 .tab-header {
   padding: calc(28px + env(safe-area-inset-top)) 20px 4px;
+}
+.tab-header.with-gold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .tab-header h1 {
   font-size: 24px;

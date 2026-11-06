@@ -15,31 +15,47 @@ function HintTiles({ hint }: { hint: NonNullable<CatchmindRound["hint"]> }) {
     {Array.from({ length: hint.length }, (_, i) => <span key={i} ref={i === 0 ? first : undefined}>{i === 0 ? hint.firstCharacter : ""}</span>)}
   </div>;
 }
+/** Every answer for screen readers; the visible record is the avatars in
+ * FailCount, whose tooltips show each wrong answer. */
 const GuessLog = memo(function GuessLog({ round }: { round: CatchmindRound }) {
-  const displayNameOf = useDisplayNameLookup();
-  const words = useRef<HTMLUListElement>(null);
-  useOnChange(round.guesses.length, before => {
-    if (round.guesses.length > before) rise(words.current?.lastElementChild);
-  });
-  return <ul className="pg-wrong-words" ref={words} aria-label="모두의 답">
-    {round.guesses.map(guess => <li key={guess.id}><span className={guess.correct ? "correct" : ""}><PersonName username={guess.player.username} fallback={guess.player.displayName} /> · {guess.answer}{guess.correct ? " · 정답" : ""}</span></li>)}
+  return <ul className="pg-wrong-words sr-only" aria-label="모두의 답">
+    {round.guesses.map(guess => <li key={guess.id}><PersonName username={guess.player.username} fallback={guess.player.displayName} /> · {guess.answer}{guess.correct ? " · 정답" : ""}</li>)}
   </ul>;
 }, (before, after) => before.round.id === after.round.id && JSON.stringify(before.round.guesses) === JSON.stringify(after.round.guesses));
-function FailCount({ round }: { round: CatchmindRound }) {
+function FailCount({ round, demo }: { round: CatchmindRound; demo: boolean }) {
   const nodes = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState<number | null>(null);
   const ended = round.status === "ended";
   const hinted = round.wrongCount >= CATCHMIND_RULES.hintAfter;
+  const wrong = round.guesses.filter(guess => !guess.correct);
   useOnChange(round.wrongCount, before => {
     if (round.wrongCount > before) pop(nodes.current?.children[round.wrongCount - 1], 1.25);
   });
+  useEffect(() => {
+    if (open === null) return;
+    const close = (event: PointerEvent) => { if (!nodes.current?.contains(event.target as Node)) setOpen(null); };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
   return <div className="pg-fails">
     <div className="pg-between"><span>모두의 오답</span><strong className={hinted && !ended ? "hinted" : ""}>
       {ended ? round.winner ? "정답!" : "판 종료" : hinted ? `종료까지 ${CATCHMIND_RULES.endAfter - round.wrongCount}번` : `힌트까지 ${CATCHMIND_RULES.hintAfter - round.wrongCount}번`}
     </strong></div>
     <div className="pg-fail-nodes" ref={nodes} aria-label={`오답 ${round.wrongCount}회, ${CATCHMIND_RULES.endAfter}회면 종료`}>
-      {Array.from({ length: CATCHMIND_RULES.endAfter }, (_, i) => <span key={i} className={`${i < round.wrongCount ? "hit" : ""} ${i === CATCHMIND_RULES.hintAfter - 1 ? "hint" : ""} ${i === round.wrongCount && !ended ? "next" : ""}`}>
-        {i < round.wrongCount ? "×" : i === CATCHMIND_RULES.hintAfter - 1 ? "힌트" : i === CATCHMIND_RULES.endAfter - 1 ? "끝" : ""}
-      </span>)}
+      {Array.from({ length: CATCHMIND_RULES.endAfter }, (_, i) => {
+        const guess = i < round.wrongCount ? wrong[i] : undefined;
+        const edge = i < 2 ? "left" : i > CATCHMIND_RULES.endAfter - 3 ? "right" : "";
+        const className = `${i < round.wrongCount ? "hit" : ""} ${guess ? "who" : ""} ${i === CATCHMIND_RULES.hintAfter - 1 ? "hint" : ""} ${i === round.wrongCount && !ended ? "next" : ""} ${open === i ? "open" : ""} ${edge}`;
+        if (guess) return <span key={i} className={className}>
+          <button type="button" aria-label={`${i + 1}번째 오답: ${guess.answer}`} aria-expanded={open === i} onClick={() => setOpen(current => current === i ? null : i)}>
+            <Avatar username={guess.player.username} userId={guess.player.id} photoVersion={guess.player.photoVersion} artKey={demo ? undefined : guess.player.character} size={30} />
+          </button>
+          <em className="pg-fail-tip" role="tooltip">{guess.answer}</em>
+        </span>;
+        return <span key={i} className={className}>
+          {i < round.wrongCount ? "×" : i === CATCHMIND_RULES.hintAfter - 1 ? "힌트" : i === CATCHMIND_RULES.endAfter - 1 ? "끝" : ""}
+        </span>;
+      })}
     </div>
   </div>;
 }
@@ -83,7 +99,7 @@ function Result({ state, user, locked, onNext, onSkip, canSkip, demo }: {
       <div><small>{round.winner.id === user.id ? "내가 맞힘" : "맞힌 사람"}</small><strong><PersonName username={round.winner.username} fallback={round.winner.displayName} /></strong></div>
       <div className="pg-winner-points"><b>+{CATCHMIND_RULES.score}점</b><b>+{CATCHMIND_RULES.gold}G</b></div>
     </div> : <div className="pg-ended" role="status"><strong>{round.endReason === "manual" ? "출제자가 판을 마쳤어요" : "아무도 맞히지 못했어요"}</strong><span>보상 없이 판이 끝났어요. {state.turn ? `다음은 ${honorific(displayNameOf(state.turn.username, state.turn.displayName))}이 그려요.` : "다음 출제자를 기다리고 있어요."}</span></div>}
-    <FailCount round={round} />
+    <FailCount round={round} demo={demo} />
     <GuessLog round={round} />
     {state.canNext ? <button className="pg-card pg-next-player" aria-label="다음 그림 그리기" disabled={locked} onClick={onNext}>{nextPlayer}</button> : <div className="pg-card pg-next-player">{nextPlayer}</div>}
     {canSkip && <button className="secondary-button cm-skip-button" disabled={locked} onClick={onSkip}>차례 넘기기</button>}
@@ -196,7 +212,7 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
       {state && round?.status === "open" && <>
         {isDrawer && <div className="pg-prompt"><span>제시어</span><strong>{round.word}</strong></div>}
         <Picture round={round} demo={demo} />
-        <FailCount round={round} />
+        <FailCount round={round} demo={demo} />
         {round.hint && <HintTiles key={round.id} hint={round.hint} />}
         <GuessLog round={round} />
         {user.role === "player" && !isDrawer ? <form className="pg-answer" onSubmit={guess} ref={form}>

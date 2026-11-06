@@ -63,11 +63,13 @@ function Badge({ stock, big }: { stock: StockQuote; big?: boolean }) {
   if (!tag) return null;
   return <em ref={ref} className={`${tag.className} ${big ? "big" : ""}`}>{tag.label}</em>;
 }
-/** Colored circle with the ticker's first two letters (no images). */
+/** The company logo (public/stocks/<ticker>.webp) on its pastel circle. If the
+ * image cannot load, the ticker's two letters stay visible instead. */
 export function StockBadge({ stock, size = "row", gray }: { stock: StockInfo; size?: "row" | "detail" | "small"; gray?: boolean }) {
+  const [failed, setFailed] = useState(false);
   return (
-    <span className={`stock-badge ${size} ${gray ? "gray" : ""}`} style={gray ? undefined : { background: stock.tint, color: stock.ink }} aria-hidden="true">
-      {stock.badge}
+    <span className={`stock-badge ${size} ${gray ? "gray" : ""} ${failed ? "" : "logo"}`} style={gray ? undefined : { background: stock.tint, color: stock.ink }} aria-hidden="true">
+      {failed ? stock.badge : <img src={`/stocks/${stock.ticker}.webp`} alt="" draggable={false} decoding="async" onError={() => setFailed(true)} />}
     </span>
   );
 }
@@ -335,7 +337,7 @@ function ConfirmSheet({ stock, side, qty, onCancel, onConfirm, busy }: {
         </dl>
         <p className="trade-note">주문하는 순간의 서버 가격으로 체결돼요.</p>
         <div className="sheet-actions">
-          <button className="secondary-button" onClick={onCancel} disabled={busy}>취소</button>
+          <button className="secondary-button cancel-button" onClick={onCancel} disabled={busy}>취소</button>
           <button className={`primary-button ${side === "sell" ? "sell" : ""}`} onClick={onConfirm} disabled={busy}>{busy ? "주문 중…" : "확인"}</button>
         </div>
       </div>

@@ -17,3 +17,13 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <App />
   </React.StrictMode>,
 );
+
+// The home-screen splash (index.html) stays at least ~0.9s, then fades out.
+const splash = document.getElementById("splash");
+if (splash) {
+  const hide = () => {
+    splash.classList.add("hide");
+    setTimeout(() => splash.remove(), 400);
+  };
+  requestAnimationFrame(() => setTimeout(hide, Math.max(0, 900 - performance.now())));
+}

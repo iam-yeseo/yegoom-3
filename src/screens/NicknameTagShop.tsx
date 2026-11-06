@@ -28,7 +28,7 @@ function DrawResult({ tag, name, drawsToday, busy, onEquip, onClose }: {
       <p className="tag-draw-meta">{tag.payment === "ticket" ? "뽑기권 1장" : `-${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`} · 오늘 {drawsToday}/{NICKNAME_TAG_RULES.dailyLimit}회</p>
       {tag.equipped && <p className="tag-note">지금 달고 있어요.</p>}
       <div className="tag-draw-actions">
-        <button type="button" className="secondary-button" onClick={() => dialog.current?.close()}>닫기</button>
+        <button type="button" className="secondary-button cancel-button" onClick={() => dialog.current?.close()}>닫기</button>
         {!tag.equipped && <button type="button" className="primary-button" disabled={busy} onClick={onEquip}>{busy ? "다는 중…" : "지금 달기"}</button>}
       </div>
     </div>

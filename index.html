@@ -12,8 +12,22 @@
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <title>예굼방 아케이드 3</title>
     <script defer src="/register-sw.js"></script>
+    <style>
+      /* PWA splash: shown only when launched from the home screen, removed by src/main.tsx. */
+      #splash { position: fixed; inset: 0; z-index: 2147483000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+        background: linear-gradient(180deg, #ddf0fb 0%, #fff9ee 55%, #fff9ee 100%); transition: opacity 320ms ease; }
+      #splash.hide { opacity: 0; pointer-events: none; }
+      #splash img { width: 112px; height: 112px; border-radius: 28px; box-shadow: 0 10px 30px rgba(120, 90, 60, 0.14); animation: splash-bob 1.6s ease-in-out infinite; }
+      #splash strong { font: 800 22px/1.2 TmoneyRoundWind, "Pretendard Variable", -apple-system, sans-serif; color: #3a3340; letter-spacing: -0.4px; }
+      #splash strong span { color: #f47c66; margin-left: 4px; }
+      #splash small { font: 600 13px/1.2 TmoneyRoundWind, "Pretendard Variable", -apple-system, sans-serif; color: #ada4b3; }
+      @keyframes splash-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+      @media (prefers-reduced-motion: reduce) { #splash img { animation: none; } }
+    </style>
   </head>
   <body>
+    <div id="splash" aria-hidden="true"><img src="/icons/icon.svg" alt="" /><strong>예굼방 아케이드<span>3</span></strong><small>오늘도 한 판 해 볼까요?</small></div>
+    <script src="/splash.js"></script>
     <div id="root"></div>
     <noscript>예굼방 아케이드 3을 이용하려면 JavaScript를 켜주세요.</noscript>
     <script type="module" src="/src/main.tsx"></script>

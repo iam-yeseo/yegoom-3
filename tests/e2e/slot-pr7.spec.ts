@@ -135,7 +135,7 @@ for (const width of [390, 560]) test(`slot tiles, motion states and purchase-day
   await expect(page).toHaveURL(/#\/shop\/slot$/);
   await ready(page);
   await expect(machine(page)).toHaveAttribute('data-phase', 'idle');
-  await expect(page.locator('.tabbar')).toHaveCount(0);
+  await expect(page.locator('.tabbar:not([hidden])')).toHaveCount(0);
   await expect(page.locator('.slot')).not.toContainText('이용권');
   await capture(page, 'slot-idle', width, info);
 

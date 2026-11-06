@@ -116,7 +116,7 @@ function predictionRow(game: GameState, me: string): GameRow {
     return {
       ...row,
       chip: "done",
-      sub: mine ? `${answer} · 내 예측 ${unit(mine.value)}` : answer,
+      sub: answer,
       right: mine ? `+${mine.score}점` : "",
     };
   }

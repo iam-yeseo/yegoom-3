@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES } from "../../shared/balance";
 import type { LottoPurchaseInput, LottoTicket, ShopKind, ShopPayment, SpeettoPurchaseInput, SpeettoTicket } from "../../shared/types";
-import { SectionTitle, Toolbar } from "../components/UI";
+import { Gold, SectionTitle, Toolbar } from "../components/UI";
 import { ScratchTicket } from "../components/ScratchTicket";
 import { anim, reduced, shake, toast, useCountUp } from "../motion";
 import { useShop } from "../shop";
@@ -34,10 +34,10 @@ function useLoadShop(kind?: ShopKind) {
   useEffect(() => { void latest.current.refresh(kind).catch(() => {}); }, [kind]);
   return shop;
 }
-export function ShopMain({ go }: { go: (path: string) => void }) {
+export function ShopMain({ go, gold }: { go: (path: string) => void; gold: number }) {
   useLoadShop();
   return <div className="shop-main">
-    <header className="tab-header"><h1>상점</h1></header>
+    <header className="tab-header with-gold"><h1>상점</h1><Gold value={gold} /></header>
     <div className="screen-body stack">
       <InventoryCard />
       <SectionTitle title="복권" />

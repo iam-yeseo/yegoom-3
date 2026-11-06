@@ -121,10 +121,10 @@ export const SCORE_TABLES = {
     { maxDifference: 600, points: 1 },
   ],
   luck: [
-    { maxDifference: 0, points: 30 }, { maxDifference: 1, points: 25 },
-    { maxDifference: 2, points: 20 }, { maxDifference: 3, points: 15 },
-    { maxDifference: 4, points: 10 }, { maxDifference: 5, points: 5 },
-    { maxDifference: 10, points: 3 }, { maxDifference: 15, points: 1 },
+    { maxDifference: 0, points: 15 }, { maxDifference: 1, points: 12 },
+    { maxDifference: 2, points: 10 }, { maxDifference: 3, points: 8 },
+    { maxDifference: 4, points: 6 }, { maxDifference: 5, points: 4 },
+    { maxDifference: 10, points: 2 }, { maxDifference: 15, points: 1 },
   ],
 } as const satisfies Record<GameId, readonly { maxDifference: number; points: number }[]>;
 

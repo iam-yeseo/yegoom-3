@@ -481,13 +481,20 @@ export function TabBar({
   active,
   onNavigate,
   admin = false,
+  hidden = false,
 }: {
   active: string;
   onNavigate: (path: string) => void;
   admin?: boolean;
+  hidden?: boolean;
 }) {
   const nav = useRef<HTMLElement>(null);
-  useOnChange(active, () => {
+  // While hidden on a sub-page the bar keeps the tab it came from, so coming
+  // back to that tab does not replay the icon hop.
+  const lastShown = useRef(active);
+  if (!hidden) lastShown.current = active;
+  const current = hidden ? lastShown.current : active;
+  useOnChange(current, () => {
     const icon = nav.current?.querySelector("button.on svg");
     anim(
       icon,
@@ -501,9 +508,9 @@ export function TabBar({
     );
   });
   return (
-    <nav className={`tabbar${admin ? " tabbar-admin" : ""}`} aria-label="주요 메뉴" ref={nav}>
+    <nav className={`tabbar${admin ? " tabbar-admin" : ""}${hidden ? " tabbar-hidden" : ""}`} aria-label="주요 메뉴" ref={nav} hidden={hidden}>
       {tabs.filter(tab => tab.path !== "/admin" || admin).map((tab) => {
-        const on = tab.path === active;
+        const on = tab.path === current;
         return (
           <button
             key={tab.path}

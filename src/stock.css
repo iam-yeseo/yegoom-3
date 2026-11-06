@@ -25,6 +25,23 @@
   background: #eee9e4;
   color: #ada4b3;
 }
+.stock-badge.logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+.stock-badge.logo:not(.small) img {
+  transform: scale(1.08);
+}
+.stock-badge.small.logo {
+  background: transparent !important;
+}
+.stock-badge.gray img {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
 em.halted {
   background: #ada4b3;
 }

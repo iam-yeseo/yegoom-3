@@ -44,7 +44,7 @@ export function TagCollection({ shopHref }: { shopHref: string }) {
         </li>)}
       </ul>
       <div className="tag-collection-actions">
-        <button type="button" className="secondary-button tag-untag" disabled={busy || !state.equipped} onClick={() => void wear(null)}>별명 떼기</button>
+        <button type="button" className="secondary-button cancel-button tag-untag" disabled={busy || !state.equipped} onClick={() => void wear(null)}>별명 떼기</button>
         <a className="secondary-button tag-shop-link" href={shopHref}>상점에서 뽑기</a>
       </div>
     </>}

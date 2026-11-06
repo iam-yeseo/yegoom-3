@@ -5820,8 +5820,8 @@ describe('Worker and D1 integration', () => {
       { reference: `first:luck:${TODAY}:min`, amount: 100 },
       { reference: `predict:luck:${TODAY}:min`, amount: 100 },
       { reference: `predict:luck:${TODAY}:siwon`, amount: 100 },
-      { reference: `score:luck:${TODAY}:min`, amount: 15 },
-      { reference: `score:luck:${TODAY}:siwon`, amount: 3 },
+      { reference: `score:luck:${TODAY}:min`, amount: 8 },
+      { reference: `score:luck:${TODAY}:siwon`, amount: 2 },
     ] });
   });
 

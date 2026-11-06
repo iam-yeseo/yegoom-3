@@ -321,11 +321,22 @@ button svg {
   box-shadow: none;
   font-size: 14px;
 }
+/* Secondary actions are lavender, not coral: coral reads as "cancel/danger"
+   next to the coral primary. Cancel and close use the gray .cancel-button. */
 .secondary-button {
-  background: #ffe6df;
-  color: #c9533e;
+  background: #eee8fc;
+  color: #6a4fb8;
   box-shadow: none;
   font-size: 15px;
+}
+.secondary-button:disabled {
+  color: #ada4b3;
+  background: #f1ece6;
+}
+.secondary-button.cancel-button,
+.cancel-button {
+  background: #f1ece6;
+  color: #7c7383;
 }
 .text-button {
   padding: 14px;

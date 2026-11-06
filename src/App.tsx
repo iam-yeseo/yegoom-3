@@ -53,7 +53,7 @@ import { createPreviewStockClient, previewStockHome, resetPreviewStock, type Sto
 import { Achievements, type AchievementClient } from "./screens/Achievements";
 import { createPreviewAchievements } from "./achievements-preview";
 import { ACHIEVEMENTS_PATH } from "../shared/achievements";
-import { Segmented } from "./components/UI";
+import { Gold, Segmented } from "./components/UI";
 
 /** The real stock client: plain API calls (polling is paced by the screens). */
 const serverStock: StockClient = {
@@ -175,13 +175,26 @@ function topColor(shell: Element): string {
   }
   return "#FFF9EE";
 }
+/** Sets theme-color so an installed iPhone app repaints its status bar. iOS
+ * reads the colour when a navigation happens (a hash change counts) and can
+ * ignore a later attribute change, so the tag is replaced with a new one and
+ * the current entry is re-stamped, which makes it read the colour again. */
+function applyThemeColor(color: string) {
+  const current = document.querySelector('meta[name="theme-color"]');
+  if (current?.getAttribute("content") === color) return;
+  const next = document.createElement("meta");
+  next.name = "theme-color";
+  next.content = color;
+  if (current) current.replaceWith(next);
+  else document.head.appendChild(next);
+  try { history.replaceState(history.state, "", location.href); } catch { /* sandboxed frames */ }
+}
 /** Keeps theme-color and the page background behind the status bar in step
  * with the top of the current screen, so the bar blends into the hero. */
 function useStatusBarColor(screen: { current: HTMLElement | null }, path: string) {
   useEffect(() => {
     const node = screen.current;
-    const meta = document.querySelector('meta[name="theme-color"]');
-    if (!node || !meta) return;
+    if (!node) return;
     let frame = 0;
     const update = () => {
       cancelAnimationFrame(frame);
@@ -189,7 +202,7 @@ function useStatusBarColor(screen: { current: HTMLElement | null }, path: string
         const shell = node.closest(".app-shell");
         if (!shell) return;
         const color = topColor(shell);
-        meta.setAttribute("content", color);
+        applyThemeColor(color);
         document.documentElement.style.setProperty("--top-color", color);
       });
     };
@@ -848,8 +861,9 @@ export default function App() {
     const achievementsOpen = path === ACHIEVEMENTS_PATH;
     content = (
       <div className="games-tab">
-        <header className="tab-header">
+        <header className="tab-header with-gold">
           <h1>{achievementsOpen ? "도전과제" : "게임"}</h1>
+          <Gold value={me.gold} />
         </header>
         <div className="games-toggle">
           <Segmented label="게임 또는 도전과제" value={achievementsOpen ? "achievements" : "games"}
@@ -948,7 +962,7 @@ export default function App() {
   else if (stockId)
     content = <StockDetail key={stockId} client={stockClient} ticker={stockId} onBack={() => go("/stock")}
       onTraded={() => { if (!demo) void refresh(); }} />;
-  else if (path === "/shop") content = <ShopMain go={go} />;
+  else if (path === "/shop") content = <ShopMain go={go} gold={me.gold} />;
   else if (path === "/shop/lotto")
     content = <Lotto gold={me.gold} onBack={() => go("/shop")} />;
   else if (path === "/shop/speetto")
@@ -1051,7 +1065,9 @@ export default function App() {
         <div className="screen" ref={screenRef}>
           <Suspense fallback={<Skeleton />}>{content}</Suspense>
         </div>
-        {showTabs && <TabBar active={tab ?? "/"} onNavigate={go} admin={me?.role === "admin"} />}
+        {/* Stays mounted while signed in, so returning from a sub-page never
+            re-inserts (and visibly shifts) the bar; sub-pages only hide it. */}
+        {!!view && !!me && <TabBar active={tab ?? "/"} onNavigate={go} admin={me?.role === "admin"} hidden={!showTabs} />}
         {stockNoticeOpen && <StockNotice onClose={() => setStockNoticeOpen(false)} />}
       </main>
     </LaunchGiftProvider>
