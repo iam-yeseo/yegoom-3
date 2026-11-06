@@ -378,19 +378,22 @@ test('confirming an old winning receipt keeps the current wallet after its prize
   expect(data.gold).toBe(100);
 });
 
-test('slot preview uses the same gold-only rules without any API requests', async ({ page }) => {
+test('slot preview spends a free spin first, then gold, without any API requests', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const requests: string[] = [];
   page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(request.url()); });
   await page.addInitScript(() => { Math.random = () => 0; });
   await page.goto('/#/preview/shop/slot');
-  await ready(page);
+  const free = page.getByRole('button', { name: '무료로 돌리기 · 오늘 3/3회', exact: true });
+  await expect(free).toBeEnabled();
   const before = await page.locator('.game-toolbar .gold').innerText();
-  await play(page).click();
+  await free.click();
   await result(page, JACKPOT, 'won');
   await expect(page.locator('.slot-result')).toContainText('+2,000G');
   const initialGold = Number(before.replace(/[^\d]/g, ''));
-  await expect(page.locator('.game-toolbar .gold')).toContainText((initialGold - SLOT_RULES.price + SLOT_RULES.jackpotPrize).toLocaleString('ko-KR'));
+  // Today's free spin costs nothing; only the prize is added.
+  await expect(page.locator('.game-toolbar .gold')).toContainText((initialGold + SLOT_RULES.jackpotPrize).toLocaleString('ko-KR'));
+  await expect(page.getByRole('button', { name: '무료로 돌리기 · 오늘 2/3회', exact: true })).toBeEnabled();
   await expect(page.locator('.slot-history .shop-history-heading strong')).toHaveText('당첨 +2,000G');
   expect(requests).toEqual([]);
 });
