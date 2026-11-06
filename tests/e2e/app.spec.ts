@@ -167,7 +167,7 @@ test('preview seconds, history and help work without API access at both target w
   await expect(help).toContainText('동점이면 모두');
   await expect(help.getByRole('row', { name: '1분 이내 25점' })).toBeVisible();
   await expect(help.getByRole('row', { name: '1시간 이내 5점' })).toBeVisible();
-  await expect(help.getByRole('row', { name: '정확히 일치 15점' })).toBeVisible();
+  await expect(help.getByRole('row', { name: '정확히 일치 30점' })).toBeVisible();
   await captureWidths(page, 'help-wake', info, 2);
   await page.goto('/#/preview/game/offwork');
   await expect(page.locator('.result-list .result-card')).not.toHaveCount(0);
