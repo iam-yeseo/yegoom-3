@@ -35,11 +35,17 @@ export const GAME_RULES = {
 export const PREDICTION_REWARDS = { participationGold: 100, firstGold: 100 } as const;
 export const ATTENDANCE_RULES = {
   cycleLength: 7, dailyGold: 100, cycleGold: 500,
-  ticketsFrom: '2026-11-03', lottoTickets: 1, speettoTickets: 1,
+  /** Attendance paid one lotto and one speetto ticket from 11/3 to 11/6; from
+   * 11/7 the daily free items (DAILY_FREE) replace them. */
+  ticketsFrom: '2026-11-03', ticketsUntil: '2026-11-07', lottoTickets: 1, speettoTickets: 1,
 } as const;
+/** Every KST day each player may use this many of each item for free. Unused
+ * ones are not carried over: the count starts again at midnight. */
+export const DAILY_FREE = { lotto: 3, speetto: 3, slot: 3, tag: 3 } as const;
+export type DailyFreeKind = keyof typeof DAILY_FREE;
 /** date is the server's KST attendance day (the local KST day in previews). */
 export function attendanceTickets(date: string): Inventory {
-  const active = date >= ATTENDANCE_RULES.ticketsFrom;
+  const active = date >= ATTENDANCE_RULES.ticketsFrom && date < ATTENDANCE_RULES.ticketsUntil;
   return { lottoTickets: active ? ATTENDANCE_RULES.lottoTickets : 0, speettoTickets: active ? ATTENDANCE_RULES.speettoTickets : 0, tagTickets: 0 };
 }
 export function attendanceRewardLabel(gold: number, date: string): string {

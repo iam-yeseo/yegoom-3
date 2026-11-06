@@ -2,6 +2,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import type { BootstrapResponse, CatchmindResponse, KujiResponse, LottoPurchaseInput, LottoResponse, ShopState, SpeettoResponse } from '../../shared/types';
 
+/** Shop purchases ask "정말 살까요?" first (2026-11-07 update); answer yes. */
+async function confirmPurchase(page: Page) {
+  const dialog = page.getByRole('dialog', { name: '구매 확인', exact: true });
+  await dialog.getByRole('button', { name: /^(구매하기|뽑기)$/ }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
 /** The home hero no longer shows gold; the signed-in balance is read from the API. */
 async function expectGold(page: Page, gold: number) {
   await expect.poll(() => page.evaluate(() => fetch('/api/bootstrap', { credentials: 'same-origin', cache: 'no-store' })
@@ -577,6 +584,7 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
   const beforeGold = await displayedGold(page, '.game-toolbar .gold');
   await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
+  await confirmPurchase(page);
   await expect(page.locator('.lotto-tickets .ticket').first()).toContainText('추첨 대기');
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold - 500).toLocaleString('ko-KR'));
   await page.goto('/#/preview');
@@ -588,6 +596,7 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold - 500 + reward).toLocaleString('ko-KR'));
   await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
   await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
+  await confirmPurchase(page);
   const finalGold = beforeGold - 1000 + reward;
   await expect(page.locator('.game-toolbar .gold')).toContainText(finalGold.toLocaleString('ko-KR'));
   await captureWidths(page, 'preview-lotto', info, 3);
@@ -599,6 +608,7 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await expect(attendanceLedger).toContainText(`+${reward}G`);
   await page.goto('/#/preview/shop/speetto');
   await page.getByRole('button', { name: '골드로 사기 · 300G', exact: true }).click();
+  await confirmPurchase(page);
   await expect(page.locator('.scratch-card')).toBeVisible();
   await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
   await expect(page.locator('.scratch-result')).not.toHaveText('?');
@@ -695,6 +705,7 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   await page.getByRole('button', { name: '번호 6', exact: true }).click();
   await expect(page.getByRole('button', { name: '번호 6', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
+  await confirmPurchase(page);
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeDisabled();
   const committed = await shopSnapshot<LottoResponse>(page, 'lotto');
@@ -706,6 +717,7 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   await page.reload();
   await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeDisabled();
   const retried = purchaseResponse(page, 'lotto');
+  // Retrying an unconfirmed purchase reuses its request and does not ask again.
   await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
   expect((await retried).status()).toBe(200);
   await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeEnabled();
@@ -717,6 +729,7 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
   const paid = purchaseResponse(page, 'lotto');
   await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
+  await confirmPurchase(page);
   const paidResponse = await paid;
   expect(paidResponse.status()).toBe(200);
   const paidData = await paidResponse.json() as LottoResponse;
@@ -746,6 +759,7 @@ test('speetto pays at purchase, restores owned tickets after leaving and scratch
   await captureWidths(page, 'authenticated-speetto', info, 3);
   const paid = purchaseResponse(page, 'speetto');
   await page.getByRole('button', { name: '골드로 사기 · 300G', exact: true }).click();
+  await confirmPurchase(page);
   const response = await paid;
   expect(response.status()).toBe(200);
   const data = await response.json() as SpeettoResponse;
@@ -767,6 +781,7 @@ test('speetto pays at purchase, restores owned tickets after leaving and scratch
   expect((await snapshot(page)).user.gold).toBe(afterPurchase);
   const coupon = purchaseResponse(page, 'speetto');
   await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
+  await confirmPurchase(page);
   const couponData = await (await coupon).json() as SpeettoResponse;
   expect(couponData.purchase).toMatchObject({ payment: 'ticket', cost: 0 });
   expect(couponData.inventory.speettoTickets).toBe(restored.inventory.speettoTickets - 1);
@@ -967,6 +982,7 @@ test('catchmind preview keeps hints, rewards, drawing tools and color selection 
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5).toLocaleString('ko-KR'));
   await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
   await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
+  await confirmPurchase(page);
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5 - 500).toLocaleString('ko-KR'));
   await page.goto('/#/preview');
   await expect(page.locator('.home-score strong').first()).toHaveText(String(beforeScore + 3));

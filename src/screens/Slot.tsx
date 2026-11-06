@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { SHOP_HISTORY_DAYS, SLOT_RULES } from "../../shared/balance";
+import { DAILY_FREE, SHOP_HISTORY_DAYS, SLOT_RULES } from "../../shared/balance";
 import type { SlotSpin, SlotSpinInput, SlotSymbol } from "../../shared/types";
 import { ApiFailure } from "../api";
 import { Toolbar } from "../components/UI";
@@ -126,7 +126,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
       setError("이전 요청 번호를 확인할 수 없어요. 최근 기록을 다시 불러와 확인해 주세요.");
       return;
     }
-    if (!current.canPurchase || current.loading || current.pending && current.pending.kind !== "slot" || !pending && current.gold < SLOT_RULES.price) return;
+    if (!current.canPurchase || current.loading || current.pending && current.pending.kind !== "slot" || !pending && (current.free?.slot ?? 0) <= 0 && current.gold < SLOT_RULES.price) return;
     const input = pending ?? { requestId: crypto.randomUUID() };
     unresolved.current = input;
     const run = ++generation.current;
@@ -214,8 +214,10 @@ export function Slot({ onBack }: { onBack: () => void }) {
   const pending = shop.pending?.kind === "slot" || phase === "checking";
   const missingRequest = phase === "checking" && shop.pending?.kind !== "slot" && !unresolved.current;
   const busy = working;
-  const disabled = busy || missingRequest || shop.loading || !shop.canPurchase || !shop.slot || Boolean(shop.pending && shop.pending.kind !== "slot") || !pending && shop.gold < SLOT_RULES.price;
-  const buttonLabel = pending && phase !== "spinning" ? "같은 요청으로 다시 확인" : `돌리기 · ${SLOT_RULES.price.toLocaleString("ko-KR")}G`;
+  const freeSpins = shop.free?.slot ?? 0;
+  const disabled = busy || missingRequest || shop.loading || !shop.canPurchase || !shop.slot || Boolean(shop.pending && shop.pending.kind !== "slot") || !pending && freeSpins <= 0 && shop.gold < SLOT_RULES.price;
+  const buttonLabel = pending && phase !== "spinning" ? "같은 요청으로 다시 확인"
+    : freeSpins > 0 ? `무료로 돌리기 · 오늘 ${freeSpins}/${DAILY_FREE.slot}회` : `돌리기 · ${SLOT_RULES.price.toLocaleString("ko-KR")}G`;
   const message = error || shop.error || (missingRequest ? "이전 요청 번호를 확인할 수 없어요. 최근 기록을 다시 불러와 확인해 주세요." : "");
   return <div className="slot">
     <SlotToolbar gold={gold} onBack={onBack} />
@@ -252,7 +254,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
       </button>
       <p className="slot-rule"><strong>7 7 7이 나오면 {SLOT_RULES.jackpotPrize.toLocaleString("ko-KR")}G</strong><span>당첨 확률 {SLOT_RULES.jackpotPercent}% · 1회 {SLOT_RULES.price.toLocaleString("ko-KR")}G{SLOT_RULES.dailyLimit === null ? " · 횟수 제한 없음" : ""}</span></p>
       {!shop.canPurchase && !shop.loading && <p className="subtle-note">운영자 계정은 구매에 참여하지 않아요.</p>}
-      {!pending && shop.gold < SLOT_RULES.price && shop.canPurchase && <p className="subtle-note">골드가 부족해요</p>}
+      {!pending && freeSpins <= 0 && shop.gold < SLOT_RULES.price && shop.canPurchase && <p className="subtle-note">골드가 부족해요</p>}
       {shop.loading && !busy && <p className="subtle-note" role="status">상점 정보를 불러오는 중…</p>}
       {message && <p className="form-message error" role="alert">{message}</p>}
       {(!shop.slot || missingRequest) && !busy && message && <button type="button" className="text-button" onClick={() => void shop.refresh("slot").catch(() => {})}>다시 불러오기</button>}

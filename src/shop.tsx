@@ -104,7 +104,7 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   }, [preview, storageKey]);
   const apply = useCallback((next: ShopResponse) => {
     if (!mounted.current) return;
-    setState({ gold: next.gold, inventory: next.inventory, canPurchase: next.canPurchase, serverTime: next.serverTime });
+    setState(current => ({ gold: next.gold, inventory: next.inventory, canPurchase: next.canPurchase, serverTime: next.serverTime, free: next.free ?? current.free }));
     if ("kuji" in next) setKuji(next.kuji);
     if ("lotto" in next) setLotto(next.lotto);
     if ("speetto" in next) setSpeetto(next.speetto);

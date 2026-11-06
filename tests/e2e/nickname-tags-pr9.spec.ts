@@ -1,6 +1,13 @@
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 
+/** Shop purchases ask "정말 살까요?" first (2026-11-07 update); answer yes. */
+async function confirmPurchase(page: Page) {
+  const dialog = page.getByRole('dialog', { name: '구매 확인', exact: true });
+  await dialog.getByRole('button', { name: /^(구매하기|뽑기)$/ }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
 const MORNING = '2026-10-30T00:00:00Z';
 const ORIGIN = 'http://localhost:8788';
 test.use({ serviceWorkers: 'block' });
@@ -46,10 +53,12 @@ test('preview draws a tag, wears it and shows it before the nickname without API
   await expect(page.locator('.tag-shop-odds')).toContainText('S등급');
   await capture(page, 'preview-shop', info);
   await page.setViewportSize({ width: 390, height: 900 });
-  await page.getByRole('button', { name: '뽑기 · 뽑기권 1장' }).click();
+  // Today's three free draws come first (2026-11-07 update), before any ticket.
+  await page.getByRole('button', { name: '무료로 뽑기 · 오늘 3/3회' }).click();
+  await confirmPurchase(page);
   const sheet = page.locator('dialog.tag-draw-dialog');
   await expect(sheet).toBeVisible();
-  await expect(sheet.locator('.tag-draw-meta')).toContainText('뽑기권 1장');
+  await expect(sheet.locator('.tag-draw-meta')).toContainText('오늘의 무료 뽑기');
   await expect(sheet.locator('.nick-tag')).toHaveCount(1);
   await expect(sheet.locator('small')).toHaveText(/^[SABC]등급 · (홀로그램|금빛|은빛|테두리)$/);
   const text = (await sheet.locator('.nick-tag').textContent())!;
@@ -58,7 +67,7 @@ test('preview draws a tag, wears it and shows it before the nickname without API
   await sheet.getByRole('button', { name: '지금 달기' }).click();
   await expect(sheet).toContainText('지금 달고 있어요.');
   await sheet.getByRole('button', { name: '닫기' }).click();
-  await expect(page.locator('.subtle-note').filter({ hasText: '오늘 1/5회' })).toContainText('뽑기권 4장');
+  await expect(page.locator('.subtle-note').filter({ hasText: '오늘 1/5회' })).toContainText('뽑기권 5장');
 
   await navigate(page, '/preview');
   await expect(page.locator('.room-name .nick-tag')).toHaveText(text);
@@ -78,16 +87,24 @@ test('preview draws a tag, wears it and shows it before the nickname without API
   expect(apiCalls).toEqual([]);
 });
 
-test('a draw ticket pays before gold and the shop counts the tickets left', async ({ page }) => {
+test('free draws come first, then a draw ticket pays before gold, and the shop counts what is left', async ({ page }) => {
   await login(page, 'min');
   const before = await (await page.request.get('/api/bootstrap')).json() as { user: { gold: number }; inventory: { tagTickets: number } };
   expect(before.inventory.tagTickets).toBe(2);
   await page.goto('/#/shop/tag');
   await expect(page.locator('.subtle-note').filter({ hasText: '오늘' })).toContainText('뽑기권 2장');
-  await page.getByRole('button', { name: /^뽑기 · 뽑기권 1장$|^뽑기 결과 다시 확인$/ }).click();
   const sheet = page.locator('dialog.tag-draw-dialog');
+  for (const left of [3, 2, 1]) {
+    await page.getByRole('button', { name: `무료로 뽑기 · 오늘 ${left}/3회` }).click();
+    await confirmPurchase(page);
+    await expect(sheet.locator('.tag-draw-meta')).toContainText('오늘의 무료 뽑기');
+    await sheet.getByRole('button', { name: '보관하기' }).click();
+    await expect(sheet).toHaveCount(0);
+  }
+  await page.getByRole('button', { name: /^뽑기 · 뽑기권 1장$|^뽑기 결과 다시 확인$/ }).click();
+  await confirmPurchase(page);
   await expect(sheet.locator('.tag-draw-meta')).toContainText('뽑기권 1장');
-  await sheet.getByRole('button', { name: '닫기' }).click();
+  await sheet.getByRole('button', { name: '보관하기' }).click();
   await expect(page.locator('.subtle-note').filter({ hasText: '오늘' })).toContainText('뽑기권 1장');
   const after = await (await page.request.get('/api/bootstrap')).json() as { user: { gold: number }; inventory: { tagTickets: number } };
   expect(after.inventory.tagTickets).toBe(1);
@@ -97,7 +114,8 @@ test('a draw ticket pays before gold and the shop counts the tickets left', asyn
 test('a signed-in player draws and wears a tag that other players then see', async ({ page, browser }, info) => {
   await login(page, 'yeseo');
   await page.goto('/#/shop/tag');
-  await page.getByRole('button', { name: /^뽑기 · 300G$|^뽑기 결과 다시 확인$/ }).click();
+  await page.getByRole('button', { name: /^무료로 뽑기 · 오늘 3\/3회$|^뽑기 결과 다시 확인$/ }).click();
+  await confirmPurchase(page);
   const sheet = page.locator('dialog.tag-draw-dialog');
   await expect(sheet.locator('.nick-tag')).toHaveCount(1);
   const text = (await sheet.locator('.nick-tag').textContent())!;

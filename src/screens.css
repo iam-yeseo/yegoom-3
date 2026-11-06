@@ -109,7 +109,7 @@
   padding-bottom: 32px;
 }
 .tab-header {
-  padding: calc(28px + env(safe-area-inset-top)) 20px 4px;
+  padding: calc(28px + env(safe-area-inset-top)) 20px 14px;
 }
 .tab-header.with-gold {
   display: flex;
@@ -2926,3 +2926,7 @@ em.ring::after {
 .achievement-reward { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 800; color: var(--muted); white-space: nowrap; }
 .achievement-reward.claimed { color: #2e8c6e; }
 .achievement-row.locked .achievement-reward .coin { filter: grayscale(1); opacity: .6; }
+.inventory-card .inventory-free-title { margin-top: 6px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.inventory-card .inventory-free-title small { font-size: 11px; font-weight: 600; color: #ada4b3; }
+.inventory-card .inventory-free { justify-content: flex-start; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: #7c7383; }
+.inventory-card .inventory-free strong { margin-left: 3px; color: #2e8c6e; }

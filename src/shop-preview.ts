@@ -1,4 +1,4 @@
-import { KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, NICKNAME_TAG_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, attendanceTickets, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import { DAILY_FREE, KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, NICKNAME_TAG_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, attendanceTickets, kujiCost, type DailyFreeKind, lottoPrize, lottoRank } from '../shared/balance';
 import type { KujiDraw,
   Inventory, KujiCell, KujiGrade, KujiPurchase, KujiPurchaseInput, KujiResponse,
   LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoTicket, ShopKind, ShopPayment,
@@ -135,8 +135,17 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     settle(now);
     if (cells.every(cell => cell.buyerId !== null)) { boardId += 1; makeBoard(); draws_ = []; }
   }
+  /** Free uses spent per item, keyed by KST date (counts reset each day). */
+  const freeUsed = new Map<string, number>();
+  const freeKey = (kind: DailyFreeKind, now: Date) => `${kstDate(now)}:${kind}`;
+  const freeLeft = (kind: DailyFreeKind, now: Date) => Math.max(0, DAILY_FREE[kind] - (freeUsed.get(freeKey(kind, now)) ?? 0));
+  function useFree(kind: DailyFreeKind, now: Date) {
+    if (freeLeft(kind, now) < 1) throw new Error('오늘 무료 이용을 모두 썼어요.');
+    freeUsed.set(freeKey(kind, now), (freeUsed.get(freeKey(kind, now)) ?? 0) + 1);
+  }
   function state(now: Date): ShopState {
-    return { gold, inventory: { ...inventory }, canPurchase: true, serverTime: now.toISOString() };
+    return { gold, inventory: { ...inventory }, canPurchase: true, serverTime: now.toISOString(),
+      free: { lotto: freeLeft('lotto', now), speetto: freeLeft('speetto', now), slot: freeLeft('slot', now), tag: freeLeft('tag', now) } };
   }
   function kuji(now: Date, purchase?: KujiPurchase): KujiResponse {
     const remainingByGrade = Object.fromEntries(KUJI_RULES.grades.map(rule => [rule.grade, 0])) as Record<KujiGrade, number>;
@@ -258,7 +267,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     if (previous) return lotto(now, previous as LottoTicket);
     if (numbers.length !== LOTTO_RULES.pickCount || new Set(numbers).size !== LOTTO_RULES.pickCount ||
       numbers.some(number => !Number.isInteger(number) || number < 1 || number > LOTTO_RULES.maxNumber)) throw new Error('서로 다른 숫자를 골라 주세요.');
-    pay(input.payment, 'lottoTickets', LOTTO_RULES.price, '데일리 로또 구매', now);
+    if (input.payment === 'free') useFree('lotto', now); else pay(input.payment, 'lottoTickets', LOTTO_RULES.price, '데일리 로또 구매', now);
     const today = kstDate(now);
     const purchase: LottoTicket = { id: crypto.randomUUID(), requestId: input.requestId,
       purchaseDate: today, createdAt: now.toISOString(),
@@ -274,7 +283,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     const payload = JSON.stringify({ payment: input.payment });
     const previous = replay('speetto', input.requestId, payload);
     if (previous) return speetto(now, previous as SpeettoTicket);
-    pay(input.payment, 'speettoTickets', SPEETTO_RULES.price, '스피또 구매', now);
+    if (input.payment === 'free') useFree('speetto', now); else pay(input.payment, 'speettoTickets', SPEETTO_RULES.price, '스피또 구매', now);
     const won = Math.random() * 100 < SPEETTO_RULES.winPercent;
     const symbols = shuffled(SPEETTO_RULES.characters);
     const resultCells: SpeettoSymbol[] = won ? [symbols[0], symbols[0], symbols[0]] : symbols.slice(0, 3);
@@ -293,11 +302,13 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     if (typeof input.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.requestId)) throw new Error('구매 요청을 다시 시도해 주세요.');
     const previous = slotReceipts.get(input.requestId);
     if (previous) return slot(now, previous);
-    if (gold < SLOT_RULES.price) throw new Error('골드가 부족해요');
+    const free = freeLeft('slot', now) > 0;
+    if (!free && gold < SLOT_RULES.price) throw new Error('골드가 부족해요');
+    if (free) useFree('slot', now);
     const result = slotResult(max => Math.floor(Math.random() * max));
     const spin: SlotSpin = { id: crypto.randomUUID(), requestId: input.requestId, ...result,
-      cost: SLOT_RULES.price, date: kstDate(now), createdAt: now.toISOString() };
-    record('gold', -spin.cost, '슬롯머신', now);
+      cost: free ? 0 : SLOT_RULES.price, date: kstDate(now), createdAt: now.toISOString(), free };
+    if (!free) record('gold', -spin.cost, '슬롯머신', now);
     record('gold', spin.prize, '슬롯머신 당첨', now);
     slotSpins.unshift(spin);
     slotReceipts.set(input.requestId, spin);
@@ -312,10 +323,10 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     const today = kstDate(now);
     if (tags.filter(tag => tag.date === today).length >= NICKNAME_TAG_RULES.dailyLimit) throw new Error(`별명 태그는 하루 ${NICKNAME_TAG_RULES.dailyLimit}번까지 뽑을 수 있어요.`);
     // A draw ticket pays before gold, as it does on the server.
-    const payment: ShopPayment = inventory.tagTickets > 0 ? 'ticket' : 'gold';
+    const payment: ShopPayment = freeLeft('tag', now) > 0 ? 'free' : inventory.tagTickets > 0 ? 'ticket' : 'gold';
     if (payment === 'gold' && gold < NICKNAME_TAG_RULES.price) throw new Error('골드가 부족해요');
     const tag = { id: crypto.randomUUID(), ...drawNicknameTag(max => Math.floor(Math.random() * max)), equipped: false, createdAt: now.toISOString(), date: today, payment };
-    pay(payment, 'tagTickets', NICKNAME_TAG_RULES.price, '별명 태그 뽑기', now);
+    if (payment === 'free') useFree('tag', now); else pay(payment, 'tagTickets', NICKNAME_TAG_RULES.price, '별명 태그 뽑기', now);
     tags.push(tag);
     tagReceipts.set(input.requestId, tag);
     const { date: _date, ...draw } = tag;

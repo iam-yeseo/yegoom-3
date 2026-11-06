@@ -1,5 +1,5 @@
-import { ANNOUNCEMENT_RULES, KUJI_RULES, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
-import type { Inventory, KujiDraw, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoNotice, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotResponse, SlotSpin, SlotSymbol } from '../shared/types';
+import { ANNOUNCEMENT_RULES, DAILY_FREE, KUJI_RULES, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import type { DailyFreeLeft, Inventory, KujiDraw, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoNotice, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotResponse, SlotSpin, SlotSymbol } from '../shared/types';
 import { slotResult } from '../shared/slot';
 import { kstDate, kstTimestamp, weekStart } from './rules';
 import { notifyPrize } from './notifications';
@@ -12,14 +12,14 @@ export class ShopError extends Error {
 }
 interface PurchaseRow {
   id: string; user_id: string; request_id: string; kind: ShopKind; request_payload: string;
-  payment: ShopPayment; cost: number; date: string; created_at: string; outcome: string; last_one: number;
+  payment: ShopPayment; cost: number; date: string; created_at: string; outcome: string; last_one: number; free?: number;
 }
 interface BoardRow { id: number; grades: string }
 interface LottoRow extends PurchaseRow {
   draw_date: string; numbers: string; winning_numbers: string | null; matches: number | null; rank: number | null; prize: number | null;
 }
 interface SlotRow {
-  id: string; user_id: string; request_id: string; cost: number; reels: string; prize: number; date: string; created_at: string;
+  id: string; user_id: string; request_id: string; cost: number; reels: string; prize: number; date: string; created_at: string; free?: number;
 }
 
 /** Unbiased crypto randomness. Tests replace this function only in their bundle. */
@@ -44,8 +44,25 @@ export function requestId(input: Record<string, unknown>): string {
   return input.requestId;
 }
 function payment(input: Record<string, unknown>): ShopPayment {
-  if (input.payment !== 'gold' && input.payment !== 'ticket') throw new ShopError(400, 'INVALID_PAYMENT', '골드 또는 이용권을 선택해 주세요.');
+  if (input.payment !== 'gold' && input.payment !== 'ticket' && input.payment !== 'free') throw new ShopError(400, 'INVALID_PAYMENT', '골드, 이용권 또는 무료 이용을 선택해 주세요.');
   return input.payment;
+}
+/** SQL for how many free uses of each item `u.id` has spent on the KST day `?`. */
+export const FREE_USED_SQL = {
+  lotto: `(SELECT COUNT(*) FROM shop_purchases WHERE user_id = u.id AND kind = 'lotto' AND date = ? AND free = 1)`,
+  speetto: `(SELECT COUNT(*) FROM shop_purchases WHERE user_id = u.id AND kind = 'speetto' AND date = ? AND free = 1)`,
+  slot: `(SELECT COUNT(*) FROM slot_spins WHERE user_id = u.id AND date = ? AND free = 1)`,
+  tag: `(SELECT COUNT(*) FROM nickname_tags WHERE user_id = u.id AND date = ? AND payment = 'free')`,
+} as const;
+/** Today's free uses left for each item (none for administrators). */
+export async function readFreeLeft(db: D1Database, user: ShopUser, now: Date): Promise<DailyFreeLeft> {
+  if (user.role !== 'player') return { lotto: 0, speetto: 0, slot: 0, tag: 0 };
+  const date = dayWindow(now).date;
+  const row = await db.prepare(`SELECT ${FREE_USED_SQL.lotto} AS lotto, ${FREE_USED_SQL.speetto} AS speetto,
+    ${FREE_USED_SQL.slot} AS slot, ${FREE_USED_SQL.tag} AS tag FROM users u WHERE u.id = ?`)
+    .bind(date, date, date, date, user.id).first<DailyFreeLeft>();
+  const left = (kind: keyof DailyFreeLeft) => Math.max(0, DAILY_FREE[kind] - (row?.[kind] ?? 0));
+  return { lotto: left('lotto'), speetto: left('speetto'), slot: left('slot'), tag: left('tag') };
 }
 export function dayWindow(now: Date): { date: string; start: number; end: number } {
   const date = kstDate(now);
@@ -76,8 +93,8 @@ export async function readInventory(db: D1Database, userId: string): Promise<Inv
   return (await readBalances(db, userId)).inventory;
 }
 export async function readShopState(db: D1Database, user: ShopUser, now: Date): Promise<ShopState> {
-  const balances = await readBalances(db, user.id);
-  return { ...balances, canPurchase: user.role === 'player', serverTime: now.toISOString() };
+  const [balances, free] = await Promise.all([readBalances(db, user.id), readFreeLeft(db, user, now)]);
+  return { ...balances, free, canPurchase: user.role === 'player', serverTime: now.toISOString() };
 }
 
 function chargeStatements(db: D1Database, attempt: string, kind: ShopKind): D1PreparedStatement[] {
@@ -252,17 +269,21 @@ export async function settleDueLotto(db: D1Database, now: Date): Promise<void> {
   await syncAchievementsFor(db, tickets.map(ticket => ticket.user_id), now);
 }
 
+/** A free use is stored as a zero-cost gold row marked free, so no gold or
+ * ticket moves; the same insert checks today's free count under the batch. */
 function simplePurchaseStatement(db: D1Database, user: ShopUser, id: string, kind: 'lotto' | 'speetto', payload: string, method: ShopPayment,
   price: number, outcome: string, attempt: string, now: Date, start: number, end: number): D1PreparedStatement {
-  return db.prepare(`INSERT OR IGNORE INTO shop_purchases (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome)
-    SELECT ?, u.id, ?, ?, ?, ?, ?, ?, ?, ? FROM users u
+  const date = kstDate(now);
+  return db.prepare(`INSERT OR IGNORE INTO shop_purchases (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome, free)
+    SELECT ?, u.id, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM users u
     WHERE u.id = ? AND u.role = 'player' AND u.active = 1
       AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
       AND ((? = 'gold' AND COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?)
         OR (? = 'ticket' AND COALESCE((SELECT CASE ? WHEN 'lotto' THEN lotto_tickets ELSE speetto_tickets END
-          FROM user_balances WHERE user_id = u.id), 0) >= 1))`)
-    .bind(attempt, id, kind, payload, method, method === 'gold' ? price : 0, kstDate(now), now.toISOString(), outcome,
-      user.id, start, end, method, price, method, kind);
+          FROM user_balances WHERE user_id = u.id), 0) >= 1)
+        OR (? = 'free' AND ${FREE_USED_SQL[kind]} < ?))`)
+    .bind(attempt, id, kind, payload, method === 'ticket' ? 'ticket' : 'gold', method === 'gold' ? price : 0, date, now.toISOString(), outcome, method === 'free' ? 1 : 0,
+      user.id, start, end, method, price, method, kind, method, date, DAILY_FREE[kind]);
 }
 async function buyLotto(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<PurchaseRow> {
   const id = requestId(input); const method = payment(input);
@@ -285,7 +306,7 @@ async function buyLotto(db: D1Database, user: ShopUser, input: Record<string, un
   return await previousPurchase(db, user, id, 'lotto', payload) ?? await rejectedPurchase(db, user, start, end);
 }
 function lottoTicket(row: LottoRow): LottoTicket {
-  return { id: row.id, requestId: row.request_id, purchaseDate: row.date, createdAt: row.created_at, drawDate: row.draw_date, numbers: JSON.parse(row.numbers) as number[], payment: row.payment, cost: row.cost,
+  return { id: row.id, requestId: row.request_id, purchaseDate: row.date, createdAt: row.created_at, drawDate: row.draw_date, numbers: JSON.parse(row.numbers) as number[], payment: row.free ? 'free' : row.payment, cost: row.cost,
     winningNumbers: row.winning_numbers == null ? null : JSON.parse(row.winning_numbers) as number[], matches: row.matches, rank: row.rank, prize: row.prize };
 }
 function visibleLottoTicket(row: LottoRow, now: Date): LottoTicket {
@@ -325,7 +346,7 @@ export async function readLottoNotice(db: D1Database, userId: string, now: Date)
 
 function speettoTicket(row: PurchaseRow): SpeettoTicket {
   const result = JSON.parse(row.outcome) as { cells: SpeettoSymbol[]; won: boolean; prize: number };
-  return { ...result, id: row.id, requestId: row.request_id, payment: row.payment, cost: row.cost, purchaseDate: row.date, createdAt: row.created_at };
+  return { ...result, id: row.id, requestId: row.request_id, payment: row.free ? 'free' : row.payment, cost: row.cost, purchaseDate: row.date, createdAt: row.created_at };
 }
 async function buySpeetto(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<PurchaseRow> {
   const id = requestId(input); const method = payment(input); const payload = JSON.stringify({ payment: method });
@@ -348,8 +369,8 @@ async function buySpeetto(db: D1Database, user: ShopUser, input: Record<string, 
 }
 
 function slotSpin(row: SlotRow): SlotSpin {
-  return { id: row.id, requestId: row.request_id, reels: JSON.parse(row.reels) as SlotSymbol[], cost: row.cost,
-    prize: row.prize, date: row.date, createdAt: row.created_at };
+  return { id: row.id, requestId: row.request_id, reels: JSON.parse(row.reels) as SlotSymbol[], cost: row.free ? 0 : row.cost,
+    prize: row.prize, date: row.date, createdAt: row.created_at, free: row.free === 1 };
 }
 async function previousSlotSpin(db: D1Database, userId: string, id: string): Promise<SlotRow | null> {
   return db.prepare('SELECT * FROM slot_spins WHERE user_id = ? AND request_id = ?').bind(userId, id).first<SlotRow>();
@@ -362,16 +383,17 @@ async function spinSlot(db: D1Database, user: ShopUser, input: Record<string, un
   const attempt = crypto.randomUUID();
   const window = dayWindow(now);
   const writes = [
-    db.prepare(`INSERT OR IGNORE INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at)
-      SELECT ?, u.id, ?, ?, ?, ?, ?, ? FROM users u
+    // Today's free spins go first; after them a spin needs the price in gold.
+    db.prepare(`INSERT OR IGNORE INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at, free)
+      SELECT ?, u.id, ?, ?, ?, ?, ?, ?, ${FREE_USED_SQL.slot} < ? FROM users u
       WHERE u.id = ? AND u.role = 'player' AND u.active = 1
         AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
-        AND COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?`)
-      .bind(attempt, id, SLOT_RULES.price, JSON.stringify(result.reels), result.prize, window.date, now.toISOString(),
-        user.id, window.start, window.end, SLOT_RULES.price),
+        AND (${FREE_USED_SQL.slot} < ? OR COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?)`)
+      .bind(attempt, id, SLOT_RULES.price, JSON.stringify(result.reels), result.prize, window.date, now.toISOString(), window.date, DAILY_FREE.slot,
+        user.id, window.start, window.end, window.date, DAILY_FREE.slot, SLOT_RULES.price),
     db.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
       SELECT ?, user_id, 'gold', -cost, '슬롯머신', 'slot:buy:' || user_id || ':' || request_id, created_at
-      FROM slot_spins WHERE id = ?`).bind(crypto.randomUUID(), attempt),
+      FROM slot_spins WHERE id = ? AND free = 0`).bind(crypto.randomUUID(), attempt),
   ];
   if (result.prize) writes.push(db.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
     SELECT ?, user_id, 'gold', prize, '슬롯머신 당첨', 'slot:prize:' || id, created_at

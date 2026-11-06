@@ -4,6 +4,13 @@ import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import type { BootstrapResponse, LaunchGiftResponse } from '../../shared/types';
 
+/** Shop purchases ask "정말 살까요?" first (2026-11-07 update); answer yes. */
+async function confirmPurchase(page: Page) {
+  const dialog = page.getByRole('dialog', { name: '구매 확인', exact: true });
+  await dialog.getByRole('button', { name: /^(구매하기|뽑기)$/ }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
 const LAUNCH_NOW = '2026-11-02T00:00:00Z'; // 09:00 KST on launch day.
 const LAUNCH_ORIGIN = 'http://localhost:8789';
 const STOCK_TITLE = '주식 시장은 준비 중이에요';
@@ -193,6 +200,7 @@ test('preview launch gifts stay local and the new tickets can be spent at both w
       await navigate(page, '/preview/shop/lotto');
       for (const number of [1, 2, 3, 4, 5]) await page.getByRole('button', { name: `번호 ${number}`, exact: true }).click();
       await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
+      await confirmPurchase(page);
       await expect(page.locator('.inventory-card p').filter({ hasText: '데일리 로또 이용권' }).locator('strong')).toHaveText('6장');
       await navigate(page, '/preview');
       await expect(gift(page)).toHaveCount(0);

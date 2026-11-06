@@ -134,8 +134,11 @@ export interface LaunchGiftResponse {
   serverTime: string;
 }
 export type ShopKind = 'kuji' | 'lotto' | 'speetto' | 'slot' | 'tag';
-export type ShopPayment = 'gold' | 'ticket';
-export interface ShopState { gold: number; inventory: Inventory; canPurchase: boolean; serverTime: string }
+/** 'free' spends one of today's free uses (DAILY_FREE in shared/balance.ts). */
+export type ShopPayment = 'gold' | 'ticket' | 'free';
+/** Free uses left today, by item. */
+export interface DailyFreeLeft { lotto: number; speetto: number; slot: number; tag: number }
+export interface ShopState { gold: number; inventory: Inventory; canPurchase: boolean; serverTime: string; free?: DailyFreeLeft }
 export type KujiGrade = typeof KUJI_RULES.grades[number]['grade'];
 export interface KujiCell { position: number; grade: KujiGrade | null; buyerId: string | null }
 /** Read-only card summary. No board yet: null/100; sold out awaiting creation: id/0. */
@@ -183,6 +186,8 @@ export type SlotSymbol = typeof SLOT_RULES.symbols[number];
 export interface SlotSpinInput { requestId: string }
 export interface SlotSpin {
   id: string; requestId: string; reels: SlotSymbol[]; cost: number; prize: number; date: string; createdAt: string;
+  /** One of today's free spins (cost 0). */
+  free?: boolean;
 }
 export interface SlotState { recent: SlotSpin[] }
 export interface SlotResponse extends ShopState { slot: SlotState; spin?: SlotSpin }
