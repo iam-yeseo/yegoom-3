@@ -14,7 +14,7 @@ async function shot(page: Page, name: string, info: TestInfo, fullPage = true) {
   await page.setViewportSize({ width: 390, height: 900 });
 }
 
-test('preview market lists ten stocks, trades with fees and shows dated news without any API call', async ({ page }, info) => {
+test('preview market lists fifteen stocks, trades with fees and shows dated news without any API call', async ({ page }, info) => {
   test.setTimeout(90_000);
   const requests: string[] = [];
   await page.route('**/api/**', route => { requests.push(route.request().url()); return route.abort(); });
@@ -29,9 +29,9 @@ test('preview market lists ten stocks, trades with fees and shows dated news wit
   await tile.click();
   await expect(page).toHaveURL(/#\/preview\/stock$/);
   const rows = page.getByRole('region', { name: '종목' }).getByRole('button');
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(15);
   await expect(page.locator('.market-pill')).toContainText('장 열림 · 18시 00분 마감');
-  for (const name of ['YK하이커스', 'SW전자', 'MJ일렉트로닉스', '예도어', '더워스쿨', '민두래곤', '소니항공', '에바참치', '리안뷰티', '예굼']) {
+  for (const name of ['YK하이커스', 'SW전자', 'MJ일렉트로닉스', '예도어', '더워스쿨', '민두래곤', '소니항공', '에바참치', '리안뷰티', '예굼', 'GU', '피자대학', '구로미해적단', '고글', '야마존']) {
     await expect(rows.filter({ hasText: name })).toHaveCount(1);
   }
   await expect(rows.filter({ hasText: '예굼' })).toContainText('20주 보유');

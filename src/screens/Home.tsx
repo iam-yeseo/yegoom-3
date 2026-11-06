@@ -4,6 +4,7 @@ import { useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
 import type { CatchmindSummary, ClawSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
 import type { StockHomeSummary } from "../../shared/stock-types";
+import { STOCKS } from "../../shared/stocks";
 import { advanceNoticeOffset, hasSeenLotto, lottoSeenKey, markLottoSeen, nextKstMidnight, noticeDate } from "../lotto-notice";
 import "../home-shop.css";
 import { useAttendance } from "../attendance";
@@ -261,7 +262,7 @@ export function SoloGames({ go, claw, stock }: { go: Go; claw: ClawSummary; stoc
           </span>
           <span className="solo-text">
             <strong>주식 시장</strong>
-            <small>{!stock ? "곧 문을 열어요" : stock.cost || stock.value ? `내 손익 ${pnlText}` : open ? "지금 거래할 수 있어요" : "10종목 상장 중"}</small>
+            <small>{!stock ? "곧 문을 열어요" : stock.cost || stock.value ? `내 손익 ${pnlText}` : open ? "지금 거래할 수 있어요" : `${STOCKS.length}종목 상장 중`}</small>
           </span>
           <span className={`market-state ${open ? "open" : ""}`}>
             <i />

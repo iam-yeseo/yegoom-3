@@ -122,14 +122,14 @@ describe('stock market API', () => {
     const first = await market.request<StockMarketView>(now, 'min', '/api/stock');
     expect(first.status).toBe(200);
     expect(first.data.market).toMatchObject({ open: true, date: '2026-11-05', holiday: null, nextTickAt: new Date(kst('2026-11-05', '10:10')).toISOString() });
-    expect(first.data.stocks).toHaveLength(10);
+    expect(first.data.stocks).toHaveLength(15);
     expect(first.data.stocks.every(stock => stock.status === 'listed' && stock.version === 7)).toBe(true);
-    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_ticks').first('n')).toBe(70);
+    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_ticks').first('n')).toBe(105);
     const again = await market.request<StockUnchanged>(now, 'min', `/api/stock?since=${first.data.version}`);
     expect(again.data).toMatchObject({ unchanged: true, version: first.data.version });
     // Same instant, another reader: no further writes.
     await market.request(now, 'siwon', '/api/stock');
-    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_ticks').first('n')).toBe(70);
+    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_ticks').first('n')).toBe(105);
 
     await market.db.prepare(`INSERT INTO stock_news (id, ticker, kind, publish_at, headline, body, source, created_at) VALUES
       ('future', 'YEGM', 'news', ?, '미래 기사', '아직 공개되지 않음', 'template', 'x'),

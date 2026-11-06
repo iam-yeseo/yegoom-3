@@ -89,7 +89,7 @@ describe('price engine', () => {
     expect(minj).toMatchObject({ prevClose: 1500, price: 1560, dayOpen: 1560 });
     expect(result.appliedEvents).toEqual([{ id: 'game:1', at: at('2026-11-05', '09:00') }]);
     const day = advanceMarket(result.rows, pendingTicks(at('2026-11-05', '09:00'), at('2026-11-05', '18:00'), none), seedOf, [], none);
-    expect(day.daily).toHaveLength(10);
+    expect(day.daily).toHaveLength(15);
     const candle = day.daily.find(item => item.ticker === 'MINJ')!;
     expect(candle.open).toBe(1560);
     expect(candle.close).toBe(day.rows.find(row => row.ticker === 'MINJ')!.price);
@@ -135,7 +135,7 @@ describe('delisting', () => {
     const recovered = close(base(450, 'warning'));
     expect(recovered.rows.find(row => row.ticker === 'EEVA')).toMatchObject({ status: 'listed', warningSince: null });
   });
-  it('lands near 0–2 delistings a month across ten stocks (1,000 simulated months)', () => {
+  it('lands near 0–2 delistings a month across fifteen stocks (1,000 simulated months)', () => {
     const counts: number[] = [];
     let warnings = 0;
     for (let run = 0; run < 1000; run++) {
@@ -156,7 +156,7 @@ describe('delisting', () => {
     }
     const histogram = [0, 1, 2, 3].map(n => counts.filter(count => (n === 3 ? count >= 3 : count === n)).length);
     const mean = counts.reduce((sum, count) => sum + count, 0) / counts.length;
-    console.log(`Stock simulation (1,000 months × 10 stocks): delistings 0/1/2/3+ = ${histogram.join('/')}, mean ${mean.toFixed(2)}, warnings/month ${(warnings / 1000).toFixed(2)}`);
+    console.log(`Stock simulation (1,000 months × 15 stocks): delistings 0/1/2/3+ = ${histogram.join('/')}, mean ${mean.toFixed(2)}, warnings/month ${(warnings / 1000).toFixed(2)}`);
     expect(mean).toBeGreaterThan(0.05);
     expect(mean).toBeLessThan(1.5);
     expect(histogram[3]! / 1000).toBeLessThan(0.05);

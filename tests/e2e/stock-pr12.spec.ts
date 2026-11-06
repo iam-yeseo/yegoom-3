@@ -35,7 +35,7 @@ test('players open the real market, buy at the server price and see it in their 
   await tile.click();
   await expect(page).toHaveURL(/#\/stock$/);
   const rows = page.getByRole('region', { name: '종목' }).getByRole('button');
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(15);
   await expect(page.locator('.market-pill')).toContainText('장 열림');
   await shot(page, 'list', info);
 
