@@ -94,6 +94,7 @@ export interface BootstrapResponse {
   lottoNotice: LottoNotice | null;
   catchmind: CatchmindSummary;
   claw: ClawSummary;
+  freethrow: FreeThrowSummary;
   launchGift: LaunchGiftState;
   notifications: NotificationSummary;
   /** Home tile summary; null while the stock market is not open to players. */
@@ -233,6 +234,37 @@ export interface CatchmindPublishInput extends CatchmindRerollInput { image: str
 export interface CatchmindGuessInput extends CatchmindMutationInput { answer: string }
 export interface CatchmindSkipInput extends CatchmindMutationInput { expectedTurnId: string }
 export type CatchmindInput = CatchmindMutationInput | CatchmindRerollInput | CatchmindPublishInput | CatchmindGuessInput | CatchmindSkipInput;
+
+/** Free-throw official sets (docs/plan-freethrow.md §3). Times are epoch ms. */
+export interface FreeThrowSummary {
+  /** A new official set can start now. */
+  available: boolean;
+  /** An unfinished set (this slot, or the previous one within its grace time). */
+  inProgress: boolean;
+  made: number; shots: number;
+  nextSlotAt: number; serverNow: number; isAdmin: boolean;
+}
+export interface FreeThrowShotRecord { index: number; power: number; aim: number; made: boolean; kind: string }
+export interface FreeThrowSet {
+  id: string; requestId: string; slot: number; slotStart: number;
+  /** Shots are accepted until this time (slot end plus grace). */
+  deadline: number; engine: number;
+  made: number; shots: FreeThrowShotRecord[]; finished: boolean;
+  points: number; gold: number;
+}
+export interface FreeThrowBoardEntry { username: string; slot: number; slotStart: number; made: number; shots: number; finished: boolean }
+export interface FreeThrowState extends FreeThrowSummary {
+  date: string; slot: number; slotStart: number;
+  current: FreeThrowSet | null;
+  /** Every active player's sets that started on this KST date, oldest first. */
+  today: FreeThrowBoardEntry[];
+}
+export interface FreeThrowSetInput { requestId: string }
+export interface FreeThrowShotInput { setId: string; index: number; power: number; aim: number }
+export interface FreeThrowShotResponse extends FreeThrowState {
+  shot: FreeThrowShotRecord & { points: number; gold: number };
+  replayed: boolean;
+}
 
 export interface ClawSummary {
   coins: number; freeCoins: number; purchasedCoins: number;

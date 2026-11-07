@@ -26,7 +26,9 @@ const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_ph
   // The notification centre (0020) and achievements (0021) are newer than the launch-era reset as well.
   'notifications', 'achievements',
   // The stock market (0015) starts after launch; a launch reset never touches it.
-  'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays', 'ai_usage', 'stock_settings'];
+  'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays', 'ai_usage', 'stock_settings',
+  // Free-throw official sets (0026) are newer than the launch-era reset.
+  'freethrow_sets', 'freethrow_shots'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -119,6 +121,8 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO stock_trades (id, user_id, request_id, ticker, side, quantity, price, fee, total, date, created_at) VALUES ('retained-trade', 'min', 'retained-trade', 'YEGM', 'buy', 1, 500, 5, 505, '2026-11-05', 'x')"),
       db.prepare("INSERT INTO market_holidays (date, reason, created_by, created_at) VALUES ('2026-12-03', '선거', 'admin', 'x')"),
       db.prepare("INSERT INTO ai_usage (date, calls, cost_micro_usd) VALUES ('2026-11-05', 1, 1000)"),
+      db.prepare("INSERT INTO freethrow_sets (id, user_id, request_id, slot, date, engine, shots, made, created_at) VALUES ('00000000-0000-4000-8000-000000000001', 'min', 'retained-freethrow-request', 164703, '2026-11-07', 1, 1, 0, '2026-11-07T03:00:00Z')"),
+      db.prepare("INSERT INTO freethrow_shots (id, set_id, shot_index, power, aim, made, kind, created_at) VALUES ('retained-shot', '00000000-0000-4000-8000-000000000001', 0, 10, 0, 0, 'short', '2026-11-07T03:00:01Z')"),
     ]);
   });
   afterAll(async () => { await worker?.dispose(); });

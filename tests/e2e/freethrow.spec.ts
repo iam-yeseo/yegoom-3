@@ -35,12 +35,16 @@ test('free-throw practice runs in preview without the server and explains every 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#/preview');
   const tile = page.getByRole('button', { name: /자유투 대결/ });
-  await expect(tile).toContainText('연습 모드');
+  await expect(tile).toContainText('이번 세트 도전 가능');
   await tile.click();
   await expect(page).toHaveURL(/#\/preview\/play\/freethrow$/);
   await expect(page.getByRole('heading', { name: '자유투 대결' })).toBeVisible();
   await expect(court(page)).toHaveAttribute('data-mode', 'idle');
   await mkdir('docs/screenshots', { recursive: true });
+  await page.screenshot({ path: 'docs/screenshots/freethrow-step2-official-start-390.png', fullPage: true });
+  // A fresh preview opens on the official set; practice is one tap away.
+  await expect(page.getByRole('tab', { name: /공식 도전/ })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('tab', { name: '연습' }).click();
   await page.screenshot({ path: 'docs/screenshots/freethrow-step1-idle-390.png', fullPage: true });
 
   // A tap is not a throw: the ball goes back and the hint explains the motion.
@@ -82,10 +86,12 @@ test('free-throw sound preference survives a reload and the court fits a wide sc
   await page.route('**/api/**', route => route.abort());
   await page.setViewportSize({ width: 560, height: 980 });
   await page.goto('/#/preview/play/freethrow');
+  await page.getByRole('tab', { name: '연습' }).click();
   await expect(page.getByRole('button', { name: '소리 켜짐' })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: '소리 켜짐' }).click();
   await page.reload();
   await expect(page.getByRole('button', { name: '소리 꺼짐' })).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('tab', { name: '연습' }).click();
   const box = (await canvas(page).boundingBox())!;
   expect(box.width / box.height).toBeCloseTo(360 / 560, 2);
   const size = await canvas(page).evaluate((element: HTMLCanvasElement) => ({ width: element.width, css: element.getBoundingClientRect().width }));
@@ -93,4 +99,67 @@ test('free-throw sound preference survives a reload and the court fits a wide sc
   await flick(page, 2.45);
   await expect(page.locator('.freethrow-callout')).toHaveClass(/is-made/, { timeout: 4000 });
   await page.screenshot({ path: 'docs/screenshots/freethrow-step1-made-560.png', fullPage: true });
+});
+
+test('an official preview set pays per goal, locks after ten balls and updates the home tile', async ({ page }) => {
+  await page.route('**/api/**', route => route.abort());
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#/preview/play/freethrow');
+  const gold = async () => Number((await page.locator('.game-toolbar .gold').innerText()).replace(/\D/g, ''));
+  const before = await gold();
+  await page.getByRole('button', { name: '세트 시작하기' }).click();
+  await expect(page.locator('.freethrow-official')).toContainText('1구째 / 10구');
+  let goals = 0;
+  for (let i = 0; i < 10; i++) {
+    await expect(page.locator('.freethrow-lock')).toHaveCount(0);
+    // 1.3 falls short with margin above the too-slow cutoff even on a busy machine.
+    await flick(page, i % 2 ? 1.3 : 2.45);
+    await expect(page.locator('.freethrow-official .freethrow-balls i:not([class=""])')).toHaveCount(i + 1, { timeout: 6000 });
+    if (await page.locator('.freethrow-callout').evaluate(element => element.classList.contains('is-made'))) goals++;
+    await idle(page);
+  }
+  await expect(page.locator('.freethrow-official')).toContainText(`${goals}골 성공!`);
+  expect(goals).toBeGreaterThanOrEqual(1);
+  await expect(page.locator('.freethrow-lock')).toHaveText('이번 세트 끝!');
+  expect(await gold()).toBe(before + goals * 5);
+  await expect(page.locator('.freethrow-today li.is-me')).toContainText(`${goals}골`);
+  await page.screenshot({ path: 'docs/screenshots/freethrow-step2-official-done-390.png', fullPage: true });
+  await page.getByRole('button', { name: '뒤로 가기' }).click();
+  await expect(page.locator('.solo-tile', { hasText: '자유투 대결' })).toContainText('다음 세트');
+});
+
+test('an official set on the server records every ball once, even across a lost response and a reload', async ({ page }) => {
+  await page.setExtraHTTPHeaders({ 'CF-Connecting-IP': '192.0.2.72' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const login = await page.request.post('/api/auth/login', {
+    headers: { Origin: 'http://localhost:8788', 'CF-Connecting-IP': '192.0.2.72' },
+    data: { username: 'siwon', password: 'e2e-only-password-2026' },
+  });
+  expect(login.status()).toBe(200);
+  await page.goto('/#/play/freethrow');
+  await expect(page.getByRole('tab', { name: /공식 도전/ })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('button', { name: '세트 시작하기' }).click();
+  await expect(page.locator('.freethrow-official')).toContainText('1구째 / 10구');
+  // Gentle throws fall short: the official record changes, the shared fixture balances do not.
+  await flick(page, 1.0);
+  await expect(page.locator('.freethrow-official .freethrow-balls i.is-miss')).toHaveCount(1, { timeout: 6000 });
+  await idle(page);
+  let state = await (await page.request.get('/api/freethrow')).json();
+  expect(state.current.shots).toHaveLength(1);
+  expect(state.current.shots[0]).toMatchObject({ index: 0, made: false, kind: 'short' });
+
+  // The next shot's response is lost; the ball cannot be thrown again until it is recorded.
+  await page.route('**/api/freethrow/shots', route => route.abort());
+  await flick(page, 1.0);
+  await expect(page.locator('.freethrow-sync')).toContainText('기록을 보내지 못했어요', { timeout: 6000 });
+  await idle(page);
+  await expect(page.locator('.freethrow-lock')).toHaveText('방금 슛을 기록하면 이어서 던져요');
+  await page.unroute('**/api/freethrow/shots');
+  // A reload re-sends the remembered shot before anything else.
+  await page.reload();
+  await expect(page.locator('.freethrow-official')).toContainText('3구째 / 10구', { timeout: 8000 });
+  state = await (await page.request.get('/api/freethrow')).json();
+  expect(state.current.shots.map((shot: { index: number }) => shot.index)).toEqual([0, 1]);
+  await page.goto('/#/');
+  await expect(page.locator('.solo-tile', { hasText: '자유투 대결' })).toContainText('세트 진행 중 · 2/10구');
 });

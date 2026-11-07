@@ -4,7 +4,7 @@ import { art, artSrc, type ArtKey } from "./UI";
 
 /** Icons for ledger rows, shared by 내 정보 내역 and 랭킹 점수 기록. */
 export const SCORE_GAME_ICONS: Record<ScoreGame, ArtKey> = {
-  wake: "moon", offwork: "manta", luck: "monkey", catchmind: "bread", kuji: "drop", claw: "cat", other: "axolotl",
+  wake: "moon", offwork: "manta", luck: "monkey", catchmind: "bread", kuji: "drop", claw: "cat", freethrow: "bunny", other: "axolotl",
 };
 /** Picks an icon for a ledger reason by the game it mentions (gold rows have no game reference). */
 export function reasonIcon(reason: string): ArtKey {
@@ -14,6 +14,7 @@ export function reasonIcon(reason: string): ArtKey {
   if (reason.includes("캐치") || reason.includes("로또")) return "bread";
   if (reason.includes("쿠지") || reason.includes("스피또") || reason.includes("슬롯")) return "drop";
   if (reason.includes("뽑기")) return "cat";
+  if (reason.includes("자유투")) return "bunny";
   return "axolotl";
 }
 

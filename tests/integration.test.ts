@@ -53,9 +53,10 @@ function paddedJpeg(bytes: number): string {
 const profilePhotoPath = (id: string, version: number) => `/api/users/${id}/photo?v=${version}`;
 const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds/${date}/photo?v=${version}`;
 
-/** Stock PR 12 opened the market: bootstrap adds one read for the home stock tile
- * (holdings value and today's market holiday in one statement). */
-const STOCK_HOME = { prepares: 1, queries: 1, bindingCalls: 1, rowsRead: 12, rowsWritten: 0 } as const;
+/** Home tiles added after the recorded budgets: stock PR 12 reads one statement
+ * (holdings value and today's market holiday; 12 rows) and the free-throw tile
+ * reads one indexed range of the player's last two slots (at most 2 rows). */
+const STOCK_HOME = { prepares: 1 + 1, queries: 1 + 1, bindingCalls: 1 + 1, rowsRead: 12 + 2, rowsWritten: 0 } as const;
 const stockAllowance = (route: string, field: keyof typeof STOCK_HOME) => route.includes('bootstrap') ? STOCK_HOME[field] : 0;
 /** Every successful player write is followed by the achievement check: one
  * batch that reads the facts and the known rows, and, only when something new

@@ -12,6 +12,7 @@ import { RankingError, readRanking } from './ranking';
 import { equipTag, tagShopRoute, discardTag } from './nickname-tags';
 import type { NicknameTagGrade } from '../shared/nickname-tags';
 import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary, readRemainingWords } from './catchmind';
+import { FreeThrowError, getFreeThrowState, getFreeThrowSummary, shootFreeThrow, startFreeThrowSet } from './freethrow';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
 import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
@@ -470,7 +471,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id ${EQUIPPED_TAG_JOIN}
     WHERE (u.role = 'player' AND u.active = 1) OR u.id = ? OR u.username IN (?, ?, ?) ORDER BY u.username`)
     .bind(weekStart(now), user.id, ...GAME_IDS.map(id => GAME_RULES[id].author)).all<BootstrapProfile>().then(result => result.results);
-  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, launchGift, notifications, lottoNotice, stock] = await Promise.all([
+  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, freethrow, launchGift, notifications, lottoNotice, stock] = await Promise.all([
     profiles,
     readGames(env.DB, user, GAME_IDS, now, profiles),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
@@ -479,6 +480,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     readKujiSummary(env.DB),
     readCatchmindSummary(env.DB),
     getClawSummary(env.DB, user, now.getTime()),
+    getFreeThrowSummary(env.DB, user, now.getTime()),
     getLaunchGiftState(env.DB, user, now),
     readNotificationSummary(env.DB, user.id, now),
     readLottoNotice(env.DB, user.id, now),
@@ -493,7 +495,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
     inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0, tagTickets: viewer?.tagTickets ?? 0 },
-    kuji, lottoNotice, catchmind, claw, launchGift, notifications, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    kuji, lottoNotice, catchmind, claw, freethrow, launchGift, notifications, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {
   if (kstDate(new Date()) !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
@@ -737,6 +739,17 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
       ? purchaseClawCoins(env.DB, user, input, Date.now())
       : playClaw(env.DB, user, input, Date.now())));
   }
+  if (url.pathname === '/api/freethrow') {
+    if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return json(await getFreeThrowState(env.DB, user, now.getTime()));
+  }
+  if (url.pathname === '/api/freethrow/sets' || url.pathname === '/api/freethrow/shots') {
+    if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    const input = await body(request);
+    return json(await (url.pathname.endsWith('/sets')
+      ? startFreeThrowSet(env.DB, user, input, now.getTime())
+      : shootFreeThrow(env.DB, user, input, now.getTime())));
+  }
   if (url.pathname === '/api/me/attendance') {
     if (request.method === 'GET') return json({ attendance: await readAttendance(env.DB, user, now, url.searchParams.get('month') ?? undefined) });
     if (request.method === 'POST') return claimAttendance(request, env, user, now);
@@ -875,7 +888,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof FreeThrowError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

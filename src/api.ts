@@ -10,7 +10,7 @@ import type {
   ShopState, KujiResponse, KujiPurchaseInput, LottoResponse, LottoPurchaseInput,
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
-  ClawResponse, ClawPlayInput, ClawCoinInput,
+  ClawResponse, ClawPlayInput, ClawCoinInput, FreeThrowSetInput, FreeThrowShotInput, FreeThrowShotResponse, FreeThrowState,
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse, NotificationsResponse, NotificationSummary,
   AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
 import type { RankingPeriod } from "../shared/ranking-periods";
@@ -73,6 +73,9 @@ export const api = {
   claw: () => request<ClawResponse>("/claw"),
   buyClawCoins: (input: ClawCoinInput) => request<ClawResponse>("/claw/coins", { method: "POST", body: JSON.stringify(input) }),
   playClaw: (input: ClawPlayInput) => request<ClawResponse>("/claw/play", { method: "POST", body: JSON.stringify(input) }),
+  freeThrow: () => request<FreeThrowState>("/freethrow"),
+  startFreeThrowSet: (input: FreeThrowSetInput) => request<FreeThrowState>("/freethrow/sets", { method: "POST", body: JSON.stringify(input) }),
+  shootFreeThrow: (input: FreeThrowShotInput) => request<FreeThrowShotResponse>("/freethrow/shots", { method: "POST", body: JSON.stringify(input) }),
   catchmind: (since?: number) => request<CatchmindPollResponse>(`/catchmind${since === undefined ? "" : `?since=${since}`}`),
   catchmindGallery: (before?: number) => request<CatchmindGalleryResponse>(`/catchmind/gallery${before === undefined ? "" : `?before=${before}`}`),
   catchmindAction: (action: CatchmindAction, input: CatchmindInput) => request<CatchmindResponse>(`/catchmind/${action}`, { method: "POST", body: JSON.stringify(input) }),

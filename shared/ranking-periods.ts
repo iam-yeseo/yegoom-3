@@ -6,15 +6,15 @@ export const RANKING_RULES = { historyPageSize: 20, clientCacheMs: 30_000 } as c
 export const isRankingPeriod = (value: unknown): value is RankingPeriod =>
   typeof value === 'string' && (RANKING_PERIODS as readonly string[]).includes(value);
 
-export type ScoreGame = 'wake' | 'offwork' | 'luck' | 'catchmind' | 'kuji' | 'claw' | 'other';
-export const SCORE_GAME_ORDER: readonly ScoreGame[] = ['wake', 'offwork', 'luck', 'catchmind', 'kuji', 'claw', 'other'];
+export type ScoreGame = 'wake' | 'offwork' | 'luck' | 'catchmind' | 'kuji' | 'claw' | 'freethrow' | 'other';
+export const SCORE_GAME_ORDER: readonly ScoreGame[] = ['wake', 'offwork', 'luck', 'catchmind', 'kuji', 'claw', 'freethrow', 'other'];
 export const SCORE_GAME_LABELS: Record<ScoreGame, string> = {
   wake: '기상시간 맞히기', offwork: '퇴근시간 맞히기', luck: '행운 점수 맞히기',
-  catchmind: '캐치마인드', kuji: '예굼쿠지', claw: '캐릭터 뽑기', other: '기타',
+  catchmind: '캐치마인드', kuji: '예굼쿠지', claw: '캐릭터 뽑기', freethrow: '자유투 대결', other: '기타',
 };
 /** Short bar labels for the daily per-game chart. */
 export const SCORE_GAME_SHORT: Record<ScoreGame, string> = {
-  wake: '기상', offwork: '퇴근', luck: '행운', catchmind: '캐치', kuji: '쿠지', claw: '뽑기', other: '기타',
+  wake: '기상', offwork: '퇴근', luck: '행운', catchmind: '캐치', kuji: '쿠지', claw: '뽑기', freethrow: '자유투', other: '기타',
 };
 
 /** The game is read from the ledger reference prefix, never from reason text.
@@ -26,6 +26,7 @@ export function scoreSource(reference: string, reason: string): { game: ScoreGam
   if (reference.startsWith('kuji:')) return { game: 'kuji', label: SCORE_GAME_LABELS.kuji };
   if (reference.startsWith('claw:clear:')) return { game: 'claw', label: `${SCORE_GAME_LABELS.claw} · 클리어 보너스` };
   if (reference.startsWith('claw:')) return { game: 'claw', label: SCORE_GAME_LABELS.claw };
+  if (reference.startsWith('freethrow:')) return { game: 'freethrow', label: SCORE_GAME_LABELS.freethrow };
   return { game: 'other', label: reason };
 }
 
