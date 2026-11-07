@@ -256,10 +256,7 @@ export function SoloGames({ go, claw, stock }: { go: Go; claw: ClawSummary; stoc
         </button>
         <button className="card solo-tile" onClick={() => go("/play/freethrow")}>
           <span className="solo-icon" style={{ background: "#FFE7DF" }}>
-            <svg width="34" height="34" viewBox="0 0 34 34" fill="none" aria-hidden="true">
-              <circle cx="17" cy="17" r="14" fill="#F3843F" />
-              <path d="M3 17h28M17 3v28M7 7c4 3 6 6 6 10s-2 7-6 10M27 7c-4 3-6 6-6 10s2 7 6 10" stroke="#3A3340" strokeOpacity=".6" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
+            <img className="character" src="/freethrow/tile.webp" alt="" />
           </span>
           <span className="solo-text">
             <strong>자유투 대결</strong>

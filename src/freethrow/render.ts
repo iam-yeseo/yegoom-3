@@ -34,6 +34,7 @@ export interface Scene {
   rimShake: number;
   netAge: number | null;
 }
+export const BALL_SRC = "/freethrow/ball.webp";
 export const restScene = (): Scene => ({ ball: { ...COURT.release }, offset: { x: 0, y: 0 }, spin: 0, alpha: 1, rimShake: 0, netAge: null });
 
 const ring = (y: number, radius: number, count: number, shiftX = 0, shiftZ = 0) =>
@@ -46,10 +47,19 @@ export class FreeThrowRenderer {
   private ctx: CanvasRenderingContext2D;
   private backdrop: HTMLCanvasElement | null = null;
   private ratio = 1;
-  constructor(private canvas: HTMLCanvasElement) {
+  private sprite: HTMLImageElement | null = null;
+  /** onReady repaints once the ball sprite has loaded; until then (or if it
+   * fails) the ball is drawn with gradients and seam lines. */
+  constructor(private canvas: HTMLCanvasElement, onReady?: () => void) {
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("이 브라우저에서는 코트를 그릴 수 없어요.");
     this.ctx = ctx;
+    if (typeof Image !== "undefined") {
+      const sprite = new Image();
+      sprite.decoding = "async";
+      sprite.onload = () => { this.sprite = sprite; onReady?.(); };
+      sprite.src = BALL_SRC;
+    }
   }
   /** Matches the buffer to the displayed size; returns true when it changed. */
   resize(): boolean {
@@ -176,6 +186,12 @@ export class FreeThrowRenderer {
     const { ctx } = this, { x, y, r } = this.ballPoint(scene);
     ctx.save();
     ctx.globalAlpha = scene.alpha;
+    if (this.sprite) {
+      ctx.translate(x, y); ctx.rotate(scene.spin);
+      ctx.drawImage(this.sprite, -r, -r, r * 2, r * 2);
+      ctx.restore();
+      return;
+    }
     const shade = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r);
     shade.addColorStop(0, "#ffb27a"); shade.addColorStop(0.65, "#f3843f"); shade.addColorStop(1, "#d9662c");
     ctx.fillStyle = shade;

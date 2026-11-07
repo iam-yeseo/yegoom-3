@@ -39,7 +39,7 @@ export class FreeThrowController {
   private enabled = true;
 
   constructor(private canvas: HTMLCanvasElement, private sound: FreeThrowSound, private callbacks: ThrowCallbacks) {
-    this.renderer = new FreeThrowRenderer(canvas);
+    this.renderer = new FreeThrowRenderer(canvas, () => this.paint());
     canvas.addEventListener("pointerdown", this.down);
     canvas.addEventListener("pointermove", this.move);
     canvas.addEventListener("pointerup", this.up);

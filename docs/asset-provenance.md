@@ -34,3 +34,13 @@ python3 scripts/prepare-claw-dolls.py /path/to/yegoom/public/assets
 - `public/slot/banana.svg`, `apple.svg`, `strawberry.svg`, `grape.svg`, `watermelon.svg`, `chamoe.svg`, `seven.svg`는 이 작업에서 직접 작성한 원본 SVG다. 외부 이미지·이모지·폰트 글리프를 사용하지 않았다. 2026-11-05에 Claude Design `Yegoom Stock and Shop` 3j 시안의 과일 도형(테두리 없는 파스텔)으로 다시 그렸다. `seven.svg`는 시안의 글꼴 숫자 대신 같은 색(#F47C66)의 도형으로 그렸다.
 - 80×80 공통 viewBox에 과일 6종과 숫자 7을 path·ellipse·circle로 그렸다. 진한 `#493f46` 2px 선, 둥근 선 끝·모서리, 앱의 노랑·코랄·민트·보라 파스텔 색을 사용한다.
 - 별도 다운로드·변환·빌드 도구 없이 파일 자체가 원본이며 기기 글꼴에 영향을 받지 않는다. 기존 정적 자산 빌드와 서비스 워커 precache에 함께 포함된다.
+
+## 자유투 대결 그림
+
+- `public/freethrow/tile.webp`(홈 타일 아이콘, 농구공 캐릭터)와 `public/freethrow/ball.webp`(게임 속 농구공)는 사용자가 2026-11-07에 제공한 이미지다. 사용자가 [이미지 프롬프트](plan-freethrow.md)로 이미지 생성기에서 만들었다. 지인용 비공개 서비스 전용이다.
+- `scripts/prepare-freethrow-art.py`로 투명 여백을 잘라 정사각형 가운데에 두고, 타일 210px·공 256px WebP(RGB quality 85, 알파 무손실)로 줄였다. 둘 다 서비스 워커 precache에 들어간다.
+
+| 파일 | 원본 WebP (바이트) | 최적화 (바이트) | 크기 |
+| --- | ---: | ---: | --- |
+| tile | 167,718 | 13,172 | 210×210 |
+| ball | 139,426 | 14,486 | 256×256 |
