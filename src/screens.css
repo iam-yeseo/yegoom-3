@@ -883,7 +883,17 @@
   text-align: left;
   color: inherit;
 }
+.tile-grid > .solo-tile:last-child:nth-child(odd) {
+  /* An odd last tile (claw · free throw · stock) takes the full row, laid out sideways. */
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+}
+.tile-grid > .solo-tile:last-child:nth-child(odd) .solo-text {
+  flex: 1;
+}
 .solo-icon {
+  flex-shrink: 0;
   width: 58px;
   height: 58px;
   border-radius: 20px;

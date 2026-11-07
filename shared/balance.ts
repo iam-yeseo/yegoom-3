@@ -71,6 +71,13 @@ export const CLAW_RULES = {
   dollScore: 1, dollGold: 10, clearScore: 5, clearGold: 300,
   playDurationMs: 6000, controlDurationMs: 10000, engine: 2,
 } as const;
+/** Free-throw duel (docs/plan-freethrow.md). Practice is unlimited and pays
+ * nothing. An official set of shotsPerSet balls opens every setIntervalMs (KST
+ * 00·03·06·…·21시, like the claw's coins) and each goal pays goalScore + goalGold.
+ * Official sets arrive in step 2; step 1 ships practice only. */
+export const FREETHROW_RULES = {
+  shotsPerSet: 10, setIntervalMs: 3 * 60 * 60 * 1000, goalScore: 1, goalGold: 5, officialOpen: false,
+} as const;
 /** Shop prices, odds and rewards are shared by the Worker and every screen. */
 export const KUJI_RULES = {
   size: 100, basePrice: 300, higherPrice: 400, basePriceCount: 5, lastOneGold: 1000, historyLimit: 20,

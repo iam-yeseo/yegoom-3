@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SLOT_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FREETHROW_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SLOT_RULES } from "../../shared/balance";
 import { useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
 import type { CatchmindSummary, ClawSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
@@ -252,6 +252,18 @@ export function SoloGames({ go, claw, stock }: { go: Go; claw: ClawSummary; stoc
           <span className="solo-text">
             <strong>캐릭터 뽑기</strong>
             <small>{claw.isAdmin ? "무제한 플레이 · 보상 없음" : <>코인 {claw.coins}개 · <span className="home-schedule">{nextGrant} 충전</span></>}</small>
+          </span>
+        </button>
+        <button className="card solo-tile" onClick={() => go("/play/freethrow")}>
+          <span className="solo-icon" style={{ background: "#FFE7DF" }}>
+            <svg width="34" height="34" viewBox="0 0 34 34" fill="none" aria-hidden="true">
+              <circle cx="17" cy="17" r="14" fill="#F3843F" />
+              <path d="M3 17h28M17 3v28M7 7c4 3 6 6 6 10s-2 7-6 10M27 7c-4 3-6 6-6 10s2 7 6 10" stroke="#3A3340" strokeOpacity=".6" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          </span>
+          <span className="solo-text">
+            <strong>자유투 대결</strong>
+            <small>{FREETHROW_RULES.officialOpen ? `${FREETHROW_RULES.shotsPerSet}구 도전` : "지금은 연습 모드"}</small>
           </span>
         </button>
         <button className="card solo-tile" onClick={() => go("/stock")}>

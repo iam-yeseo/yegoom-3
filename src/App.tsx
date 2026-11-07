@@ -66,6 +66,7 @@ const serverStock: StockClient = {
 const Admin = lazy(() => import("./screens/Admin").then(module => ({ default: module.Admin })));
 const Notifications = lazy(() => import("./screens/Notifications").then(module => ({ default: module.Notifications })));
 const Claw = lazy(() => import("./screens/Claw").then(module => ({ default: module.Claw })));
+const FreeThrow = lazy(() => import("./screens/FreeThrow").then(module => ({ default: module.FreeThrow })));
 const StockMarket = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockMarket })));
 const StockDetail = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockDetail })));
 const StockNews = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockNews })));
@@ -522,8 +523,8 @@ export default function App() {
   }, [stockBlocked, demo, route]);
   const gameId = path.match(/^\/game\/(wake|offwork|luck)$/)?.[1] as
     GameId | undefined;
-  const play = path.match(/^\/play\/(catchmind|kuji|claw)$/)?.[1] as
-    "catchmind" | "kuji" | "claw" | undefined;
+  const play = path.match(/^\/play\/(catchmind|kuji|claw|freethrow)$/)?.[1] as
+    "catchmind" | "kuji" | "claw" | "freethrow" | undefined;
   const stockId = path.match(/^\/stock\/([A-Z]{4})$/)?.[1];
   const go = (to: string) => {
     if (!FEATURES.stock && !demo && /^\/stock(?:\/|$)/.test(to)) { setStockNoticeOpen(true); return; }
@@ -798,6 +799,7 @@ export default function App() {
   else if (path === "/play/catchmind/gallery") content = <CatchmindGallery demo={demo} gold={me.gold} onBack={() => go("/play/catchmind")} />;
   else if (play === "catchmind") content = <Catchmind user={me} demo={demo} onBack={home} />;
   else if (play === "claw") content = <Claw user={me} demo={demo} onBack={home} />;
+  else if (play === "freethrow") content = <FreeThrow user={me} demo={demo} onBack={home} />;
   else if (gameId && demo) {
     const viewer = previewViewer(gameId);
     content = (
