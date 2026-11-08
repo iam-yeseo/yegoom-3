@@ -1036,7 +1036,7 @@ export default function App() {
       previewGameGold={demo ? previewCatchmind.gold + previewClaw.gold + previewFreeThrow.gold + previewStock.gold + previewAchievementGold : 0}
       previewAttendanceDate={previewAttendance.attendance.today}
       initial={{ gold: demo ? previewGold : me?.gold ?? 0, inventory: data?.inventory ?? { lottoTickets: 0, speettoTickets: 0, tagTickets: 0 },
-        canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
+        free: data?.dailyFree, canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
       transact={transactShop}
       onServerRead={state => {
         if (data) markViewedLottoDraw(data.user.id, path, "lotto" in state ? state.lotto.todayDraw : null, state.serverTime);

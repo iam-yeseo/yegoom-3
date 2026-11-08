@@ -138,7 +138,8 @@ describe('combined attendance and shop preview cash', () => {
     engine.setAttendanceBonus(500, '2026-11-03');
     engine.buyLotto({ requestId: 'use-attendance-ticket', numbers: [1, 2, 3, 4, 5], payment: 'ticket' });
     engine.setAttendanceBonus(500, '2026-11-03');
-    expect(engine.read().inventory).toEqual({ lottoTickets: 7, speettoTickets: 8, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
+    // The 이용권 purchase spent one of today's free ones, so owned tickets stay.
+    expect(engine.read().inventory).toEqual({ lottoTickets: 8, speettoTickets: 8, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
     expect(createShopPreview(0, 100, '2026-11-03').read().inventory).toEqual({ lottoTickets: 3, speettoTickets: 3, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
   });
   it('makes a Catchmind award spendable without replaying it or undoing prior purchases', () => {

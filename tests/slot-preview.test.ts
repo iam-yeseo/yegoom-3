@@ -15,25 +15,30 @@ describe('offline slot preview', () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0.06);
     const input = { requestId: 'preview-jackpot' };
     const result = preview.spinSlot(input);
-    expect(result.spin).toMatchObject({ reels: ['seven', 'seven', 'seven'], prize: SLOT_RULES.jackpotPrize, cost: SLOT_RULES.price });
-    expect(result.gold).toBe(SLOT_RULES.jackpotPrize);
-    expect(preview.ledger.map(row => [row.reason, row.amount])).toEqual([['슬롯머신 당첨', 2000], ['슬롯머신', -500]]);
+    // Today's slot 이용권 pays first (2026-11-07 merge): no gold debit.
+    expect(result.spin).toMatchObject({ reels: ['seven', 'seven', 'seven'], prize: SLOT_RULES.jackpotPrize, cost: 0, free: true });
+    expect(result.gold).toBe(SLOT_RULES.price + SLOT_RULES.jackpotPrize);
+    expect(preview.ledger.map(row => [row.reason, row.amount])).toEqual([['슬롯머신 당첨', 2000]]);
     random.mockReturnValue(0.07);
     expect(preview.spinSlot(input)).toEqual(result);
-    expect(preview.ledger).toHaveLength(2);
+    expect(preview.ledger).toHaveLength(1);
     const loss = preview.spinSlot({ requestId: 'preview-loss' });
     expect(loss.spin?.prize).toBe(0);
     expect(new Set(loss.spin?.reels).size).toBeGreaterThan(1);
-    expect(loss.gold).toBe(SLOT_RULES.jackpotPrize - SLOT_RULES.price);
+    expect(loss.gold).toBe(SLOT_RULES.price + SLOT_RULES.jackpotPrize);
   });
 
   it('rejects insufficient gold and malformed request IDs without spending coupons or recording a spin', () => {
     const preview = createShopPreview(SLOT_RULES.price - 1);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const inventory = preview.read().inventory;
-    expect(() => preview.spinSlot({ requestId: 'no-gold' })).toThrow('골드가 부족해요');
+    // Today's three slot 이용권 spin without gold; the fourth needs the price.
+    for (let index = 0; index < 3; index++) preview.spinSlot({ requestId: `daily-${index}` });
+    expect(() => preview.spinSlot({ requestId: 'no-gold' })).toThrow('이용권과 골드가 부족해요');
     expect(() => preview.spinSlot({ requestId: '' })).toThrow('구매 요청');
     expect(() => preview.spinSlot({ requestId: 'has spaces' })).toThrow('구매 요청');
-    expect(preview.read('slot')).toMatchObject({ gold: SLOT_RULES.price - 1, inventory, slot: { recent: [] } });
+    expect(preview.read('slot')).toMatchObject({ gold: SLOT_RULES.price - 1, inventory });
+    expect(preview.read('slot').slot.recent).toHaveLength(3);
     expect(preview.ledger).toEqual([]);
   });
 
@@ -46,12 +51,13 @@ describe('offline slot preview', () => {
     }
     const result = preview.read('slot');
     expect(SLOT_RULES.dailyLimit).toBeNull();
-    expect(result.gold).toBe(0);
+    // The first three were today's 이용권, so three spins' worth of gold is left.
+    expect(result.gold).toBe(SLOT_RULES.price * 3);
     expect(result.slot.recent.map(spin => spin.requestId)).toEqual(Array.from({ length: 20 }, (_, index) => `spin-${24 - index}`));
-    expect(preview.ledger).toHaveLength(25);
+    expect(preview.ledger).toHaveLength(22);
     // An evicted receipt remains recoverable even after all gold is spent.
     expect(preview.spinSlot({ requestId: 'spin-0' }).spin?.requestId).toBe('spin-0');
-    expect(preview.ledger).toHaveLength(25);
+    expect(preview.ledger).toHaveLength(22);
   });
 
   it('uses the inclusive KST seven-day boundary and preserves old receipts outside the visible history', () => {
@@ -65,7 +71,8 @@ describe('offline slot preview', () => {
     expect(preview.read('slot').slot.recent).toEqual([]);
     const balance = preview.read().gold;
     expect(preview.spinSlot({ requestId: 'old-slot' })).toMatchObject({ gold: balance, spin: original, slot: { recent: [] } });
-    expect(preview.ledger).toHaveLength(1);
+    // That day's 이용권 paid for it: no gold row.
+    expect(preview.ledger).toHaveLength(0);
     const next = preview.spinSlot({ requestId: 'new-slot' });
     expect(next.spin?.date).toBe('2026-11-08');
     expect(next.slot.recent.map(spin => spin.requestId)).toEqual(['new-slot']);
@@ -81,6 +88,7 @@ describe('offline slot preview', () => {
     result.slot.recent.length = 0;
     expect(preview.spinSlot({ requestId: 'same-id' }).spin).toEqual(original);
     expect(preview.read('slot').slot.recent).toEqual([original]);
-    expect(preview.read().inventory).toEqual({ lottoTickets: 2, speettoTickets: 1, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
+    // The speetto 이용권 came from today's free ones; owned tickets stay.
+    expect(preview.read().inventory).toEqual({ lottoTickets: 2, speettoTickets: 2, tagTickets: NICKNAME_TAG_RULES.welcomeTickets });
   });
 });

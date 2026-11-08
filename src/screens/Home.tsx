@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FREETHROW_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SLOT_RULES } from "../../shared/balance";
-import { useShop } from "../shop";
+import { ticketCount, useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
 import type { CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
 import type { StockHomeSummary } from "../../shared/stock-types";
@@ -299,12 +299,12 @@ const SHOP_DESCRIPTIONS = {
   tag: "나를 가장 잘 나타내는 그 한 단어를 바로 내 이름 옆에 달아보세요.",
 } as const;
 export function ShopCards({ go, detailed = false }: { go: Go; detailed?: boolean }) {
-  const { inventory } = useShop();
+  const shop = useShop();
   const tiles = [
-    { path: "/shop/lotto", title: "데일리 로또", schedule: `${formatTime(LOTTO_RULES.drawTime)} 추첨`, tickets: inventory.lottoTickets, icon: "lotto" },
-    { path: "/shop/speetto", title: "스피또", schedule: "바로 긁기", tickets: inventory.speettoTickets, icon: "speetto" },
-    { path: "/shop/slot", title: "슬롯머신", schedule: `1회 ${SLOT_RULES.price.toLocaleString("ko-KR")}G`, tickets: null, icon: "slot" },
-    { path: "/shop/tag", title: "별명 태그 뽑기", schedule: `1회 ${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`, tickets: inventory.tagTickets, icon: "tag" },
+    { path: "/shop/lotto", title: "데일리 로또", schedule: `${formatTime(LOTTO_RULES.drawTime)} 추첨`, tickets: ticketCount("lotto", shop), icon: "lotto" },
+    { path: "/shop/speetto", title: "스피또", schedule: "바로 긁기", tickets: ticketCount("speetto", shop), icon: "speetto" },
+    { path: "/shop/slot", title: "슬롯머신", schedule: `1회 ${SLOT_RULES.price.toLocaleString("ko-KR")}G`, tickets: ticketCount("slot", shop), icon: "slot" },
+    { path: "/shop/tag", title: "별명 태그 뽑기", schedule: `1회 ${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`, tickets: ticketCount("tag", shop), icon: "tag" },
   ] as const;
   if (detailed) return (
     <div className="shop-item-list">

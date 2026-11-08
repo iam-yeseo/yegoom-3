@@ -95,6 +95,8 @@ export interface BootstrapResponse {
   catchmind: CatchmindSummary;
   claw: ClawSummary;
   freethrow: FreeThrowSummary;
+  /** Today's free uses left; each item's 이용권 count adds them to owned tickets. */
+  dailyFree: DailyFreeLeft;
   launchGift: LaunchGiftState;
   notifications: NotificationSummary;
   /** Home tile summary; null while the stock market is not open to players. */
@@ -135,7 +137,9 @@ export interface LaunchGiftResponse {
   serverTime: string;
 }
 export type ShopKind = 'kuji' | 'lotto' | 'speetto' | 'slot' | 'tag';
-/** 'free' spends one of today's free uses (DAILY_FREE in shared/balance.ts). */
+/** 'ticket' spends 이용권: today's free uses (DAILY_FREE in shared/balance.ts)
+ * first, then an owned ticket. 'free' (only today's uses) is the pre-merge form,
+ * still accepted from in-flight purchases and shown on old receipts. */
 export type ShopPayment = 'gold' | 'ticket' | 'free';
 /** Free uses left today, by item. */
 export interface DailyFreeLeft { lotto: number; speetto: number; slot: number; tag: number }

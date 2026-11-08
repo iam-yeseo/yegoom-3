@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { FREETHROW_RULES, freeThrowDeadline, freeThrowSlot, freeThrowSlotStart } from '../shared/balance';
 import { simulateShot } from '../shared/freethrow-physics';
 import { scoreSource } from '../shared/ranking-periods';
+import { syncAchievements } from '../worker/achievements';
 import { FreeThrowError, getFreeThrowState, getFreeThrowSummary, shootFreeThrow, startFreeThrowSet } from '../worker/freethrow';
 
 type Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
@@ -51,7 +52,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await mf.dispose(); });
 beforeEach(async () => {
-  for (const table of ['freethrow_shots', 'freethrow_sets']) await db.prepare(`DELETE FROM ${table}`).run();
+  for (const table of ['freethrow_shots', 'freethrow_sets', 'achievements']) await db.prepare(`DELETE FROM ${table}`).run();
   await db.prepare('DELETE FROM users').run().catch(() => {});
   for (const [id, role] of [['min', 'player'], ['siwon', 'player'], ['yeseo', 'player'], ['admin', 'admin']] as const) {
     await db.prepare('INSERT OR IGNORE INTO users (id, username, display_name, password_hash, role) VALUES (?, ?, ?, ?, ?)').bind(id, id, id, 'x', role).run();
@@ -169,5 +170,28 @@ describe('free-throw official sets', () => {
     const set = await start();
     await db.prepare('UPDATE freethrow_sets SET engine = 0 + ? WHERE id = ?').bind(FREETHROW_RULES.engine + 1, set.id).run();
     await rejects(shoot('min', set.id, 0, MAKE), 409, 'ENGINE_CHANGED');
+  });
+
+  it('earns the sheet\'s free-throw achievements from official sets only', async () => {
+    const keys = async (now = NOON) => (await syncAchievements(db as unknown as D1Database, 'min', new Date(now)))
+      .filter(item => item.key.startsWith('freethrow')).map(item => `${item.key}:${item.periodKey}`).sort();
+    expect(await keys()).toEqual([]);
+    const set = await start();
+    expect(await keys()).toEqual(['freethrow_join:']);
+    for (let index = 0; index < 5; index++) await shoot('min', set.id, index, MAKE);
+    expect(await keys()).toEqual(['freethrow_3:2026-11-07', 'freethrow_5:2026-11-07']);
+    // A second qualifying set the same day earns nothing new (one per day).
+    const later = SLOT_END + FREETHROW_RULES.graceMs;
+    const next = await start('min', later, 'later');
+    for (let index = 0; index < 6; index++) await shoot('min', next.id, index, MAKE, later);
+    expect(await keys(later)).toEqual([]);
+    // Ten goals in one set, and a full set without a goal.
+    await db.prepare('UPDATE freethrow_sets SET shots = 10, made = 10 WHERE id = ?').bind(next.id).run();
+    expect(await keys(later)).toEqual(['freethrow_10:2026-11-07']);
+    const another = await start('min', later + FREETHROW_RULES.setIntervalMs, 'zero');
+    for (let index = 0; index < 9; index++) await shoot('min', another.id, index, MISS, later + FREETHROW_RULES.setIntervalMs);
+    expect(await keys(later + FREETHROW_RULES.setIntervalMs)).toEqual([]);
+    await shoot('min', another.id, 9, MISS, later + FREETHROW_RULES.setIntervalMs);
+    expect(await keys(later + FREETHROW_RULES.setIntervalMs)).toEqual(['freethrow_zero:']);
   });
 });

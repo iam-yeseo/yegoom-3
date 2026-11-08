@@ -1,3 +1,4 @@
+import { DAILY_FREE } from '../../shared/balance';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, type WriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
@@ -168,8 +169,9 @@ for (const [width, username, motion] of [[390, 'min', 'no-preference'], [560, 's
     expect(duplicate.status()).toBe(200);
     expect(await duplicate.json()).toMatchObject({ awarded: false, inventory: receipt.inventory });
     await navigate(page, '/shop');
-    await expect(page.locator('.inventory-card p').filter({ hasText: '데일리 로또 이용권' }).locator('strong')).toHaveText(`${receipt.inventory.lottoTickets}장`);
-    await expect(page.locator('.inventory-card p').filter({ hasText: '스피또 이용권' }).locator('strong')).toHaveText(`${receipt.inventory.speettoTickets}장`);
+    // One 이용권 count: owned tickets plus today's free ones.
+    await expect(page.locator('.inventory-card p').filter({ hasText: '데일리 로또 이용권' }).locator('strong')).toHaveText(`${receipt.inventory.lottoTickets + DAILY_FREE.lotto}장`);
+    await expect(page.locator('.inventory-card p').filter({ hasText: '스피또 이용권' }).locator('strong')).toHaveText(`${receipt.inventory.speettoTickets + DAILY_FREE.speetto}장`);
     await navigate(page, '/');
     await expect(gift(page)).toHaveCount(0);
   });
@@ -195,13 +197,14 @@ test('preview launch gifts stay local and the new tickets can be spent at both w
       await screenshot(page, 'preview', 'gift-after', width, info);
       await gift(page).getByRole('button', { name: '확인', exact: true }).click();
       await navigate(page, '/preview/shop');
-      await expect(page.locator('.inventory-card p').filter({ hasText: '데일리 로또 이용권' }).locator('strong')).toHaveText('7장');
-      await expect(page.locator('.inventory-card p').filter({ hasText: '스피또 이용권' }).locator('strong')).toHaveText('7장');
+      // Seven owned plus today's three, as one 이용권 count.
+      await expect(page.locator('.inventory-card p').filter({ hasText: '데일리 로또 이용권' }).locator('strong')).toHaveText('10장');
+      await expect(page.locator('.inventory-card p').filter({ hasText: '스피또 이용권' }).locator('strong')).toHaveText('10장');
       await navigate(page, '/preview/shop/lotto');
       for (const number of [1, 2, 3, 4, 5]) await page.getByRole('button', { name: `번호 ${number}`, exact: true }).click();
       await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
       await confirmPurchase(page);
-      await expect(page.locator('.inventory-card p').filter({ hasText: '데일리 로또 이용권' }).locator('strong')).toHaveText('6장');
+      await expect(page.locator('.inventory-card p').filter({ hasText: '데일리 로또 이용권' }).locator('strong')).toHaveText('9장');
       await navigate(page, '/preview');
       await expect(gift(page)).toHaveCount(0);
       await expect(page.getByRole('button', { name: '선물 받기', exact: true })).toHaveCount(0);

@@ -7,7 +7,7 @@ import { defaultCharacter, isArtKey, type ArtKey } from '../shared/characters';
 import { DUMMY_HASH, hashPassword, hashToken, randomToken, verifyPassword } from './crypto';
 import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
-import { readKujiSummary, readLottoNotice, settleDueLotto, ShopError, shopRoute } from './shop';
+import { readDailyFree, readKujiSummary, readLottoNotice, settleDueLotto, ShopError, shopRoute } from './shop';
 import { RankingError, readRanking } from './ranking';
 import { equipTag, tagShopRoute, discardTag } from './nickname-tags';
 import type { NicknameTagGrade } from '../shared/nickname-tags';
@@ -471,7 +471,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id ${EQUIPPED_TAG_JOIN}
     WHERE (u.role = 'player' AND u.active = 1) OR u.id = ? OR u.username IN (?, ?, ?) ORDER BY u.username`)
     .bind(weekStart(now), user.id, ...GAME_IDS.map(id => GAME_RULES[id].author)).all<BootstrapProfile>().then(result => result.results);
-  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, freethrow, launchGift, notifications, lottoNotice, stock] = await Promise.all([
+  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, freethrow, dailyFree, launchGift, notifications, lottoNotice, stock] = await Promise.all([
     profiles,
     readGames(env.DB, user, GAME_IDS, now, profiles),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
@@ -481,6 +481,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     readCatchmindSummary(env.DB),
     getClawSummary(env.DB, user, now.getTime()),
     getFreeThrowSummary(env.DB, user, now.getTime()),
+    readDailyFree(env.DB, user, now),
     getLaunchGiftState(env.DB, user, now),
     readNotificationSummary(env.DB, user.id, now),
     readLottoNotice(env.DB, user.id, now),
@@ -494,7 +495,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
       character: player.character ?? defaultCharacter(player.username), photoVersion: player.photo_version, weeklyScore: player.weeklyScore, tag: tagOf(player) }));
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
-    inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0, tagTickets: viewer?.tagTickets ?? 0 },
+    inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0, tagTickets: viewer?.tagTickets ?? 0 }, dailyFree,
     kuji, lottoNotice, catchmind, claw, freethrow, launchGift, notifications, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {

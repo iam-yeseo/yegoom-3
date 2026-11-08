@@ -91,8 +91,12 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   callbacks.current = { transact, onPreviewChange, onServerRead };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   useEffect(() => {
-    if (!preview && !writeInFlight.current) setState(initial);
-  }, [preview, initial.gold, initial.inventory.lottoTickets, initial.inventory.speettoTickets, initial.inventory.tagTickets, initial.canPurchase, initial.serverTime]);
+    // A bootstrap refresh after a purchase replaces the wallet. It carries today's
+    // free uses too; keep the last known ones if an older caller omits them, so
+    // the merged 이용권 count never drops to owned tickets only.
+    if (!preview && !writeInFlight.current) setState(current => ({ ...initial, free: initial.free ?? current.free }));
+  }, [preview, initial.gold, initial.inventory.lottoTickets, initial.inventory.speettoTickets, initial.inventory.tagTickets, initial.canPurchase, initial.serverTime,
+    initial.free?.lotto, initial.free?.speetto, initial.free?.slot, initial.free?.tag]);
   const remember = useCallback((value: PendingPurchase | null) => {
     pendingRef.current = value;
     if (mounted.current) setPending(value);
@@ -235,4 +239,14 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     return { inventory: result.state.inventory, awarded: result.awarded };
   }, [syncPreview, apply]);
   return <ShopContext.Provider value={{ ...state, kuji, lotto, speetto, slot, tags, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, discardTag, claimPreviewLaunchGift }}>{children}</ShopContext.Provider>;
+}
+
+/** One 이용권 count per item: today's free uses (spent first, reset at KST
+ * midnight) plus owned tickets. The slot machine has only the daily ones. */
+export function ticketCount(kind: "lotto" | "speetto" | "slot" | "tag", state: Pick<ShopState, "inventory" | "free">): number {
+  const free = state.free?.[kind] ?? 0;
+  if (kind === "lotto") return free + state.inventory.lottoTickets;
+  if (kind === "speetto") return free + state.inventory.speettoTickets;
+  if (kind === "tag") return free + state.inventory.tagTickets;
+  return free;
 }

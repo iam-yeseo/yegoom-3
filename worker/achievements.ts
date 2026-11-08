@@ -1,5 +1,5 @@
 import { ACHIEVEMENT_BY_KEY, ACHIEVEMENT_RULES, ACHIEVEMENTS, isAchievementKey, type AchievementClientEvent, type AchievementProgress, type AchievementsResponse } from '../shared/achievements';
-import { CATCHMIND_RULES } from '../shared/balance';
+import { CATCHMIND_RULES, FREETHROW_RULES } from '../shared/balance';
 import { STOCK_RULES } from '../shared/stocks';
 import type { GameId } from '../shared/types';
 import { readBalances } from './balances';
@@ -24,6 +24,7 @@ interface Facts {
   tag_first: number; tag_s: number; tag_equip: number;
   claw_first: number; claw_clear: number; rank_month: number;
   rank_weeks: string; games: string; lotto_zero: string; slots: string; catchmind: string;
+  freethrow_join: number; freethrow_zero: number; freethrow: string;
   stock_buy: number; stock_sell: number; stock_delisted: number;
   /** Best and worst realized gold on a single sell (null without a sell). */
   stock_best: number | null; stock_worst: number | null;
@@ -84,6 +85,10 @@ const FACTS_SQL = `SELECT
     (SELECT json_group_array(json_object('d', round_date, 'drawer', drawer_id = u.id, 'winner', winner_id = u.id, 'w', wrong_count))
       FROM catchmind_rounds WHERE status = 'ended' AND round_date >= ? AND winner_id IS NOT NULL
         AND (drawer_id = u.id OR winner_id = u.id)) AS catchmind,
+    EXISTS (SELECT 1 FROM freethrow_sets WHERE user_id = u.id) AS freethrow_join,
+    EXISTS (SELECT 1 FROM freethrow_sets WHERE user_id = u.id AND shots = ${FREETHROW_RULES.shotsPerSet} AND made = 0) AS freethrow_zero,
+    (SELECT json_group_array(json_object('d', date, 'm', made)) FROM freethrow_sets
+      WHERE user_id = u.id AND date >= ? AND made >= ${ACHIEVEMENT_RULES.freethrow.goals[0]}) AS freethrow,
     EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id AND side = 'buy') AS stock_buy,
     EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id AND side = 'sell') AS stock_sell,
     EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id AND side = 'delist') AS stock_delisted,
@@ -114,6 +119,7 @@ export function unlockedAchievements(facts: Facts, events: ReadonlySet<string>):
     ...once('lotto_first', facts.lotto_first), ...once('lotto_win', facts.lotto_win), ...once('speetto_win', facts.speetto_win),
     ...once('slot_jackpot', facts.slot_jackpot),
     ...once('tag_first', facts.tag_first), ...once('tag_s', facts.tag_s), ...once('tag_equip', facts.tag_equip),
+    ...once('freethrow_join', facts.freethrow_join), ...once('freethrow_zero', facts.freethrow_zero),
     ...once('claw_first', facts.claw_first), ...once('claw_clear', facts.claw_clear), ...once('rank_month', facts.rank_month),
     ...once('stock_buy', facts.stock_buy), ...once('stock_sell', facts.stock_sell), ...once('stock_delisted', facts.stock_delisted),
     ...once('stock_limit_up', facts.stock_limit_up), ...once('stock_limit_down', facts.stock_limit_down),
@@ -143,6 +149,10 @@ export function unlockedAchievements(facts: Facts, events: ReadonlySet<string>):
     }
   }
   for (const date of JSON.parse(facts.lotto_zero) as string[]) unlocks.push({ key: 'lotto_zero', periodKey: date });
+  // "N골 성공" means N or more goals in one official set, once per KST day of the set.
+  for (const set of JSON.parse(facts.freethrow) as { d: string; m: number }[]) {
+    for (const goals of ACHIEVEMENT_RULES.freethrow.goals) if (set.m >= goals) unlocks.push({ key: `freethrow_${goals}`, periodKey: set.d });
+  }
   // Only the dates with at least the required number of spins come back.
   for (const date of JSON.parse(facts.slots) as string[]) unlocks.push({ key: 'slot_ten', periodKey: date });
   for (const round of JSON.parse(facts.catchmind) as { d: string | null; drawer: number; winner: number; w: number }[]) {
@@ -164,13 +174,19 @@ export async function syncAchievements(db: D1Database, userId: string, now: Date
   // costs ten rows rather than every spin of the day.
   const dates = Array.from({ length: ACHIEVEMENT_RULES.lookbackDays + 1 }, (_, back) => kstDate(new Date(now.getTime() - back * 86_400_000)));
   const [facts, existing] = await db.batch<Facts & { key: string; period_key: string }>([
-    db.prepare(FACTS_SQL).bind(since, now.getTime(), since, JSON.stringify(dates), ACHIEVEMENT_RULES.slot.dailySpins - 1, since, userId),
+    db.prepare(FACTS_SQL).bind(since, now.getTime(), since, JSON.stringify(dates), ACHIEVEMENT_RULES.slot.dailySpins - 1, since, since, userId),
     db.prepare('SELECT key, period_key FROM achievements WHERE user_id = ?').bind(userId),
   ]);
   const row = facts!.results[0];
   if (!row) return [];
   const known = new Set(existing!.results.map(item => `${item.key}:${item.period_key}`));
-  const fresh = unlockedAchievements(row, new Set(events)).filter(item => !known.has(`${item.key}:${item.periodKey}`));
+  // Several sources can earn the same row (two qualifying free-throw sets in a day): keep one.
+  const fresh = unlockedAchievements(row, new Set(events)).filter(item => {
+    const id = `${item.key}:${item.periodKey}`;
+    if (known.has(id)) return false;
+    known.add(id);
+    return true;
+  });
   if (!fresh.length) return [];
   const createdAt = now.toISOString();
   await db.batch(fresh.flatMap(item => [
