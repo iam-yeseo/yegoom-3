@@ -7,6 +7,7 @@ const ORIGIN = 'http://localhost:8788';
 const TODAY = '2026-11-04';
 const NOW = '2026-11-04T10:00:00.000Z';
 const JACKPOT: SlotSymbol[] = ['seven', 'seven', 'seven'];
+const NO_FREE = { lotto: 0, speetto: 0, slot: 0, tag: 0 };
 const LOSS: SlotSymbol[] = ['banana', 'apple', 'grape'];
 test.use({ serviceWorkers: 'block', deviceScaleFactor: 2 });
 test.beforeEach(async ({ page }) => {
@@ -34,13 +35,15 @@ async function fixture(page: Page, options: { gold?: number; recent?: SlotSpin[]
   expect(login.status(), 'isolated local slot fixture login').toBe(200);
   const initial = await (await page.request.get('/api/bootstrap')).json() as BootstrapResponse;
   let snapshot: BootstrapResponse = { ...initial, serverTime: NOW, notifications: { unread: 0, recent: [] }, lottoNotice: null,
-    user: { ...initial.user, gold: options.gold ?? 12000 }, inventory: { lottoTickets: 3, speettoTickets: 3, tagTickets: 0 } };
+    user: { ...initial.user, gold: options.gold ?? 12000 }, inventory: { lottoTickets: 3, speettoTickets: 3, tagTickets: 0 },
+    // Gold spins: today's free slot 이용권 (spent first since the merge) are already used up.
+    dailyFree: NO_FREE };
   const recent = options.recent ?? sampleHistory();
   const receipts = new Map<string, SlotSpin>();
   const attempts: SlotSpinInput[] = [];
   const outcomes: Outcome[] = [];
   let debits = 0;
-  const state = () => ({ gold: snapshot.user.gold, inventory: snapshot.inventory, canPurchase: true, serverTime: NOW });
+  const state = () => ({ gold: snapshot.user.gold, inventory: snapshot.inventory, free: NO_FREE, canPurchase: true, serverTime: NOW });
   await page.route('**/api/bootstrap', route => route.fulfill({ json: snapshot }));
   await page.route('**/api/shop', route => route.fulfill({ json: state() }));
   await page.route('**/api/shop/slot', async route => {
@@ -122,7 +125,8 @@ for (const width of [390, 560]) test(`slot tiles, motion states and purchase-day
   await page.goto('/#/');
   const homeTile = page.locator('.shop-tile').filter({ hasText: '슬롯머신' });
   await expect(homeTile).toContainText('1회 500G');
-  await expect(homeTile).not.toContainText('이용권');
+  // The slot machine's only 이용권 are the daily ones, used up in this fixture.
+  await expect(homeTile).toContainText('이용권 0장');
   await expect(page.locator('.shop-tile')).toHaveCount(4); // + 별명 태그 뽑기 (PR 9)
   expect(await homeTile.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
   await capture(page, 'home-slot-tile', width, info);
@@ -136,7 +140,8 @@ for (const width of [390, 560]) test(`slot tiles, motion states and purchase-day
   await ready(page);
   await expect(machine(page)).toHaveAttribute('data-phase', 'idle');
   await expect(page.locator('.tabbar:not([hidden])')).toHaveCount(0);
-  await expect(page.locator('.slot')).not.toContainText('이용권');
+  // Lotto/speetto tickets never pay for a spin; with today's slot 이용권 used up, only gold does.
+  await expect(page.locator('.slot').getByRole('button', { name: /이용권/ })).toHaveCount(0);
   await capture(page, 'slot-idle', width, info);
 
   let release!: () => void;
@@ -384,7 +389,7 @@ test('slot preview spends a free spin first, then gold, without any API requests
   page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(request.url()); });
   await page.addInitScript(() => { Math.random = () => 0; });
   await page.goto('/#/preview/shop/slot');
-  const free = page.getByRole('button', { name: '무료로 돌리기 · 오늘 3/3회', exact: true });
+  const free = page.getByRole('button', { name: '돌리기 · 이용권 1장 (보유 3장)', exact: true });
   await expect(free).toBeEnabled();
   const before = await page.locator('.game-toolbar .gold').innerText();
   await free.click();
@@ -393,7 +398,7 @@ test('slot preview spends a free spin first, then gold, without any API requests
   const initialGold = Number(before.replace(/[^\d]/g, ''));
   // Today's free spin costs nothing; only the prize is added.
   await expect(page.locator('.game-toolbar .gold')).toContainText((initialGold + SLOT_RULES.jackpotPrize).toLocaleString('ko-KR'));
-  await expect(page.getByRole('button', { name: '무료로 돌리기 · 오늘 2/3회', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '돌리기 · 이용권 1장 (보유 2장)', exact: true })).toBeEnabled();
   await expect(page.locator('.slot-history .shop-history-heading strong')).toHaveText('당첨 +2,000G');
   expect(requests).toEqual([]);
 });

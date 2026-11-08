@@ -5,21 +5,18 @@ import { Gold, SectionTitle, Toolbar } from "../components/UI";
 import { usePurchaseConfirm } from "../components/PurchaseConfirm";
 import { ScratchTicket } from "../components/ScratchTicket";
 import { anim, reduced, shake, toast, useCountUp } from "../motion";
-import { useShop } from "../shop";
+import { ticketCount, useShop } from "../shop";
 import { formatDate, formatTime } from "../format";
 import { ShopCards } from "./Home";
 
 function InventoryCard({ kind }: { kind?: "lotto" | "speetto" }) {
-  const { inventory, free } = useShop();
+  const shop = useShop();
+  const rows = ([["lotto", "데일리 로또 이용권"], ["speetto", "스피또 이용권"], ["slot", "슬롯머신 이용권"], ["tag", "별명 뽑기권"]] as const)
+    .filter(([item]) => !kind || item === kind);
   return <section className="card inventory-card" aria-label="보유 이용권">
     <h2>보유 이용권</h2>
-    {kind !== "speetto" && <p><span>데일리 로또 이용권</span><strong>{inventory.lottoTickets}장</strong></p>}
-    {kind !== "lotto" && <p><span>스피또 이용권</span><strong>{inventory.speettoTickets}장</strong></p>}
-    {!kind && free && <>
-      <h2 className="inventory-free-title">오늘의 무료 이용 <small>자정마다 {DAILY_FREE.lotto}개씩 · 이월 없음</small></h2>
-      <p className="inventory-free"><span>로또 <strong>{free.lotto}</strong></span><span>스피또 <strong>{free.speetto}</strong></span>
-        <span>슬롯 <strong>{free.slot}</strong></span><span>별명 뽑기 <strong>{free.tag}</strong></span></p>
-    </>}
+    {rows.map(([item, label]) => <p key={item}><span>{label}</span><strong>{ticketCount(item, shop)}장</strong></p>)}
+    <p className="inventory-note">매일 자정 아이템마다 {DAILY_FREE.lotto}장씩 새로 받아요. 그날 받은 이용권부터 쓰고, 남은 몫은 다음 날로 넘어가지 않아요.</p>
   </section>;
 }
 function ShopNotice({ kind, error }: { kind?: ShopKind; error?: string }) {
@@ -31,6 +28,23 @@ function ShopNotice({ kind, error }: { kind?: ShopKind; error?: string }) {
     {message && <div className="shop-error"><p className="form-message error" role="alert">{message}</p><button className="text-button" onClick={() => void shop.refresh(kind).catch(() => {})}>다시 불러오기</button></div>}
     {shop.pending && <p className="subtle-note" role="status">아직 확인하지 못한 구매가 있어요. {shop.pending.kind === kind ? "같은 결제 버튼을 눌러 구매를 다시 확인해 주세요." : "해당 게임에서 구매를 다시 확인해 주세요."}</p>}
   </>;
+}
+/** 이용권 first (today's free ones, then owned), gold second. A purchase still
+ * awaiting its receipt can only be retried with the payment it was sent with;
+ * a pre-merge 'free' purchase retries through the 이용권 button. */
+function PayButtons({ price, tickets, available, busy, pending, gold, onPay }: {
+  kind?: "lotto" | "speetto"; price: number; tickets: number; available: boolean; busy: boolean; pending: ShopPayment | null; gold: number; onPay(payment: ShopPayment): void;
+}) {
+  const ticketPayment: ShopPayment = pending === "free" ? "free" : "ticket";
+  const ticketFirst = tickets > 0 || pending === "ticket" || pending === "free";
+  const ticketButton = <button key="ticket" className={ticketFirst ? "primary-button" : "secondary-button"} aria-label={`이용권으로 사기 · 1장 · 보유 ${tickets}장`}
+    disabled={!available || Boolean(pending && pending === "gold") || !pending && tickets < 1} onClick={() => onPay(ticketPayment)}>
+    {busy && ticketFirst ? "구매 확인 중…" : <><span>이용권 1장</span><small>보유 {tickets}장</small></>}</button>;
+  const goldButton = <button key="gold" className={ticketFirst ? "secondary-button" : "primary-button"} aria-label={`골드로 사기 · ${price}G`}
+    disabled={!available || Boolean(pending && pending !== "gold") || !pending && gold < price} onClick={() => onPay("gold")}>
+    {busy && !ticketFirst ? "구매 확인 중…" : `골드 ${price}G`}</button>;
+  // Direct children of .shop-purchase-actions, which lays the two buttons out side by side.
+  return <>{ticketFirst ? [ticketButton, goldButton] : [goldButton, ticketButton]}</>;
 }
 /** Fetch once on entry; the provider keeps purchase state across navigation. */
 function useLoadShop(kind?: ShopKind) {
@@ -137,7 +151,7 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
   const [error, setError] = useState("");
   const pendingClick = useRef(false);
   const [confirmSheet, ask] = usePurchaseConfirm();
-  const freeLotto = shop.free?.lotto ?? 0;
+  const lottoTickets = ticketCount("lotto", shop);
   const balls = useRef<HTMLDivElement>(null);
   const now = useServerNow(shop.serverTime);
   const round = shop.lotto;
@@ -179,7 +193,7 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
     if (pendingClick.current || !shop.canPurchase || !full || shop.pending && !pending) return;
     pendingClick.current = true;
     // A retry of an unconfirmed purchase never charges twice, so only a new one asks.
-    if (!pending && !(await ask({ title: "데일리 로또를 살까요?", cost: payment === "free" ? "오늘의 무료 1장" : payment === "ticket" ? "이용권 1장" : `골드 ${LOTTO_RULES.price}G`,
+    if (!pending && !(await ask({ title: "데일리 로또를 살까요?", cost: payment === "gold" ? `골드 ${LOTTO_RULES.price}G` : "이용권 1장",
       detail: `고른 번호 ${[...picks].sort((a, b) => a - b).join(" · ")}` }))) { pendingClick.current = false; return; }
     setBusy(true);
     setError("");
@@ -212,10 +226,8 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
       </section>
       <div className="shop-purchase-actions">
         {!full && <p className="subtle-note">{LOTTO_RULES.pickCount - selected.length}개 더 골라주세요</p>}
-        {full && shop.canPurchase && !pending && freeLotto <= 0 && shop.gold < LOTTO_RULES.price && <p className="subtle-note">골드가 부족해요. 이용권이 있으면 사용할 수 있어요.</p>}
-        {(freeLotto > 0 || pending?.payment === "free") && <button className="primary-button free-button" aria-label={`무료로 사기 · 오늘 ${freeLotto}장 남음`} disabled={!available || Boolean(pending && pending.payment !== "free")} onClick={() => void purchase("free")}>{busy ? "구매 확인 중…" : `무료로 사기 · 오늘 ${freeLotto}/${DAILY_FREE.lotto}장`}</button>}
-        <button className={freeLotto > 0 ? "secondary-button" : "primary-button"} aria-label={`골드로 사기 · ${LOTTO_RULES.price}G`} disabled={!available || Boolean(pending && pending.payment !== "gold") || !pending && shop.gold < LOTTO_RULES.price} onClick={() => void purchase("gold")}>{busy && freeLotto <= 0 ? "구매 확인 중…" : `골드 ${LOTTO_RULES.price}G`}</button>
-        <button className="secondary-button" aria-label={`이용권으로 사기 · 1장 · 보유 ${shop.inventory.lottoTickets}장`} disabled={!available || Boolean(pending && pending.payment !== "ticket") || !pending && shop.inventory.lottoTickets < 1} onClick={() => void purchase("ticket")}><span>이용권 1장</span><small>보유 {shop.inventory.lottoTickets}장</small></button>
+        {full && shop.canPurchase && !pending && lottoTickets <= 0 && shop.gold < LOTTO_RULES.price && <p className="subtle-note">골드와 이용권이 부족해요.</p>}
+        <PayButtons kind="lotto" price={LOTTO_RULES.price} tickets={lottoTickets} available={available} busy={busy} pending={pending?.payment ?? null} gold={shop.gold} onPay={payment => void purchase(payment)} />
       </div>
       <ShopNotice kind="lotto" error={error} />
       {round?.todayDraw.numbers && <DrawNumbers key={round.todayDraw.date} date={round.todayDraw.date} numbers={round.todayDraw.numbers} />}
@@ -238,7 +250,7 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
   const [error, setError] = useState("");
   const pendingClick = useRef(false);
   const [confirmSheet, ask] = usePurchaseConfirm();
-  const freeSpeetto = shop.free?.speetto ?? 0;
+  const speettoTickets = ticketCount("speetto", shop);
   const tickets = shop.speetto?.tickets ?? [];
   const groups = useMemo(() => purchaseGroups(tickets, entry => revealedIds.has(entry.id) ? entry.prize : 0), [tickets, revealedIds]);
   const ticket = tickets.find(entry => entry.id === selectedId) ?? tickets[0];
@@ -251,7 +263,7 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
   async function purchase(payment: ShopPayment) {
     if (pendingClick.current || !shop.canPurchase || shop.pending && !pending) return;
     pendingClick.current = true;
-    if (!pending && !(await ask({ title: "스피또를 살까요?", cost: payment === "free" ? "오늘의 무료 1장" : payment === "ticket" ? "이용권 1장" : `골드 ${SPEETTO_RULES.price}G` }))) { pendingClick.current = false; return; }
+    if (!pending && !(await ask({ title: "스피또를 살까요?", cost: payment === "gold" ? `골드 ${SPEETTO_RULES.price}G` : "이용권 1장" }))) { pendingClick.current = false; return; }
     setBusy(true);
     setError("");
     try {
@@ -269,10 +281,8 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
       <InventoryCard kind="speetto" />
       {ticket ? <div ref={scratchCard} className="scratch-ticket-slot"><ScratchTicket key={ticket.id} ticket={ticket} revealed={revealedIds.has(ticket.id)} onReveal={() => reveal(ticket.id)} /></div> : !shop.loading && <section className="card empty-state"><h2>오늘의 행운을 긁어볼까요?</h2><p>골드나 이용권으로 스피또를 구매해 주세요.</p></section>}
       <div className="shop-purchase-actions">
-        {shop.canPurchase && !pending && freeSpeetto <= 0 && shop.gold < SPEETTO_RULES.price && <p className="subtle-note">골드가 부족해요. 이용권이 있으면 사용할 수 있어요.</p>}
-        {(freeSpeetto > 0 || pending?.payment === "free") && <button className="primary-button free-button" aria-label={`무료로 사기 · 오늘 ${freeSpeetto}장 남음`} disabled={!available || Boolean(pending && pending.payment !== "free")} onClick={() => void purchase("free")}>{busy ? "구매 확인 중…" : `무료로 사기 · 오늘 ${freeSpeetto}/${DAILY_FREE.speetto}장`}</button>}
-        <button className={freeSpeetto > 0 ? "secondary-button" : "primary-button"} aria-label={`골드로 사기 · ${SPEETTO_RULES.price}G`} disabled={!available || Boolean(pending && pending.payment !== "gold") || !pending && shop.gold < SPEETTO_RULES.price} onClick={() => void purchase("gold")}>{busy && freeSpeetto <= 0 ? "구매 확인 중…" : `골드 ${SPEETTO_RULES.price}G`}</button>
-        <button className="secondary-button" aria-label={`이용권으로 사기 · 1장 · 보유 ${shop.inventory.speettoTickets}장`} disabled={!available || Boolean(pending && pending.payment !== "ticket") || !pending && shop.inventory.speettoTickets < 1} onClick={() => void purchase("ticket")}><span>이용권 1장</span><small>보유 {shop.inventory.speettoTickets}장</small></button>
+        {shop.canPurchase && !pending && speettoTickets <= 0 && shop.gold < SPEETTO_RULES.price && <p className="subtle-note">골드와 이용권이 부족해요.</p>}
+        <PayButtons kind="speetto" price={SPEETTO_RULES.price} tickets={speettoTickets} available={available} busy={busy} pending={pending?.payment ?? null} gold={shop.gold} onPay={payment => void purchase(payment)} />
       </div>
       <p className="subtle-note">당첨 확률 {SPEETTO_RULES.winPercent}% · 당첨금은 구매할 때 바로 받아요. 긁다가 나가도 지급은 유지돼요.</p>
       <ShopNotice kind="speetto" error={error} />

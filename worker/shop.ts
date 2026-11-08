@@ -44,7 +44,7 @@ export function requestId(input: Record<string, unknown>): string {
   return input.requestId;
 }
 function payment(input: Record<string, unknown>): ShopPayment {
-  if (input.payment !== 'gold' && input.payment !== 'ticket' && input.payment !== 'free') throw new ShopError(400, 'INVALID_PAYMENT', '골드, 이용권 또는 무료 이용을 선택해 주세요.');
+  if (input.payment !== 'gold' && input.payment !== 'ticket' && input.payment !== 'free') throw new ShopError(400, 'INVALID_PAYMENT', '골드나 이용권을 선택해 주세요.');
   return input.payment;
 }
 /** SQL for how many free uses of each item `u.id` has spent on the KST day `?`. */
@@ -98,6 +98,18 @@ export async function readShopState(db: D1Database, user: ShopUser, now: Date): 
   return { gold: row?.gold ?? 0, inventory: { lottoTickets: row?.lottoTickets ?? 0, speettoTickets: row?.speettoTickets ?? 0, tagTickets: row?.tagTickets ?? 0 },
     free: { lotto: left('lotto'), speetto: left('speetto'), slot: left('slot'), tag: left('tag') },
     canPurchase: player, serverTime: now.toISOString() };
+}
+
+/** Today's free uses left, for bootstrap: the shop merges them into each
+ * item's 이용권 count, so every refresh must carry them (four index probes). */
+export async function readDailyFree(db: D1Database, user: ShopUser, now: Date): Promise<DailyFreeLeft> {
+  if (user.role !== 'player') return { lotto: 0, speetto: 0, slot: 0, tag: 0 };
+  const date = dayWindow(now).date;
+  const kinds = Object.keys(FREE_USED_SQL) as (keyof typeof FREE_USED_SQL)[];
+  const row = await db.prepare(`SELECT ${kinds.map(kind => `${FREE_USED_SQL[kind].replace('u.id', 'me.id')} AS ${kind}`).join(', ')} FROM (SELECT ? AS id) me`)
+    .bind(date, date, date, date, user.id).first<DailyFreeLeft>();
+  const left = (kind: keyof DailyFreeLeft) => Math.max(0, DAILY_FREE[kind] - (row?.[kind] ?? 0));
+  return { lotto: left('lotto'), speetto: left('speetto'), slot: left('slot'), tag: left('tag') };
 }
 
 function chargeStatements(db: D1Database, attempt: string, kind: ShopKind): D1PreparedStatement[] {
@@ -272,21 +284,29 @@ export async function settleDueLotto(db: D1Database, now: Date): Promise<void> {
   await syncAchievementsFor(db, tickets.map(ticket => ticket.user_id), now);
 }
 
-/** A free use is stored as a zero-cost gold row marked free, so no gold or
- * ticket moves; the same insert checks today's free count under the batch. */
+/** A daily free use is stored as a zero-cost gold row marked free, so no gold or
+ * ticket moves. Paying with 'ticket' spends today's free uses first and then an
+ * owned ticket; the same insert decides which, under the batch, from today's
+ * free count and the cached balance. 'free' (only today's uses) is still
+ * accepted so a purchase sent before tickets and free uses merged settles the
+ * way it was asked. */
 function simplePurchaseStatement(db: D1Database, user: ShopUser, id: string, kind: 'lotto' | 'speetto', payload: string, method: ShopPayment,
   price: number, outcome: string, attempt: string, now: Date, start: number, end: number): D1PreparedStatement {
   const date = kstDate(now);
+  const freeLeft = `${FREE_USED_SQL[kind].replace('date = ?', `date = '${date}'`)} < ${DAILY_FREE[kind]}`;
+  const owned = `COALESCE((SELECT ${kind === 'lotto' ? 'lotto_tickets' : 'speetto_tickets'} FROM user_balances WHERE user_id = u.id), 0) >= 1`;
+  const usesFree = method === 'free' ? '1' : method === 'ticket' ? `CASE WHEN ${freeLeft} THEN 1 ELSE 0 END` : '0';
+  const storedPayment = method === 'ticket' ? `CASE WHEN ${freeLeft} THEN 'gold' ELSE 'ticket' END` : `'gold'`;
+  const funded = method === 'gold' ? 'COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?'
+    // `? IS NULL` keeps the bound price in every branch; the price is never null.
+    : method === 'ticket' ? `(${freeLeft} OR ${owned} OR ? IS NULL)` : `(${freeLeft} OR ? IS NULL)`;
   return db.prepare(`INSERT OR IGNORE INTO shop_purchases (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome, free)
-    SELECT ?, u.id, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM users u
+    SELECT ?, u.id, ?, ?, ?, ${storedPayment}, ?, ?, ?, ?, ${usesFree} FROM users u
     WHERE u.id = ? AND u.role = 'player' AND u.active = 1
       AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
-      AND ((? = 'gold' AND COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?)
-        OR (? = 'ticket' AND COALESCE((SELECT CASE ? WHEN 'lotto' THEN lotto_tickets ELSE speetto_tickets END
-          FROM user_balances WHERE user_id = u.id), 0) >= 1)
-        OR (? = 'free' AND ${FREE_USED_SQL[kind]} < ?))`)
-    .bind(attempt, id, kind, payload, method === 'ticket' ? 'ticket' : 'gold', method === 'gold' ? price : 0, date, now.toISOString(), outcome, method === 'free' ? 1 : 0,
-      user.id, start, end, method, price, method, kind, method, date, DAILY_FREE[kind]);
+      AND ${funded}`)
+    .bind(attempt, id, kind, payload, method === 'gold' ? price : 0, date, now.toISOString(), outcome,
+      user.id, start, end, price);
 }
 async function buyLotto(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<PurchaseRow> {
   const id = requestId(input); const method = payment(input);
@@ -381,22 +401,23 @@ async function previousSlotSpin(db: D1Database, userId: string, id: string): Pro
 async function spinSlot(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<SlotRow> {
   const id = requestId(input);
   if (input.free !== undefined && typeof input.free !== 'boolean') throw new ShopError(400, 'INVALID_PAYMENT', '무료 이용 여부를 확인해 주세요.');
-  const free = input.free === true;
+  // A spin uses today's free spin (이용권) while one is left, otherwise gold.
+  // `free: true` from a client before the merge still means "only a free spin".
+  const onlyFree = input.free === true;
   const previous = await previousSlotSpin(db, user.id, id);
   if (previous) return previous;
   const result = slotResult(randomInt);
   const attempt = crypto.randomUUID();
   const window = dayWindow(now);
+  const freeLeft = `${FREE_USED_SQL.slot.replace('date = ?', `date = '${window.date}'`)} < ${DAILY_FREE.slot}`;
   const writes = [
-    // A free spin (`free: true`) spends one of today's free uses; any other
-    // spin needs the price in gold.
     db.prepare(`INSERT OR IGNORE INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at, free)
-      SELECT ?, u.id, ?, ?, ?, ?, ?, ?, ? FROM users u
+      SELECT ?, u.id, ?, ?, ?, ?, ?, ?, CASE WHEN ${freeLeft} THEN 1 ELSE 0 END FROM users u
       WHERE u.id = ? AND u.role = 'player' AND u.active = 1
         AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
-        AND CASE WHEN ? THEN ${FREE_USED_SQL.slot} < ? ELSE COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ? END`)
-      .bind(attempt, id, SLOT_RULES.price, JSON.stringify(result.reels), result.prize, window.date, now.toISOString(), free ? 1 : 0,
-        user.id, window.start, window.end, free ? 1 : 0, window.date, DAILY_FREE.slot, SLOT_RULES.price),
+        AND (${freeLeft} OR (? = 0 AND COALESCE((SELECT gold FROM user_balances WHERE user_id = u.id), 0) >= ?))`)
+      .bind(attempt, id, SLOT_RULES.price, JSON.stringify(result.reels), result.prize, window.date, now.toISOString(),
+        user.id, window.start, window.end, onlyFree ? 1 : 0, SLOT_RULES.price),
     db.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
       SELECT ?, user_id, 'gold', -cost, '슬롯머신', 'slot:buy:' || user_id || ':' || request_id, created_at
       FROM slot_spins WHERE id = ? AND free = 0`).bind(crypto.randomUUID(), attempt),
@@ -415,8 +436,8 @@ async function spinSlot(db: D1Database, user: ShopUser, input: Record<string, un
   if (!clock || clock.now < window.start || clock.now >= window.end) {
     throw new ShopError(409, 'PURCHASE_TIME_CHANGED', '구매 날짜가 바뀌었어요. 새로고침하고 다시 시도해 주세요.');
   }
-  if (free) throw new ShopError(409, 'NO_FREE_LEFT', '오늘 무료 이용을 모두 썼어요.');
-  throw new ShopError(409, 'INSUFFICIENT_GOLD', '골드가 부족해요');
+  if (onlyFree) throw new ShopError(409, 'NO_FREE_LEFT', '오늘 이용권을 모두 썼어요.');
+  throw new ShopError(409, 'INSUFFICIENT_GOLD', '이용권과 골드가 부족해요');
 }
 
 export async function shopRoute(db: D1Database, user: ShopUser, path: string, method: string, input: Record<string, unknown> | undefined, now: Date): Promise<ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse> {

@@ -31,6 +31,8 @@ export const ACHIEVEMENT_RULES = {
   wake: { near: 600, close: 180 }, offwork: { near: 180, close: 60 }, luck: { near: 3 },
   attendance: { streak: 30, total: 100 },
   slot: { dailySpins: 10 },
+  /** Goals in one official free-throw set; a zero needs all ten balls thrown. */
+  freethrow: { goals: [3, 5, 10] as const },
   /** Realized gold on one sell (received minus the cost it used up), by tier. */
   stockTiers: [100, 500, 1000, 2000, 5000, 10000] as const,
   /** Client-reported events the Worker accepts as unlocks. */
@@ -68,6 +70,12 @@ export const ACHIEVEMENTS: readonly AchievementDefinition[] = [
   daily('catchmind_first', 'games', '우리 서로 통했어.', '캐치마인드 한 번에 정답', 100),
   once('catchmind_misses', 'games', '피카소도 처음엔 그랬대요', '캐치마인드 출제 판이 10번째 오답으로 끝남', 50),
   daily('catchmind_drawn_first', 'games', '말 안 해도 아는 사이', '내 출제를 누군가 한 번에 맞힘', 100),
+  // 자유투 대결: 골 수는 공식 세트 하나 기준, 연습은 세지 않는다.
+  once('freethrow_join', 'games', '준비하시고 쏘세요!', '자유투 대결 첫 참여', 50),
+  daily('freethrow_3', 'games', '이정도면 충분한가?', '자유투 대결 3골 성공', 50),
+  daily('freethrow_5', 'games', '절반의 성공, 절반의 실패', '자유투 대결 5골 성공', 100),
+  daily('freethrow_10', 'games', '조작하지 마세요', '자유투 대결 10골 성공', 150),
+  once('freethrow_zero', 'games', '내 손가락을 탓하지 말아주세요', '자유투 대결 0골 성공', 300),
   // 출석
   once('attend_first', 'attendance', '출근 도장 찍으면 반은 한 거임', '첫 출석', 50),
   once('attend_streak', 'attendance', '출석 중꺾마', '30일 연속 출석', 1000),

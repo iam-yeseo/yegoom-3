@@ -53,9 +53,12 @@ function paddedJpeg(bytes: number): string {
 const profilePhotoPath = (id: string, version: number) => `/api/users/${id}/photo?v=${version}`;
 const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds/${date}/photo?v=${version}`;
 
-/** Stock PR 12 opened the market: bootstrap adds one read for the home stock tile
- * (holdings value and today's market holiday in one statement). */
-const STOCK_HOME = { prepares: 1, queries: 1, bindingCalls: 1, rowsRead: 12, rowsWritten: 0 } as const;
+/** Home tiles added after the recorded budgets: stock PR 12 reads one statement
+ * (holdings value and today's market holiday; 12 rows), the free-throw tile
+ * reads one indexed range of the player's last two slots (at most 2 rows), and
+ * the merged 이용권 counts read today's free uses (four partial-index probes; the
+ * allowance covers a player who used all twelve). */
+const STOCK_HOME = { prepares: 1 + 1 + 1, queries: 1 + 1 + 1, bindingCalls: 1 + 1 + 1, rowsRead: 12 + 2 + 12, rowsWritten: 0 } as const;
 const stockAllowance = (route: string, field: keyof typeof STOCK_HOME) => route.includes('bootstrap') ? STOCK_HOME[field] : 0;
 /** Every successful player write is followed by the achievement check: one
  * batch that reads the facts and the known rows, and, only when something new
@@ -74,7 +77,7 @@ type Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
 
 // Freeze only the compiled test bundle. Production never accepts a clock header
 // or an environment override, and these tests do not depend on the host timezone.
-async function workerAt(instant: string, sqlInstant: string = instant, speettoRoll?: number): Promise<string> {
+async function workerAt(instant: string, sqlInstant: string = instant, speettoRoll?: number, options: { noDailyFree?: boolean } = {}): Promise<string> {
   const timestamp = Date.parse(instant);
   const result = await build({
     entryPoints: [fileURLToPath(new URL('../worker/index.ts', import.meta.url))],
@@ -94,6 +97,13 @@ async function workerAt(instant: string, sqlInstant: string = instant, speettoRo
     const signature = /function randomInt\((\w+)\) \{/;
     if (!signature.test(artifact)) throw new Error('Compiled shop randomInt function was not found');
     artifact = artifact.replace(signature, (match, maximum: string) => `${match} if (${maximum} === 100) return ${speettoRoll};`);
+  }
+  if (options.noDailyFree) {
+    // Gold and owned-ticket economy tests predate the daily 이용권 (which are
+    // spent first since the 2026-11-07 merge). Their test artifact gives none.
+    const daily = /var DAILY_FREE = \{ lotto: 3, speetto: 3, slot: 3, tag: 3 \};/;
+    if (!daily.test(artifact)) throw new Error('Compiled DAILY_FREE constant was not found');
+    artifact = artifact.replace(daily, 'var DAILY_FREE = { lotto: 0, speetto: 0, slot: 0, tag: 0 };');
   }
   return artifact;
 }
@@ -275,6 +285,7 @@ describe('Worker and D1 integration', () => {
   let migration: string;
   let passwordHash: string;
   let script: string;
+  let noFreeScript: string;
 
   async function request(path: string, options: {
     method?: string;
@@ -323,8 +334,18 @@ describe('Worker and D1 integration', () => {
           readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')))).join('\n')),
       hashPassword(PASSWORD),
     ]);
-    script = await workerAt(`${TODAY}T00:00:00Z`); // 09:00 KST
+    [script, noFreeScript] = await Promise.all([
+      workerAt(`${TODAY}T00:00:00Z`), // 09:00 KST
+      workerAt(`${TODAY}T00:00:00Z`, undefined, undefined, { noDailyFree: true }),
+    ]);
   });
+  /** Gold and owned-ticket mechanics, without today's free 이용권 spent first. */
+  async function withoutDailyFree() {
+    await worker?.dispose();
+    worker = runtime(noFreeScript);
+    db = await worker.getD1Database('DB');
+    await provision(db, migration, passwordHash);
+  }
 
   beforeEach(async () => {
     // Use a fresh database; production ledger triggers forbid clearing payout history.
@@ -1142,6 +1163,7 @@ describe('Worker and D1 integration', () => {
     const equip = (cookie: string, tagId: string | null) => request('/api/me/nickname-tag', { method: 'PUT', body: { tagId }, cookie });
 
     it('draws a tag for 300 gold, replays the same request and caps five draws a day', async () => {
+      await withoutDailyFree();
       await giveGold(db, 'yeseo', 2000);
       const { cookie } = await login('yeseo');
       const first = await draw(cookie, 'tag-1');
@@ -1193,6 +1215,49 @@ describe('Worker and D1 integration', () => {
       expect(await db.prepare("SELECT COUNT(*) AS n FROM inventory_ledger WHERE user_id = 'min' AND amount < 0").first('n')).toBe(0);
       expect(await db.prepare("SELECT COUNT(*) AS n FROM tag_ticket_ledger WHERE user_id = 'min' AND amount < 0").first('n')).toBe(0);
     });
+    it('merges today\'s free uses into 이용권: spent first by itself, then owned tickets, then gold', async () => {
+      const { cookie } = await login('min');
+      await fund(5000, 'min');
+      await grantTicket('lotto_ticket', 1);
+      await grantTicket('speetto_ticket', 1);
+      await db.prepare(`INSERT INTO tag_ticket_ledger (id, user_id, amount, reason, reference, created_at)
+        VALUES ('grant-min', 'min', 1, '별명 뽑기권 지급', 'tag:grant:test:min', ?)`).bind(`${TODAY}T00:00:00.000Z`).run();
+      expect((await bootstrap(cookie)).dailyFree).toEqual({ lotto: 3, speetto: 3, slot: 3, tag: 3 });
+      const lotto = (index: number) => request('/api/shop/lotto', { method: 'POST', cookie, body: { requestId: `merged-lotto-${index}`, numbers: [1, 2, 3, 4, 10 + index], payment: 'ticket' } });
+      const speetto = (index: number) => request('/api/shop/speetto', { method: 'POST', cookie, body: { requestId: `merged-speetto-${index}`, payment: 'ticket' } });
+      const payments: string[] = [];
+      for (let index = 0; index < 4; index++) {
+        const bought = await lotto(index); expect(bought.status).toBe(200);
+        payments.push((await bought.json() as LottoResponse).purchase!.payment);
+        expect((await speetto(index)).status).toBe(200);
+      }
+      // Three of today's, then the owned ticket; no more 이용권 after that.
+      expect(payments).toEqual(['free', 'free', 'free', 'ticket']);
+      expect((await lotto(4)).status).toBe(409);
+      expect((await speetto(4)).status).toBe(409);
+      const state = await bootstrap(cookie);
+      expect(state.inventory).toMatchObject({ lottoTickets: 0, speettoTickets: 0 });
+      expect(state.dailyFree).toMatchObject({ lotto: 0, speetto: 0 });
+      // Slot and tag draws pick on their own: today's first, then (tag) a ticket, then gold.
+      const spins: number[] = [];
+      for (let index = 0; index < 4; index++) {
+        const spun = await request('/api/shop/slot', { method: 'POST', cookie, body: { requestId: `merged-slot-${index}` } });
+        expect(spun.status).toBe(200);
+        spins.push((await spun.json() as SlotResponse).spin!.cost);
+      }
+      expect(spins).toEqual([0, 0, 0, 500]);
+      const draws: string[] = [];
+      for (let index = 0; index < 5; index++) {
+        const drawn = await draw(cookie, `merged-tag-${index}`);
+        expect(drawn.status).toBe(200);
+        draws.push((await drawn.json() as TagResponse).draw!.payment);
+      }
+      expect(draws).toEqual(['free', 'free', 'free', 'ticket', 'gold']);
+      expect((await bootstrap(cookie)).dailyFree).toEqual({ lotto: 0, speetto: 0, slot: 0, tag: 0 });
+      // Gold spent only on the fourth spin and the fifth draw.
+      const debits = await db.prepare("SELECT SUM(amount) AS total FROM ledger WHERE user_id = 'min' AND amount < 0").first<{ total: number }>();
+      expect(debits!.total).toBe(-500 - 300);
+    });
     it('throws away a drawn tag: it leaves the collection but still counts toward the day', async () => {
       await giveGold(db, 'yeseo', 1000);
       const { cookie } = await login('yeseo');
@@ -1237,6 +1302,7 @@ describe('Worker and D1 integration', () => {
       } finally { await instance.dispose(); }
     });
     it('spends a draw ticket before gold and charges gold once the tickets run out', async () => {
+      await withoutDailyFree();
       await giveGold(db, 'yeseo', 1000);
       await db.prepare(`INSERT INTO tag_ticket_ledger (id, user_id, amount, reason, reference, created_at)
         VALUES ('grant-yeseo', 'yeseo', 2, '별명 뽑기권 지급', 'tag:grant:test:yeseo', ?)`).bind(`${TODAY}T00:00:00.000Z`).run();
@@ -1257,6 +1323,7 @@ describe('Worker and D1 integration', () => {
       expect(await db.prepare("SELECT COUNT(*) AS n FROM ledger WHERE user_id = 'yeseo' AND reason = '별명 태그 뽑기'").first<number>('n')).toBe(1);
     });
     it('refuses without enough gold and for administrators, without charging', async () => {
+      await withoutDailyFree();
       await giveGold(db, 'min', 299);
       const { cookie } = await login('min');
       const poor = await draw(cookie, 'poor-1');
@@ -1269,7 +1336,7 @@ describe('Worker and D1 integration', () => {
       expect((await draw(cookie, 'bad id!')).status).toBe(400);
     });
     it('charges once when the same request races, and a forced S grade draws an S phrase', async () => {
-      const instance = runtime(await workerAt(`${TODAY}T00:00:00Z`, `${TODAY}T00:00:00Z`, 2)); // grade roll 2 → S
+      const instance = runtime(await workerAt(`${TODAY}T00:00:00Z`, `${TODAY}T00:00:00Z`, 2, { noDailyFree: true })); // grade roll 2 → S
       try {
         const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
         await giveGold(database, 'siwon', 1000);
@@ -1925,7 +1992,7 @@ describe('Worker and D1 integration', () => {
 
     it.each([0, 99])('stores a winning speetto roll %i atomically once across retries', async roll => {
       const instant = `${TODAY}T00:00:00Z`;
-      const instance = runtime(await workerAt(instant, instant, roll));
+      const instance = runtime(await workerAt(instant, instant, roll, { noDailyFree: true }));
       try {
         const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
         await fund(1000, 'min', database);
@@ -2249,7 +2316,10 @@ describe('Worker and D1 integration', () => {
   describe('launch gift event', () => {
     const launchInstant = '2026-11-02T00:00:00Z'; // 09:00 KST on launch day.
     let launchScript: string;
-    beforeAll(async () => { launchScript = await workerAt(launchInstant); });
+    let launchNoFreeScript: string;
+    beforeAll(async () => {
+      [launchScript, launchNoFreeScript] = await Promise.all([workerAt(launchInstant), workerAt(launchInstant, undefined, undefined, { noDailyFree: true })]);
+    });
     beforeEach(async () => {
       await worker.dispose();
       worker = runtime(launchScript);
@@ -2338,6 +2408,8 @@ describe('Worker and D1 integration', () => {
     });
 
     it('keeps claim history after a ticket is spent instead of replenishing the gift', async () => {
+      // Spend the gifted ticket itself, not one of today's free 이용권.
+      await worker.dispose(); worker = runtime(launchNoFreeScript); db = await worker.getD1Database('DB'); await provision(db, migration, passwordHash);
       const { cookie } = await login('min');
       await attend(cookie);
       await claim(cookie);
@@ -4664,8 +4736,9 @@ describe('Worker and D1 integration', () => {
 
   describe('slot machine economy', () => {
     const instant = `${TODAY}T00:00:00Z`;
+    // Gold mechanics: these instances have no daily free spins (spent first otherwise).
     async function slotInstance(roll: number, gold = 500) {
-      const instance = runtime(await workerAt(instant, instant, roll));
+      const instance = runtime(await workerAt(instant, instant, roll, { noDailyFree: true }));
       const database = await instance.getD1Database('DB');
       await provision(database, migration, passwordHash);
       if (gold) await fund(gold, 'min', database);
@@ -4732,7 +4805,7 @@ describe('Worker and D1 integration', () => {
         })));
         expect(responses.map(response => response.status).sort()).toEqual([200, 200, 409, 409, 409]);
         for (const response of responses.filter(value => value.status === 409)) {
-          expect(await response.json()).toMatchObject({ error: { message: '골드가 부족해요' } });
+          expect(await response.json()).toMatchObject({ error: { message: '이용권과 골드가 부족해요' } });
         }
         expect((await recent(cookie, instance)).gold).toBe(0);
         expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(2);
@@ -4749,7 +4822,7 @@ describe('Worker and D1 integration', () => {
         const response = await request('/api/shop/slot', { method: 'POST', cookie, instance,
           body: { requestId: crypto.randomUUID(), payment: 'ticket' } });
         expect(response.status).toBe(409);
-        expect(await response.json()).toMatchObject({ error: { code: 'INSUFFICIENT_GOLD', message: '골드가 부족해요' } });
+        expect(await response.json()).toMatchObject({ error: { code: 'INSUFFICIENT_GOLD', message: '이용권과 골드가 부족해요' } });
         expect(await database.prepare('SELECT COUNT(*) AS n FROM slot_spins').first('n')).toBe(0);
         expect((await ledgerRows(database)).map(row => row.amount)).toEqual([499]);
         expect(await recent(cookie, instance)).toMatchObject({ gold: 499, inventory: { lottoTickets: 2, speettoTickets: 3 } });
@@ -4801,7 +4874,7 @@ describe('Worker and D1 integration', () => {
     it('restores an explicit old slot receipt without another debit or reinserting it in recent history', async () => {
       const persistence = await mkdtemp(join(tmpdir(), 'yegoom-old-slot-receipt-'));
       const old = '2026-10-20T00:00:00Z';
-      let instance = runtime(await workerAt(old, old, 6), persistence);
+      let instance = runtime(await workerAt(old, old, 6, { noDailyFree: true }), persistence);
       try {
         let database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
         await fund(500, 'min', database);
@@ -4900,7 +4973,7 @@ describe('Worker and D1 integration', () => {
         { historicalSpins: 5000, recentSpins: 5000, historicalGoldLedgerRows: 10000 },
       ];
       for (const fixture of fixtures) for (const outcome of ['loss', 'win'] as const) {
-        const instance = runtime(workerWithD1Metrics(await workerAt(instant, instant, outcome === 'win' ? 6 : 7)));
+        const instance = runtime(workerWithD1Metrics(await workerAt(instant, instant, outcome === "win" ? 6 : 7, { noDailyFree: true })));
         try {
           const database = await instance.getD1Database('DB'); await provision(database, migration, passwordHash);
           await fund(10000, 'min', database);
@@ -5391,6 +5464,7 @@ describe('Worker and D1 integration', () => {
     });
 
     it.each(['lotto', 'speetto'] as const)('requires sufficient %s gold or tickets and consumes one ticket atomically', async kind => {
+      await withoutDailyFree();
       const { cookie } = await login('min');
       const input = kind === 'lotto' ? { numbers: [1, 2, 3, 4, 5] } : {};
       for (const payment of ['gold', 'ticket']) {
@@ -5412,7 +5486,7 @@ describe('Worker and D1 integration', () => {
 
     it.each([0, 9, 10, 99])('uses the 10 percent speetto boundary for roll %s and persists prepaid outcomes', async roll => {
       const instant = `${TODAY}T00:00:00Z`;
-      const instance = runtime(await workerAt(instant, instant, roll));
+      const instance = runtime(await workerAt(instant, instant, roll, { noDailyFree: true }));
       try {
         const database = await instance.getD1Database('DB');
         await provision(database, migration, passwordHash);

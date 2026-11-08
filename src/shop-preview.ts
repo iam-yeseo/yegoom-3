@@ -140,7 +140,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   const freeKey = (kind: DailyFreeKind, now: Date) => `${kstDate(now)}:${kind}`;
   const freeLeft = (kind: DailyFreeKind, now: Date) => Math.max(0, DAILY_FREE[kind] - (freeUsed.get(freeKey(kind, now)) ?? 0));
   function useFree(kind: DailyFreeKind, now: Date) {
-    if (freeLeft(kind, now) < 1) throw new Error('오늘 무료 이용을 모두 썼어요.');
+    if (freeLeft(kind, now) < 1) throw new Error('오늘 받은 이용권을 모두 썼어요.');
     freeUsed.set(freeKey(kind, now), (freeUsed.get(freeKey(kind, now)) ?? 0) + 1);
   }
   function state(now: Date): ShopState {
@@ -198,8 +198,10 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     if (previous && (previous.kind !== kind || previous.payload !== payload)) throw new Error('다른 구매에 사용한 요청 번호예요. 다시 선택해 주세요.');
     return previous?.purchase;
   }
-  function pay(payment: ShopPayment, item: keyof Inventory, price: number, reason: string, now: Date) {
+  /** 'ticket' spends today's free use first, then an owned ticket (as the server). */
+  function pay(payment: ShopPayment, item: keyof Inventory, price: number, reason: string, now: Date, kind?: DailyFreeKind) {
     if (payment === 'ticket') {
+      if (kind && freeLeft(kind, now) > 0) { useFree(kind, now); return; }
       if (inventory[item] < 1) throw new Error('사용할 이용권이 없어요.');
       inventory[item] -= 1;
     } else if (payment === 'gold') {
@@ -267,7 +269,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     if (previous) return lotto(now, previous as LottoTicket);
     if (numbers.length !== LOTTO_RULES.pickCount || new Set(numbers).size !== LOTTO_RULES.pickCount ||
       numbers.some(number => !Number.isInteger(number) || number < 1 || number > LOTTO_RULES.maxNumber)) throw new Error('서로 다른 숫자를 골라 주세요.');
-    if (input.payment === 'free') useFree('lotto', now); else pay(input.payment, 'lottoTickets', LOTTO_RULES.price, '데일리 로또 구매', now);
+    if (input.payment === 'free') useFree('lotto', now); else pay(input.payment, 'lottoTickets', LOTTO_RULES.price, '데일리 로또 구매', now, 'lotto');
     const today = kstDate(now);
     const purchase: LottoTicket = { id: crypto.randomUUID(), requestId: input.requestId,
       purchaseDate: today, createdAt: now.toISOString(),
@@ -283,7 +285,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     const payload = JSON.stringify({ payment: input.payment });
     const previous = replay('speetto', input.requestId, payload);
     if (previous) return speetto(now, previous as SpeettoTicket);
-    if (input.payment === 'free') useFree('speetto', now); else pay(input.payment, 'speettoTickets', SPEETTO_RULES.price, '스피또 구매', now);
+    if (input.payment === 'free') useFree('speetto', now); else pay(input.payment, 'speettoTickets', SPEETTO_RULES.price, '스피또 구매', now, 'speetto');
     const won = Math.random() * 100 < SPEETTO_RULES.winPercent;
     const symbols = shuffled(SPEETTO_RULES.characters);
     const resultCells: SpeettoSymbol[] = won ? [symbols[0], symbols[0], symbols[0]] : symbols.slice(0, 3);
@@ -302,8 +304,9 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     if (typeof input.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.requestId)) throw new Error('구매 요청을 다시 시도해 주세요.');
     const previous = slotReceipts.get(input.requestId);
     if (previous) return slot(now, previous);
-    const free = input.free === true;
-    if (!free && gold < SLOT_RULES.price) throw new Error('골드가 부족해요');
+    // Today's 이용권 first, then gold (as the server).
+    const free = input.free === true || freeLeft('slot', now) > 0;
+    if (!free && gold < SLOT_RULES.price) throw new Error('이용권과 골드가 부족해요');
     if (free) useFree('slot', now);
     const result = slotResult(max => Math.floor(Math.random() * max));
     const spin: SlotSpin = { id: crypto.randomUUID(), requestId: input.requestId, ...result,
@@ -322,8 +325,8 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     if (previous) { const { date: _date, ...draw } = previous; return tagResponse(now, draw); }
     const today = kstDate(now);
     if (tags.filter(tag => tag.date === today).length >= NICKNAME_TAG_RULES.dailyLimit) throw new Error(`별명 태그는 하루 ${NICKNAME_TAG_RULES.dailyLimit}번까지 뽑을 수 있어요.`);
-    // A draw ticket pays before gold, as it does on the server.
-    const payment: ShopPayment = input.free === true ? 'free' : inventory.tagTickets > 0 ? 'ticket' : 'gold';
+    // Today's free draws, then owned draw tickets, then gold, as on the server.
+    const payment: ShopPayment = input.free === true || freeLeft('tag', now) > 0 ? 'free' : inventory.tagTickets > 0 ? 'ticket' : 'gold';
     if (payment === 'gold' && gold < NICKNAME_TAG_RULES.price) throw new Error('골드가 부족해요');
     const tag = { id: crypto.randomUUID(), ...drawNicknameTag(max => Math.floor(Math.random() * max)), equipped: false, createdAt: now.toISOString(), date: today, payment };
     if (payment === 'free') useFree('tag', now); else pay(payment, 'tagTickets', NICKNAME_TAG_RULES.price, '별명 태그 뽑기', now);

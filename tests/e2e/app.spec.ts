@@ -709,7 +709,9 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(page.getByRole('button', { name: '번호 1', exact: true })).toBeDisabled();
   const committed = await shopSnapshot<LottoResponse>(page, 'lotto');
-  expect(committed.inventory.lottoTickets).toBe(before.inventory.lottoTickets - 1);
+  // 이용권 spends today's free one before an owned ticket (2026-11-07 merge).
+  expect(committed.inventory.lottoTickets).toBe(before.inventory.lottoTickets);
+  expect(committed.free?.lotto).toBe((before.free?.lotto ?? 0) - 1);
   expect(committed.gold).toBe(before.gold);
   expect(committed.lotto.tickets).toHaveLength(before.lotto.tickets.length + 1);
   await page.goto('/#/shop');
@@ -724,7 +726,9 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   expect(attempts).toHaveLength(2);
   expect(attempts[1]).toEqual(attempts[0]);
   const afterRetry = await shopSnapshot<LottoResponse>(page, 'lotto');
-  expect(afterRetry.inventory.lottoTickets).toBe(before.inventory.lottoTickets - 1);
+  // The retry settles the one purchase: one of today's 이용권, no owned ticket.
+  expect(afterRetry.inventory.lottoTickets).toBe(before.inventory.lottoTickets);
+  expect(afterRetry.free?.lotto).toBe((before.free?.lotto ?? 0) - 1);
   expect(afterRetry.lotto.tickets).toHaveLength(before.lotto.tickets.length + 1);
   await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
   const paid = purchaseResponse(page, 'lotto');
@@ -783,8 +787,9 @@ test('speetto pays at purchase, restores owned tickets after leaving and scratch
   await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
   await confirmPurchase(page);
   const couponData = await (await coupon).json() as SpeettoResponse;
-  expect(couponData.purchase).toMatchObject({ payment: 'ticket', cost: 0 });
-  expect(couponData.inventory.speettoTickets).toBe(restored.inventory.speettoTickets - 1);
+  // Today's free 이용권 goes first; owned tickets stay.
+  expect(couponData.purchase).toMatchObject({ payment: 'free', cost: 0 });
+  expect(couponData.inventory.speettoTickets).toBe(restored.inventory.speettoTickets);
   expect((await snapshot(page)).user.gold).toBe(afterPurchase + couponData.purchase!.prize);
 });
 

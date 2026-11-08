@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SLOT_RULES } from "../../shared/balance";
-import { useShop } from "../shop";
+import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FREETHROW_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SLOT_RULES } from "../../shared/balance";
+import { ticketCount, useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
-import type { CatchmindSummary, ClawSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
+import type { CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
 import type { StockHomeSummary } from "../../shared/stock-types";
 import { STOCKS } from "../../shared/stocks";
 import { advanceNoticeOffset, hasSeenLotto, lottoSeenKey, markLottoSeen, nextKstMidnight, noticeDate } from "../lotto-notice";
@@ -55,6 +55,7 @@ export interface HomeData {
   kuji: KujiSummary | null;
   catchmind: CatchmindSummary;
   claw: ClawSummary;
+  freethrow: FreeThrowSummary;
   lottoNotice: LottoNotice | null;
   /** null while the market is not open to players. */
   stock: StockHomeSummary | null;
@@ -236,7 +237,14 @@ function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
   );
 }
 
-export function SoloGames({ go, claw, stock }: { go: Go; claw: ClawSummary; stock: StockHomeSummary | null }) {
+/** Home tile line: whether an official set can be thrown now, else when the next opens. */
+export function freeThrowTileText(summary: FreeThrowSummary): string {
+  if (summary.isAdmin) return "연습 모드";
+  if (summary.inProgress) return `세트 진행 중 · ${summary.shots}/${FREETHROW_RULES.shotsPerSet}구`;
+  if (summary.available) return "이번 세트 도전 가능";
+  return `다음 세트 ${String(new Date(summary.nextSlotAt + 9 * 3_600_000).getUTCHours()).padStart(2, "0")}시`;
+}
+export function SoloGames({ go, claw, freethrow, stock }: { go: Go; claw: ClawSummary; freethrow: FreeThrowSummary; stock: StockHomeSummary | null }) {
   const nextGrant = formatTime(new Date(claw.nextGrantAt).toISOString());
   const open = !!stock?.open;
   const pnl = stock ? stock.value - stock.cost : 0;
@@ -252,6 +260,15 @@ export function SoloGames({ go, claw, stock }: { go: Go; claw: ClawSummary; stoc
           <span className="solo-text">
             <strong>캐릭터 뽑기</strong>
             <small>{claw.isAdmin ? "무제한 플레이 · 보상 없음" : <>코인 {claw.coins}개 · <span className="home-schedule">{nextGrant} 충전</span></>}</small>
+          </span>
+        </button>
+        <button className="card solo-tile" onClick={() => go("/play/freethrow")}>
+          <span className="solo-icon" style={{ background: "#FFE7DF" }}>
+            <img className="character" src="/freethrow/tile.webp" alt="" />
+          </span>
+          <span className="solo-text">
+            <strong>자유투 대결</strong>
+            <small>{freeThrowTileText(freethrow)}</small>
           </span>
         </button>
         <button className="card solo-tile" onClick={() => go("/stock")}>
@@ -282,12 +299,12 @@ const SHOP_DESCRIPTIONS = {
   tag: "나를 가장 잘 나타내는 그 한 단어를 바로 내 이름 옆에 달아보세요.",
 } as const;
 export function ShopCards({ go, detailed = false }: { go: Go; detailed?: boolean }) {
-  const { inventory } = useShop();
+  const shop = useShop();
   const tiles = [
-    { path: "/shop/lotto", title: "데일리 로또", schedule: `${formatTime(LOTTO_RULES.drawTime)} 추첨`, tickets: inventory.lottoTickets, icon: "lotto" },
-    { path: "/shop/speetto", title: "스피또", schedule: "바로 긁기", tickets: inventory.speettoTickets, icon: "speetto" },
-    { path: "/shop/slot", title: "슬롯머신", schedule: `1회 ${SLOT_RULES.price.toLocaleString("ko-KR")}G`, tickets: null, icon: "slot" },
-    { path: "/shop/tag", title: "별명 태그 뽑기", schedule: `1회 ${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`, tickets: inventory.tagTickets, icon: "tag" },
+    { path: "/shop/lotto", title: "데일리 로또", schedule: `${formatTime(LOTTO_RULES.drawTime)} 추첨`, tickets: ticketCount("lotto", shop), icon: "lotto" },
+    { path: "/shop/speetto", title: "스피또", schedule: "바로 긁기", tickets: ticketCount("speetto", shop), icon: "speetto" },
+    { path: "/shop/slot", title: "슬롯머신", schedule: `1회 ${SLOT_RULES.price.toLocaleString("ko-KR")}G`, tickets: ticketCount("slot", shop), icon: "slot" },
+    { path: "/shop/tag", title: "별명 태그 뽑기", schedule: `1회 ${NICKNAME_TAG_RULES.price.toLocaleString("ko-KR")}G`, tickets: ticketCount("tag", shop), icon: "tag" },
   ] as const;
   if (detailed) return (
     <div className="shop-item-list">
@@ -601,7 +618,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
         />
         <LottoNoticeCard data={data} go={go} />
         <TodayGames data={data} go={go} />
-        <SoloGames go={go} claw={data.claw} stock={data.stock} />
+        <SoloGames go={go} claw={data.claw} freethrow={data.freethrow} stock={data.stock} />
         <SectionTitle title="상점" right="전체" onClick={() => go("/shop")} />
         <ShopCards go={go} />
         <SectionTitle title="이번 주 랭킹" right={settleText()} />
