@@ -33,10 +33,16 @@ export function duePeriods(today: string): DuePeriod[] {
   return due;
 }
 
+/** A batch that lost the race for the settlement row: its plain INSERT hit the
+ * (period, key) primary key, so D1 rolled the whole batch back. */
+const lostSettlementRace = (error: unknown) =>
+  error instanceof Error && /UNIQUE constraint failed: ranking_settlements\.period, ranking_settlements\.key/.test(error.message);
+
 /** Pay every finished period that has no settlement row yet. Two reads and one
- * batch per settlement; a day with nothing owed costs a single indexed read.
- * `INSERT OR IGNORE` on both the payout reference and the settlement row makes
- * a retry, a concurrent Cron and a replayed catch-up all harmless. */
+ * batch per settlement; a run with nothing owed costs a single indexed read.
+ * The batch claims the settlement row first with a plain INSERT, so exactly one
+ * run's snapshot is ever paid: a concurrent run that read different scores
+ * fails on the primary key and its whole batch rolls back. */
 export async function settleDueRankingRewards(db: D1Database, now: Date): Promise<void> {
   const due = duePeriods(kstDate(now));
   if (!due.length) return;
@@ -74,22 +80,30 @@ export async function settleDueRankingRewards(db: D1Database, now: Date): Promis
     const payouts = rankScores(ordered)
       .map(entry => ({ ...entry, gold: rankingReward(period.period, entry.rank, entry.score) }))
       .filter(entry => entry.gold > 0);
-    await db.batch([
-      ...payouts.flatMap(entry => {
-        const reference = `rank:${period.period}:${period.key}:${entry.userId}`;
-        return [
-          db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
-            VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
-            .bind(crypto.randomUUID(), entry.userId, entry.gold, RANKING_REWARDS[period.period].reason, reference, createdAt),
-          // Only this player sees it, and only once: the reference is UNIQUE.
-          notify(db, { kind: 'rank', audience: 'user', userId: entry.userId, actorId: entry.userId,
-            payload: { kind: 'rank', period: period.period, place: entry.rank, gold: entry.gold },
-            reference: `notification:${reference}`, createdAt }),
-        ];
-      }),
-      db.prepare('INSERT OR IGNORE INTO ranking_settlements (period, key, settled_at) VALUES (?, ?, ?)')
-        .bind(period.period, period.key, createdAt),
-    ]);
+    try {
+      await db.batch([
+        // First statement on purpose: the whole period commits under one claim.
+        db.prepare('INSERT INTO ranking_settlements (period, key, settled_at) VALUES (?, ?, ?)')
+          .bind(period.period, period.key, createdAt),
+        ...payouts.flatMap(entry => {
+          const reference = `rank:${period.period}:${period.key}:${entry.userId}`;
+          return [
+            db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+              VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
+              .bind(crypto.randomUUID(), entry.userId, entry.gold, RANKING_REWARDS[period.period].reason, reference, createdAt),
+            // Only this player sees it, and only once: the reference is UNIQUE.
+            notify(db, { kind: 'rank', audience: 'user', userId: entry.userId, actorId: entry.userId,
+              payload: { kind: 'rank', period: period.period, place: entry.rank, gold: entry.gold },
+              reference: `notification:${reference}`, createdAt }),
+          ];
+        }),
+      ]);
+    } catch (error) {
+      // Another run already paid this period from its own snapshot. Anything
+      // else is a real failure: nothing committed, and the next run retries.
+      if (lostSettlementRace(error)) continue;
+      throw error;
+    }
     // A first place or a podium finish is also an achievement.
     await syncAchievementsFor(db, payouts.map(entry => entry.userId), now);
   }

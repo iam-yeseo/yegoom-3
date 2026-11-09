@@ -864,19 +864,29 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
   if (gameMatch && isGameId(gameMatch[1]!)) return mutateGame(request, env, user, gameMatch[1]!, gameMatch[2]!, now);
   throw new HttpError(404, 'NOT_FOUND', '요청한 기능을 찾을 수 없어요.');
 }
+/** Post every published prediction answer's scores before ranking, so a round
+ * revealed late on the last day counts even if nobody opened the app after it.
+ * Errors are logged with their message and rethrown so the invocation reports
+ * an exception instead of a silent success. */
+async function settleRankingsAfterPredictions(db: D1Database, at: Date): Promise<void> {
+  try {
+    await settlePublishedRounds(db, at);
+    await settleDueRankingRewards(db, at);
+  } catch (error) {
+    console.error('Ranking reward settlement failed', error instanceof Error ? `${error.name}: ${error.message}` : 'UnknownError');
+    throw error;
+  }
+}
+
 export default {
-  /** One Cron every 10 minutes: daily housekeeping at 00:00 KST, and the stock
-   * market's ticks while it is open (reads also catch up if a run is missed). */
+  /** One Cron every 10 minutes: daily housekeeping at 00:00 KST, ranking
+   * payouts still owed, and the stock market's ticks while it is open. */
   scheduled(event: ScheduledController, env: Env, context: ExecutionContext) {
     const at = new Date(event.scheduledTime);
-    if (kstTime(at) < '00:10:00') {
-      context.waitUntil(maintainDatabase(env.DB, at));
-      // Pays the week that ended last night and, on the first of a month, that
-      // month. A missed night is caught up by the next run within the window.
-      context.waitUntil(settleDueRankingRewards(env.DB, at).then(() => undefined, error => {
-        console.error('Ranking reward settlement failed', error instanceof Error ? error.name : 'UnknownError');
-      }));
-    }
+    if (kstTime(at) < '00:10:00') context.waitUntil(maintainDatabase(env.DB, at));
+    // Every run, not only the first after midnight: a failed or missed payout
+    // is retried ten minutes later, and a quiet run is one indexed read.
+    context.waitUntil(settleRankingsAfterPredictions(env.DB, at));
     if (FEATURES.stock && env.STOCK_SEED_SECRET && stockCronDue(at.getTime())) {
       const writers = aiWriters({ anthropic: env.ANTHROPIC_API_KEY, openai: env.OPENAI_API_KEY });
       context.waitUntil(runStockCron(env.DB, env.STOCK_SEED_SECRET, writers, at.getTime()).then(() => undefined, error => {

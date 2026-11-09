@@ -1151,6 +1151,72 @@ describe('Worker and D1 integration', () => {
         { user_id: 'siwon', amount: 200, reason: '주간 랭킹 보상' },    // 2위 0 → 최소 보장
       ]);
     });
+
+    it('pays exactly one snapshot when two runs read different scores', async () => {
+      await db.prepare("INSERT INTO users (id, username, display_name, password_hash, role) VALUES ('jun', 'jun', 'jun', 'x', 'player')").run();
+      await giveScore('min', 100, '2026-11-03');
+      await giveScore('siwon', 80, '2026-11-04');
+      await giveScore('yeseo', 50, '2026-11-05');
+      // The first run reads its scores, then stalls right before its batch.
+      let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+      let reached!: () => void; const atBatch = new Promise<void>(resolve => { reached = resolve; });
+      const stalled = new Proxy(db, { get(target, key) {
+        if (key === 'batch') return async (statements: D1PreparedStatement[]) => { reached(); await gate; return target.batch(statements); };
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } }) as unknown as D1Database;
+      const first = settleDueRankingRewards(stalled, new Date(`2026-11-09T00:00:00${KST}`));
+      await atBatch;
+      // A last-week score lands in between, so the second run sees another podium.
+      await giveScore('jun', 60, '2026-11-08');
+      await settleDueRankingRewards(db, new Date(`2026-11-09T00:00:00${KST}`));
+      release();
+      await first; // Lost the claim: rolled back and skipped, not an error.
+      expect(await payouts('rank:week:2026-11-02:')).toEqual([
+        { user_id: 'jun', amount: 180, reason: '주간 랭킹 보상' },      // 3위 60 × 3
+        { user_id: 'min', amount: 500, reason: '주간 랭킹 보상' },
+        { user_id: 'siwon', amount: 320, reason: '주간 랭킹 보상' },
+      ]);
+      expect((await db.prepare("SELECT COUNT(*) AS count FROM notifications WHERE reference LIKE 'notification:rank:%'")
+        .first<{ count: number }>())!.count).toBe(3);
+      await expectBalanced();
+    });
+
+    it('rolls back a failed payout batch completely and pays on the next run', async () => {
+      await giveScore('min', 100, '2026-11-03');
+      await db.prepare(`CREATE TRIGGER test_fail_rank BEFORE INSERT ON notifications WHEN NEW.user_id = 'yeseo'
+        BEGIN SELECT RAISE(ABORT, 'test failure'); END`).run();
+      await expect(settleDueRankingRewards(db, new Date(`2026-11-09T00:00:00${KST}`))).rejects.toThrow('test failure');
+      expect(await payouts('rank:')).toEqual([]);
+      expect(await settled()).toEqual([]);
+      expect((await db.prepare("SELECT COUNT(*) AS count FROM notifications").first<{ count: number }>())!.count).toBe(0);
+      await expectBalanced();
+      await db.prepare('DROP TRIGGER test_fail_rank').run();
+      await settleDueRankingRewards(db, new Date(`2026-11-09T00:10:00${KST}`));
+      expect(await payouts('rank:week:2026-11-02:')).toHaveLength(3);
+      expect(await settled()).toEqual([{ period: 'week', key: '2026-11-02' }]);
+    });
+
+    it('lets the Cron post a late Sunday answer before paying, and retries after midnight', async () => {
+      // Revealed at 23:59:59 on the last day; nobody opens the app afterwards.
+      await seedRound({ game: 'offwork', date: '2026-11-08', answer: '18:00:00',
+        revealAt: Date.parse(`2026-11-08T23:59:59${KST}`), predictions: [['yeseo', '18:00:00']] });
+      await giveScore('min', 3, '2026-11-03');
+      const cron = await worker.getWorker();
+      // The first run of the day fails (simulated), so nothing is paid yet.
+      await db.prepare(`CREATE TRIGGER test_fail_rank BEFORE INSERT ON ranking_settlements
+        BEGIN SELECT RAISE(ABORT, 'test failure'); END`).run();
+      await cron.scheduled({ scheduledTime: new Date(`2026-11-09T00:00:00${KST}`), cron: '*/10 * * * *' }).catch(() => undefined);
+      expect(await payouts('rank:')).toEqual([]);
+      await db.prepare('DROP TRIGGER test_fail_rank').run();
+      // 00:20 is outside the old 00:00–00:10 window; the payout still happens.
+      await cron.scheduled({ scheduledTime: new Date(`2026-11-09T00:20:00${KST}`), cron: '*/10 * * * *' });
+      expect((await db.prepare("SELECT amount FROM ledger WHERE reference = 'score:offwork:2026-11-08:yeseo'")
+        .first<{ amount: number }>())?.amount).toBeGreaterThan(3);
+      const paid = await payouts('rank:week:2026-11-02:');
+      expect(paid.find(row => row.user_id === 'yeseo')?.amount).toBeGreaterThan(paid.find(row => row.user_id === 'min')!.amount);
+      expect(await settled()).toEqual([{ period: 'week', key: '2026-11-02' }]);
+    });
   });
 
   describe('nickname tags', () => {
