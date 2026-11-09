@@ -25,6 +25,19 @@ export const AI_RULES = {
 } as const;
 export const LAUNCH_GIFT = { date: '2026-11-02', lottoTickets: 5, speettoTickets: 5 } as const;
 
+/** Every game closes at 23:50 KST each day (Catchmind, predictions, the shop
+ * games, the claw and free throw). Whatever is still played, guessed or revealed
+ * after that may show its result, but it never counts toward score or ranking:
+ * the last ten minutes keep each day's ranking final before midnight. */
+export const PLAY_RULES = { closeTime: '23:50:00', closedMessage: '오늘 게임은 밤 11시 50분에 마감했어요. 자정에 다시 열려요.' } as const;
+/** When the given KST game day stops taking play and scores. */
+export const playCloseAt = (date: string): number => Date.parse(`${date}T${PLAY_RULES.closeTime}+09:00`);
+/** True from 23:50 to midnight KST. */
+export const playClosed = (now: number): boolean =>
+  new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(11, 19) >= PLAY_RULES.closeTime;
+/** A score belongs to its game day only if it was earned before that day closed. */
+export const scoreCounts = (gameDate: string, earnedAt: number): boolean => earnedAt < playCloseAt(gameDate);
+
 /** The published prediction rules, shared by settlement, help, and previews. */
 export const GAME_RULES = {
   wake: { title: '기상시간 맞히기', author: 'min', deadline: '10:30:00' },

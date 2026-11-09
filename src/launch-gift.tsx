@@ -16,7 +16,7 @@ export async function waitForAttendanceEffects(root: Element | null) {
   }
 }
 
-function LaunchDialog({ title, onClose, children, className = "" }: { title: string; onClose: () => void; children: ReactNode; className?: string }) {
+export function LaunchDialog({ title, onClose, children, className = "" }: { title: string; onClose: () => void; children: ReactNode; className?: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => {

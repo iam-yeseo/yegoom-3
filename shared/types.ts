@@ -14,6 +14,7 @@ export interface LuckPhotoResponse { photo: PhotoMetadata; serverTime: string }
 export type { AppNotification, NotificationSummary, NotificationsResponse } from './notifications';
 export type { AchievementsResponse, AchievementProgress, AchievementClaimInput, AchievementEventInput } from './achievements';
 import type { NotificationSummary } from './notifications';
+import type { RankResult } from './ranking-rewards';
 export interface User {
   id: string;
   username: string;
@@ -99,6 +100,8 @@ export interface BootstrapResponse {
   dailyFree: DailyFreeLeft;
   launchGift: LaunchGiftState;
   notifications: NotificationSummary;
+  /** Unseen settled places for the newest finished week/month (the result dialog). */
+  rankResults: RankResult[];
   /** Home tile summary; null while the stock market is not open to players. */
   stock: StockHomeSummary | null;
   serverTime: string;
@@ -205,7 +208,10 @@ export interface CatchmindRound {
   /** Authenticated image URL in API responses; offline previews may use a data URL. */
   image: string | null;
   wrongCount: number; hint: { firstCharacter: string; length: number } | null;
-  winner: CatchmindPlayer | null; endReason: 'correct' | 'misses' | 'manual' | null;
+  winner: CatchmindPlayer | null;
+  /** False when the round was solved after its publication day closed (23:50): gold only. */
+  winnerScored: boolean;
+  endReason: 'correct' | 'misses' | 'manual' | null;
   publishedAt: string | null; endedAt: string | null; guesses: CatchmindGuess[];
 }
 export interface CatchmindState {
@@ -226,7 +232,7 @@ export interface CatchmindGalleryResponse { rounds: CatchmindGalleryRound[]; nex
 export interface CatchmindSummary {
   roundId: string | null; status: 'idle' | 'draft' | 'open' | 'ended';
   drawer: CatchmindPlayer | null; turn: CatchmindPlayer | null; wrongCount: number;
-  winner: CatchmindPlayer | null; answer: string | null;
+  winner: CatchmindPlayer | null; winnerScored: boolean; answer: string | null;
 }
 export interface CatchmindResponse { catchmind: CatchmindState; version: number; viewerId: string; serverTime: string }
 export interface CatchmindUnchanged { unchanged: true; version: number; viewerId: string; serverTime: string }

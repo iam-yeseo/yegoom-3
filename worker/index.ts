@@ -22,10 +22,10 @@ import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, luckPhotoUrl } from './
 import { notificationsRoute, readNotificationSummary, sendAdminNotification, NotificationError, notify } from './notifications';
 import { maintainDatabase } from './maintenance';
 import { AchievementError, claimAchievement, readAchievements, recordAchievementEvent, syncAchievements, syncAchievementsFor } from './achievements';
-import { settleDueRankingRewards } from './ranking-rewards';
+import { RankResultError, markRankResultsSeen, readRankResults, settleDueRankingRewards } from './ranking-rewards';
 import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockSecret, tradeStock } from './stocks';
 import { aiWriters, isAiProvider, readAiStatus, saveAiSettings } from './stock-ai';
-import { FEATURES } from '../shared/balance';
+import { FEATURES, PLAY_RULES, playClosed, scoreCounts } from '../shared/balance';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher; STOCK_SEED_SECRET?: string; ANTHROPIC_API_KEY?: string; OPENAI_API_KEY?: string }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
@@ -201,15 +201,20 @@ async function changePassword(request: Request, env: Env, user: UserRow): Promis
   return json({ ok: true }, 200, { 'Set-Cookie': cookie(request, token, SESSION_AGE_SECONDS) });
 }
 
-async function roundResults(db: D1Database, id: GameId, date: string, answer: string, rules: PredictionRules): Promise<GameResult[]> {
+/** An answer that went public after the day closed (23:50) still shows its
+ * result, but its prediction points never count toward score or ranking. */
+const answerCounts = (round: { round_date: string; revealed_at: number | null; reveal_at: number | null }) =>
+  scoreCounts(round.round_date, round.revealed_at ?? round.reveal_at ?? Number.POSITIVE_INFINITY);
+
+async function roundResults(db: D1Database, id: GameId, date: string, answer: string, rules: PredictionRules, counted: boolean): Promise<GameResult[]> {
   const rows = (await db.prepare(`SELECT p.player_id, u.username, u.display_name, p.value, u.character,
     CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photo_version
     FROM predictions p JOIN users u ON u.id = p.player_id
     WHERE p.game_id = ? AND p.round_date = ? AND u.role = 'player' AND u.username != ?
     ORDER BY p.updated_at, p.player_id`).bind(id, date, GAME_RULES[id].author).all<PredictionRow>()).results;
-  return calculateResults(rows, id, answer, rules);
+  return calculateResults(rows, id, answer, rules, counted);
 }
-function calculateResults(rows: PredictionRow[], id: GameId, answer: string, rules: PredictionRules): GameResult[] {
+function calculateResults(rows: PredictionRow[], id: GameId, answer: string, rules: PredictionRules, counted: boolean): GameResult[] {
   const differences = rows.map(row => valueDifference(id, row.value, answer));
   const closest = Math.min(...differences);
   return rows.map((row, index) => {
@@ -218,7 +223,7 @@ function calculateResults(rows: PredictionRow[], id: GameId, answer: string, rul
     const participationGold = rules.participationGold;
     const firstGold = isFirst ? rules.firstGold : 0;
     return { playerId: row.player_id, username: row.username, displayName: row.display_name, character: row.character ?? defaultCharacter(row.username), photoVersion: row.photo_version,
-      value: row.value, difference, score: predictionPointsForRules(rules, difference), isFirst,
+      value: row.value, difference, score: counted ? predictionPointsForRules(rules, difference) : 0, isFirst,
       participationGold, firstGold, gold: participationGold + firstGold };
   }).sort((left, right) => left.difference - right.difference);
 }
@@ -257,7 +262,7 @@ async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
     const rules = JSON.parse(round.settings_json!) as PredictionRules;
     // Settlement needs amounts, not photo metadata; result displays load their
     // current profile metadata independently after payment has committed.
-    const results = calculateResults(byRound.get(`${round.game_id}:${round.round_date}`) ?? [], round.game_id, round.answer!, rules);
+    const results = calculateResults(byRound.get(`${round.game_id}:${round.round_date}`) ?? [], round.game_id, round.answer!, rules, answerCounts(round));
     const gameWeek = weekStart(new Date(kstTimestamp(round.round_date, '00:00:00')));
     for (const result of results) {
       for (const [kind, currency, amount, reason] of [
@@ -287,16 +292,16 @@ async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
 }
 
 async function readHistory(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameHistoryRound[]> {
-  const rounds = (await db.prepare(`SELECT round_date, answer, settings_json FROM game_rounds
+  const rounds = (await db.prepare(`SELECT round_date, answer, settings_json, reveal_at, revealed_at FROM game_rounds
     WHERE game_id = ? AND round_date < ? AND answer IS NOT NULL
     AND (revealed_at IS NOT NULL OR reveal_at <= ?) ORDER BY round_date DESC LIMIT 3`)
-    .bind(id, kstDate(now), now.getTime()).all<{ round_date: string; answer: string; settings_json: string | null }>()).results;
+    .bind(id, kstDate(now), now.getTime()).all<{ round_date: string; answer: string; settings_json: string | null; reveal_at: number | null; revealed_at: number | null }>()).results;
   // Evidence photos are kept for the day only (nightly housekeeping deletes
   // older ones), so history carries no photo.
   return Promise.all(rounds.map(async round => {
     const rules = await readGameRules(db, id, round.round_date, round.settings_json);
     return { roundDate: round.round_date, answer: round.answer,
-      results: await roundResults(db, id, round.round_date, round.answer, rules) };
+      results: await roundResults(db, id, round.round_date, round.answer, rules, answerCounts(round)) };
   }));
 }
 
@@ -347,7 +352,7 @@ async function readGames(db: D1Database, user: UserRow, ids: readonly GameId[], 
       prediction: gamePredictions.find(row => row.player_id === user.id)?.value ?? null,
       answer: revealed || author ? round.answer ?? null : null,
       answerEntered: round.answer != null,
-      results: revealed ? calculateResults(gamePredictions.filter(row => row.role === 'player' && row.username.toLowerCase() !== identity.author), id, round.answer!, rules) : [],
+      results: revealed ? calculateResults(gamePredictions.filter(row => row.role === 'player' && row.username.toLowerCase() !== identity.author), id, round.answer!, rules, answerCounts({ round_date: date, revealed_at: round.revealed_at, reveal_at: round.reveal_at })) : [],
       canPredict: !closed && !author && user.role === 'player',
       canEditAnswer: rules.enabled && author && !revealed,
       canReveal: rules.enabled && id !== 'wake' && author && !revealed && round.answer != null,
@@ -471,7 +476,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id ${EQUIPPED_TAG_JOIN}
     WHERE (u.role = 'player' AND u.active = 1) OR u.id = ? OR u.username IN (?, ?, ?) ORDER BY u.username`)
     .bind(weekStart(now), user.id, ...GAME_IDS.map(id => GAME_RULES[id].author)).all<BootstrapProfile>().then(result => result.results);
-  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, freethrow, dailyFree, launchGift, notifications, lottoNotice, stock] = await Promise.all([
+  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, freethrow, dailyFree, launchGift, notifications, lottoNotice, rankResults, stock] = await Promise.all([
     profiles,
     readGames(env.DB, user, GAME_IDS, now, profiles),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
@@ -485,6 +490,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     getLaunchGiftState(env.DB, user, now),
     readNotificationSummary(env.DB, user.id, now),
     readLottoNotice(env.DB, user.id, now),
+    readRankResults(env.DB, user, now),
     // Until the seed secret is configured the market cannot run; the tile says "준비 중".
     FEATURES.stock && env.STOCK_SEED_SECRET ? readStockHome(env.DB, user, now.getTime()) : null,
   ]);
@@ -496,7 +502,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
     inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0, tagTickets: viewer?.tagTickets ?? 0 }, dailyFree,
-    kuji, lottoNotice, catchmind, claw, freethrow, launchGift, notifications, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    kuji, lottoNotice, catchmind, claw, freethrow, launchGift, notifications, rankResults, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {
   if (kstDate(new Date()) !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
@@ -789,6 +795,10 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
     const input = await body(request);
     return json(await (url.pathname.endsWith('/claim') ? claimAchievement(env.DB, user, input, new Date()) : recordAchievementEvent(env.DB, user, input, new Date())));
   }
+  if (url.pathname === '/api/ranking/results/seen') {
+    if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return json(await markRankResultsSeen(env.DB, user, await body(request), new Date()));
+  }
   if (url.pathname === '/api/ranking') {
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     return json(await readRanking(env.DB, user, url.searchParams.get('period'), url.searchParams.get('before'), now));
@@ -899,7 +909,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof FreeThrowError || error instanceof LaunchGiftError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof FreeThrowError || error instanceof LaunchGiftError || error instanceof RankResultError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RANKING_REWARDS, rankScores, rankingReward } from '../shared/ranking-rewards';
+import { playClosed, scoreCounts } from '../shared/balance';
+import { defaultPredictionRules, validatePredictionRules } from '../shared/game-settings';
 import { duePeriods } from '../worker/ranking-rewards';
 
 describe('ranking reward amounts', () => {
@@ -51,5 +53,29 @@ describe('periods owed a settlement', () => {
     const due = duePeriods('2026-11-11');
     expect(due.map(period => period.key)).not.toContain('2026-11-09');
     expect(due.map(period => period.key)).not.toContain('2026-11');
+  });
+});
+
+describe('the 23:50 daily close', () => {
+  const at = (kst: string) => Date.parse(`${kst}+09:00`);
+  it('closes play from 23:50 to midnight KST', () => {
+    expect(playClosed(at('2026-11-08T23:49:59'))).toBe(false);
+    expect(playClosed(at('2026-11-08T23:50:00'))).toBe(true);
+    expect(playClosed(at('2026-11-08T23:59:59'))).toBe(true);
+    expect(playClosed(at('2026-11-09T00:00:00'))).toBe(false);
+  });
+  it('counts a score only if it was earned before its game day closed', () => {
+    expect(scoreCounts('2026-11-08', at('2026-11-08T23:49:59'))).toBe(true);
+    expect(scoreCounts('2026-11-08', at('2026-11-08T23:50:00'))).toBe(false);
+    // A round from Sunday solved on Monday morning belongs to Sunday: no score.
+    expect(scoreCounts('2026-11-08', at('2026-11-09T09:00:00'))).toBe(false);
+  });
+});
+
+describe('prediction deadlines', () => {
+  it('cannot be set past the 23:50 close', () => {
+    const base = defaultPredictionRules('offwork');
+    expect(validatePredictionRules('offwork', { ...base, deadline: '23:50:00' })).toHaveProperty('rules');
+    expect(validatePredictionRules('offwork', { ...base, deadline: '23:50:01' })).toEqual({ error: '예측 마감은 게임이 닫히는 밤 11시 50분 이전이어야 해요.' });
   });
 });

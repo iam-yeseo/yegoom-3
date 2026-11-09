@@ -96,7 +96,7 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
   let round: CatchmindRound | null = {
     id: 'preview-catchmind-1', number: 13, status: 'open', drawer, word: '선인장', wordVersion: 0,
     rerollsLeft: CATCHMIND_RULES.rerolls, image: drawing, wrongCount: 2, hint: null,
-    winner: null, endReason: null, publishedAt: new Date(startedAt - 180_000).toISOString(), endedAt: null,
+    winner: null, winnerScored: false, endReason: null, publishedAt: new Date(startedAt - 180_000).toISOString(), endedAt: null,
     guesses: ['구름', '만두'].map((answer, index) => ({ id: `preview-guess-${index}`, player: person('min'), answer,
       correct: false, createdAt: new Date(startedAt - (2 - index) * 60_000).toISOString() })),
   };
@@ -139,7 +139,7 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
   }
   function summary(): CatchmindSummary {
     return structuredClone({ roundId: round?.id ?? null, status: round?.status ?? 'idle', drawer: round?.drawer ?? null,
-      turn, wrongCount: round?.wrongCount ?? 0, winner: round?.winner ?? null, answer: round?.status === 'ended' ? round.word : null });
+      turn, wrongCount: round?.wrongCount ?? 0, winner: round?.winner ?? null, winnerScored: round?.winnerScored ?? false, answer: round?.status === 'ended' ? round.word : null });
   }
   function nextWord(previous: readonly string[] = []) {
     let words = CATCHMIND_WORDS.filter(word => !usedWords.has(word) && !previous.includes(word));
@@ -156,13 +156,13 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     wordHistory = [word];
     round = { id: crypto.randomUUID(), number: (round?.number ?? 0) + 1, status: 'draft', drawer: player,
       word, wordVersion: 0, rerollsLeft: CATCHMIND_RULES.rerolls,
-      image: null, wrongCount: 0, hint: null, winner: null, endReason: null, publishedAt: null, endedAt: null, guesses: [] };
+      image: null, wrongCount: 0, hint: null, winner: null, winnerScored: false, endReason: null, publishedAt: null, endedAt: null, guesses: [] };
     turn = player;
   }
   function close(reason: CatchmindRound['endReason'], now: string, won = false) {
     if (!round) return;
     round.status = 'ended'; round.endReason = reason; round.endedAt = now;
-    round.winner = won ? player : null;
+    round.winner = won ? player : null; round.winnerScored = won;
     history.push({ id: round.id, number: round.number, drawer: round.drawer, answer: round.word!, image: round.image!,
       winner: round.winner, endReason: reason!, endedAt: now });
     turn = successor(round.drawer);

@@ -57,8 +57,10 @@ const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds
  * (holdings value and today's market holiday; 12 rows), the free-throw tile
  * reads one indexed range of the player's last two slots (at most 2 rows), and
  * the merged 이용권 counts read today's free uses (four partial-index probes; the
- * allowance covers a player who used all twelve). */
-const STOCK_HOME = { prepares: 1 + 1 + 1, queries: 1 + 1 + 1, bindingCalls: 1 + 1 + 1, rowsRead: 12 + 2 + 12, rowsWritten: 0 } as const;
+ * allowance covers a player who used all twelve).
+ * The ranking result dialog reads the player's unseen results of the newest
+ * finished week and month (one partial-index probe, at most 2 rows). */
+const STOCK_HOME = { prepares: 1 + 1 + 1 + 1, queries: 1 + 1 + 1 + 1, bindingCalls: 1 + 1 + 1 + 1, rowsRead: 12 + 2 + 12 + 2, rowsWritten: 0 } as const;
 const stockAllowance = (route: string, field: keyof typeof STOCK_HOME) => route.includes('bootstrap') ? STOCK_HOME[field] : 0;
 /** Every successful player write is followed by the achievement check: one
  * batch that reads the facts and the known rows, and, only when something new
@@ -1198,9 +1200,9 @@ describe('Worker and D1 integration', () => {
     });
 
     it('lets the Cron post a late Sunday answer before paying, and retries after midnight', async () => {
-      // Revealed at 23:59:59 on the last day; nobody opens the app afterwards.
+      // Revealed at 23:45 on the last day, before it closed; nobody opens the app afterwards.
       await seedRound({ game: 'offwork', date: '2026-11-08', answer: '18:00:00',
-        revealAt: Date.parse(`2026-11-08T23:59:59${KST}`), predictions: [['yeseo', '18:00:00']] });
+        revealAt: Date.parse(`2026-11-08T23:45:00${KST}`), predictions: [['yeseo', '18:00:00']] });
       await giveScore('min', 3, '2026-11-03');
       const cron = await worker.getWorker();
       // The first run of the day fails (simulated), so nothing is paid yet.
@@ -1216,6 +1218,99 @@ describe('Worker and D1 integration', () => {
       const paid = await payouts('rank:week:2026-11-02:');
       expect(paid.find(row => row.user_id === 'yeseo')?.amount).toBeGreaterThan(paid.find(row => row.user_id === 'min')!.amount);
       expect(await settled()).toEqual([{ period: 'week', key: '2026-11-02' }]);
+    });
+
+    it('stores every player\'s place and shows it once in the result dialog', async () => {
+      const instance = runtime(await workerAt('2026-11-09T01:00:00Z')); // Monday 10:00 KST
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await database.prepare("INSERT INTO users (id, username, display_name, password_hash, role) VALUES ('jun', 'jun', 'jun', ?, 'player')").bind(passwordHash).run();
+        for (const [user, amount] of [['min', 100], ['siwon', 80], ['yeseo', 50], ['jun', 10]] as const) {
+          await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
+            VALUES (?, ?, 'score', ?, 'fixture', ?, '2026-11-04T01:00:00.000Z', '2026-11-02')`).bind(`s-${user}`, user, amount, `score:wake:2026-11-04:${user}`).run();
+        }
+        await settleDueRankingRewards(database as unknown as D1Database, new Date(`2026-11-09T00:00:00${KST}`));
+        expect((await database.prepare('SELECT user_id, place, score, gold, players, seen_at FROM ranking_results ORDER BY place').all()).results).toEqual([
+          { user_id: 'min', place: 1, score: 100, gold: 500, players: 4, seen_at: null },
+          { user_id: 'siwon', place: 2, score: 80, gold: 320, players: 4, seen_at: null },
+          { user_id: 'yeseo', place: 3, score: 50, gold: 150, players: 4, seen_at: null },
+          { user_id: 'jun', place: 4, score: 10, gold: 0, players: 4, seen_at: null },
+        ]);
+        const results = async (cookie: string) => {
+          const response = await request('/api/bootstrap', { cookie, instance });
+          expect(response.status).toBe(200);
+          return (await response.json() as BootstrapResponse).rankResults;
+        };
+        const min = (await login('min', instance)).cookie;
+        const shown = await results(min);
+        expect(shown).toEqual([{ period: 'week', key: '2026-11-02', start: '2026-11-02', end: '2026-11-08', place: 1, score: 100, gold: 500, players: 4 }]);
+        // A player outside the podium still hears their place.
+        expect(await results((await login('jun', instance)).cookie)).toMatchObject([{ place: 4, gold: 0 }]);
+        const seen = await request('/api/ranking/results/seen', { method: 'POST', cookie: min, instance, body: { results: shown } });
+        expect(seen.status).toBe(200);
+        expect(await results(min)).toEqual([]);
+        expect((await request('/api/ranking/results/seen', { method: 'POST', cookie: min, instance, body: { results: [] } })).status).toBe(400);
+        // Admins are never ranked and get no dialog.
+        expect(await results((await login('admin', instance)).cookie)).toEqual([]);
+      } finally { await instance.dispose(); }
+    });
+  });
+
+  describe('23:50 daily close', () => {
+    it('refuses game play from 23:50 to midnight but keeps non-game actions', async () => {
+      const instance = runtime(await workerAt(`${TODAY}T14:55:00Z`)); // 23:55 KST
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await fund(5000, 'min', database);
+        const { cookie } = await login('min', instance);
+        const closed = async (path: string, body: unknown) => {
+          const response = await request(path, { method: 'POST', cookie, instance, body });
+          expect(response.status, path).toBe(409);
+          expect((await response.json() as { error: { code: string } }).error.code, path).toBe('PLAY_CLOSED');
+        };
+        await closed('/api/shop/lotto', { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'gold' });
+        await closed('/api/shop/kuji', { requestId: crypto.randomUUID(), count: 1 });
+        await closed('/api/claw/play', { requestId: crypto.randomUUID(), version: (await getClaw(cookie, instance)).version, x: .05, stop: null });
+        await closed('/api/freethrow/sets', { requestId: 'req-closed-0123456789abcdef' });
+        // Drawing may start; only publishing and guessing are closed.
+        const claimed = await catchmindAction('claim', cookie, null, {}, instance);
+        expect(claimed.catchmind.canPublish).toBe(false);
+        await closed('/api/catchmind/publish', { requestId: crypto.randomUUID(), roundId: claimed.catchmind.round!.id,
+          wordVersion: claimed.catchmind.round!.wordVersion, image: DRAWING_PNG });
+      } finally { await instance.dispose(); }
+    });
+
+    it('scores a Catchmind round solved on its own day', async () => {
+      const { cookie: drawer } = await login('siwon');
+      const { cookie: guesser } = await login('min');
+      const round = await openCatchmind(drawer);
+      const solved = await catchmindAction('guess', guesser, round.id, { answer: round.word });
+      expect(solved.catchmind.round).toMatchObject({ status: 'ended', winnerScored: true });
+      expect((await db.prepare("SELECT currency FROM ledger WHERE reference LIKE 'catchmind:%' ORDER BY currency").all()).results)
+        .toEqual([{ currency: 'gold' }, { currency: 'score' }]);
+    });
+
+    it('shows a prediction revealed after 23:50 but adds no score', async () => {
+      const instance = runtime(await workerAt('2026-10-30T15:30:00Z')); // 2026-10-31 00:30 KST
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        // Left work at 23:55: the answer goes public after the day closed.
+        await seedRound({ game: 'offwork', date: TODAY, answer: '23:55:00', revealAt: Date.parse(`${TODAY}T23:55:00+09:00`),
+          predictions: [['min', '23:55:00'], ['yeseo', '18:00:00']], database });
+        await seedRound({ game: 'luck', date: TODAY, answer: '50', revealedAt: Date.parse(`${TODAY}T23:40:00+09:00`),
+          predictions: [['min', '50']], database });
+        const { cookie } = await login('min', instance);
+        const response = await request('/api/games/offwork/history', { cookie, instance });
+        expect(response.status).toBe(200);
+        const history = (await response.json() as { history: { roundDate: string; results: { username: string; score: number; isFirst: boolean }[] }[] }).history;
+        expect(history.find(round => round.roundDate === TODAY)!.results.find(row => row.username === 'min')).toMatchObject({ score: 0, isFirst: true });
+        const rows = (await database.prepare("SELECT reference FROM ledger WHERE reference LIKE 'score:%' OR reference LIKE 'first:%' ORDER BY reference").all<{ reference: string }>()).results.map(row => row.reference);
+        // The 23:40 luck answer still counts; the 23:55 offwork answer pays only the first-place gold.
+        expect(rows).toEqual([`first:luck:${TODAY}:min`, `first:offwork:${TODAY}:min`, `score:luck:${TODAY}:min`]);
+      } finally { await instance.dispose(); }
     });
   });
 
@@ -3360,7 +3455,8 @@ describe('Worker and D1 integration', () => {
       expect((await getClaw(cookie)).freeCoins).toBe(4);
     });
 
-    it.each([{ instant: '2026-11-01T14:59:59Z', week: '2026-10-26' }, { instant: '2026-11-01T15:00:00Z', week: '2026-11-02' }])(
+    // 23:49:59 KST is the last playable second of Sunday (games close at 23:50).
+    it.each([{ instant: '2026-11-01T14:49:59Z', week: '2026-10-26' }, { instant: '2026-11-01T15:00:00Z', week: '2026-11-02' }])(
       'uses the KST play week at $instant', async ({ instant, week }) => {
         const instance = runtime(await workerAt(instant));
         try {
@@ -4000,9 +4096,10 @@ describe('Worker and D1 integration', () => {
       expect(published.catchmind.round).toMatchObject({ status: 'open', image: catchmindImagePath(draft.id) });
     });
 
-    it('keeps a Sunday-published round score in that week when solved after Monday midnight', async () => {
+    it('pays a Sunday-published round solved after Monday midnight gold only, never score', async () => {
       const persistence = await mkdtemp(join(tmpdir(), 'yegoom-catchmind-week-'));
-      let instance = runtime(await workerAt('2026-11-01T14:59:59Z'), persistence);
+      // Published at 23:49:59 KST Sunday, the last second before the daily close.
+      let instance = runtime(await workerAt('2026-11-01T14:49:59Z'), persistence);
       try {
         const database = await instance.getD1Database('DB');
         await provision(database, migration, passwordHash);
@@ -4013,9 +4110,10 @@ describe('Worker and D1 integration', () => {
         instance = runtime(await workerAt('2026-11-01T15:00:01Z'), persistence);
         const before = await getCatchmind(siwon.cookie, instance);
         expect(before.catchmind.round).toMatchObject({ id: round.id, status: 'open' });
-        await catchmindAction('guess', siwon.cookie, round.id, { answer: round.word }, instance);
+        const solved = await catchmindAction('guess', siwon.cookie, round.id, { answer: round.word }, instance);
+        expect(solved.catchmind.round).toMatchObject({ status: 'ended', winnerScored: false });
         const persisted = await instance.getD1Database('DB');
-        expect((await ledgerRows(persisted)).find(row => row.currency === 'score')).toMatchObject({ user_id: 'siwon', amount: 3, week_start: '2026-10-26' });
+        expect((await ledgerRows(persisted)).filter(row => row.reference.startsWith('catchmind:'))).toMatchObject([{ user_id: 'siwon', currency: 'gold', amount: 5 }]);
         const response = await request('/api/bootstrap', { cookie: siwon.cookie, instance });
         expect(response.status).toBe(200);
         const view = await response.json() as BootstrapResponse;
@@ -4024,22 +4122,24 @@ describe('Worker and D1 integration', () => {
       } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
     });
 
-    it('attributes a delayed catchmind score to the publication day in the weekly chart', async () => {
+    it('gives a round solved on a later day gold but no score in the weekly chart', async () => {
       const min = await login('min');
       const siwon = await login('siwon');
       const round = await openCatchmind(min.cookie);
       // Represent a published Thursday round still open on Friday morning.
       await db.prepare('UPDATE catchmind_rounds SET round_date = ?, published_at = ? WHERE id = ?')
         .bind('2026-10-29', '2026-10-29T00:00:00.000Z', round.id).run();
-      await catchmindAction('guess', siwon.cookie, round.id, { answer: round.word });
+      const solved = await catchmindAction('guess', siwon.cookie, round.id, { answer: round.word });
+      expect(solved.catchmind.round).toMatchObject({ status: 'ended', winnerScored: false });
       const view = await bootstrap(siwon.cookie);
-      expect(view.user.weeklyScore).toBe(3);
-      expect(view.dailyScores).toEqual([0, 0, 0, 3, 0, 0, 0]);
-      expect(view.ledger.find(row => row.currency === 'score')?.createdAt).toBe(`${TODAY}T00:00:00.000Z`);
+      expect(view.user).toMatchObject({ gold: 5, weeklyScore: 0 });
+      expect(view.dailyScores).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      expect(view.ledger.filter(row => row.reason === '캐치마인드 정답').map(row => row.currency)).toEqual(['gold']);
+      expect(view.catchmind.winnerScored).toBe(false);
     });
 
     it('does not publish with yesterday game date when the SQL write crosses KST midnight', async () => {
-      const instance = runtime(await workerAt('2026-11-01T14:59:59Z', '2026-11-01T15:00:00Z'));
+      const instance = runtime(await workerAt('2026-11-01T14:49:59Z', '2026-11-01T15:00:00Z'));
       try {
         const database = await instance.getD1Database('DB');
         await provision(database, migration, passwordHash);
@@ -5325,7 +5425,7 @@ describe('Worker and D1 integration', () => {
 
     it('keeps Sunday kuji scores in their game week and resets personal prices on Monday', async () => {
       const persistence = await mkdtemp(join(tmpdir(), 'yegoom-shop-week-'));
-      let instance = runtime(await workerAt('2026-11-01T14:59:59Z'), persistence);
+      let instance = runtime(await workerAt('2026-11-01T14:49:59Z'), persistence); // 23:49:59 KST, before the close
       try {
         const database = await instance.getD1Database('DB');
         await provision(database, migration, passwordHash);
@@ -5403,7 +5503,7 @@ describe('Worker and D1 integration', () => {
       ['2026-10-30T08:00:00Z', '2026-10-30'],
       ['2026-10-30T08:29:59Z', '2026-10-30'],
       ['2026-10-30T08:30:00Z', '2026-10-31'],
-      ['2026-10-30T14:59:59Z', '2026-10-31'],
+      ['2026-10-30T14:49:59Z', '2026-10-31'], // 23:49:59 KST, the last purchase before the close
       ['2026-10-30T15:00:00Z', '2026-10-31'],
       ['2026-10-31T08:30:00Z', '2026-11-01'],
     ])('assigns the lotto target using server KST at %s', async (instant, drawDate) => {
@@ -5854,8 +5954,9 @@ describe('Worker and D1 integration', () => {
     try {
       const mondayDb = await monday.getD1Database('DB');
       await provision(mondayDb, migration, passwordHash);
-      await seedRound({ game: 'offwork', date: '2026-11-01', answer: '23:59:59', revealAt: Date.parse('2026-11-01T14:59:59Z'),
-        predictions: [['min', '23:59:59']], database: mondayDb });
+      // Revealed at 23:45 KST, before the daily close, but settled only by Monday's first read.
+      await seedRound({ game: 'offwork', date: '2026-11-01', answer: '23:45:00', revealAt: Date.parse('2026-11-01T14:45:00Z'),
+        predictions: [['min', '23:45:00']], database: mondayDb });
       const { cookie } = await login('min', monday);
       const response = await request('/api/bootstrap', { cookie, instance: monday });
       expect(response.status).toBe(200);

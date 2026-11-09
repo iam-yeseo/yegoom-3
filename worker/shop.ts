@@ -1,4 +1,4 @@
-import { ANNOUNCEMENT_RULES, DAILY_FREE, KUJI_RULES, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
+import { ANNOUNCEMENT_RULES, DAILY_FREE, PLAY_RULES, playClosed, KUJI_RULES, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, kujiCost, lottoPrize, lottoRank } from '../shared/balance';
 import type { DailyFreeLeft, Inventory, KujiDraw, KujiGrade, KujiPurchase, KujiResponse, KujiState, KujiSummary, LottoNotice, LottoResponse, LottoTicket, ShopKind, ShopPayment, ShopState, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotResponse, SlotSpin, SlotSymbol } from '../shared/types';
 import { slotResult } from '../shared/slot';
 import { kstDate, kstTimestamp, weekStart } from './rules';
@@ -443,6 +443,8 @@ async function spinSlot(db: D1Database, user: ShopUser, input: Record<string, un
 export async function shopRoute(db: D1Database, user: ShopUser, path: string, method: string, input: Record<string, unknown> | undefined, now: Date): Promise<ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse> {
   if (method !== 'GET' && method !== 'POST') throw new ShopError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
   if (method === 'POST' && user.role !== 'player') throw new ShopError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');
+  // Kuji, lotto, speetto and the slot are games: they close with the rest at 23:50.
+  if (method === 'POST' && playClosed(now.getTime())) throw new ShopError(409, 'PLAY_CLOSED', PLAY_RULES.closedMessage);
   await settleDueLotto(db, now);
   if (path === '/api/shop' && method === 'GET') return readShopState(db, user, now);
   if (path === '/api/shop/kuji') {

@@ -195,3 +195,26 @@ describe('free-throw official sets', () => {
     expect(await keys(later + FREETHROW_RULES.setIntervalMs)).toEqual(['freethrow_zero:']);
   });
 });
+
+describe('23:50 daily close', () => {
+  // The 21시 slot of Sunday 2026-11-08 KST, whose grace runs past midnight.
+  const at = (kst: string) => Date.parse(`${kst}+09:00`);
+  it('refuses a new official set from 23:50 to midnight', async () => {
+    await rejects(start('min', at('2026-11-08T23:50:00'), 'closed'), 409, 'PLAY_CLOSED');
+    await rejects(start('min', at('2026-11-08T23:59:59'), 'closed-2'), 409, 'PLAY_CLOSED');
+  });
+  it('pays gold but no score for goals after the day closed, including the grace past midnight', async () => {
+    const set = await start('min', at('2026-11-08T23:40:00'), 'late');
+    expect((await shoot('min', set.id, 0, MAKE, at('2026-11-08T23:45:00'))).shot).toMatchObject({ made: true, points: 1, gold: 5 });
+    const closed = await shoot('min', set.id, 1, MAKE, at('2026-11-08T23:55:00'));
+    expect(closed.shot).toMatchObject({ made: true, points: 0, gold: 5 });
+    // Two goals, but only the one before 23:50 counts toward score.
+    expect(closed.current).toMatchObject({ id: set.id, made: 2, points: 1, gold: 10 });
+    expect((await shoot('min', set.id, 2, MAKE, at('2026-11-09T00:05:00'))).shot).toMatchObject({ made: true, points: 0, gold: 5 });
+    const rows = await ledger(set.id);
+    expect(rows.filter(row => row.currency === 'score')).toEqual([
+      { currency: 'score', amount: 1, reason: '자유투 대결 골', reference: `freethrow:goal:${set.id}:0:score`, week_start: '2026-11-02' },
+    ]);
+    expect(rows.filter(row => row.currency === 'gold')).toHaveLength(3);
+  });
+});

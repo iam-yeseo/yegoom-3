@@ -28,7 +28,9 @@ const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_ph
   // The stock market (0015) starts after launch; a launch reset never touches it.
   'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays', 'ai_usage', 'stock_settings',
   // Free-throw official sets (0026) are newer than the launch-era reset.
-  'freethrow_sets', 'freethrow_shots'];
+  'freethrow_sets', 'freethrow_shots',
+  // Ranking result snapshots (0027) sit beside their settlement markers.
+  'ranking_results'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -110,6 +112,7 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at) VALUES ('retained-tag', 'min', 'retained-tag-request', 'A', '반짝이는', 1, '2026-11-01', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO tag_ticket_ledger (id, user_id, amount, reason, reference, created_at) VALUES ('retained-tag-ticket', 'min', 5, '별명 뽑기권 지급', 'tag:grant:welcome:min', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO ranking_settlements (period, key, settled_at) VALUES ('week', '2026-10-26', '2026-11-02T00:01:00Z')"),
+      db.prepare("INSERT INTO ranking_results (period, key, user_id, place, score, gold, players) VALUES ('week', '2026-10-26', 'min', 1, 10, 300, 3)"),
       db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
         VALUES ('speetto', 'all', NULL, 'min', '{"kind":"speetto","prize":1500}', '2026-11-01T00:00:00Z', 'retained-notification')`),
       db.prepare("INSERT INTO achievements (user_id, key, period_key, unlocked_at, claimed_at) VALUES ('min', 'welcome', '', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')"),
