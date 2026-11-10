@@ -122,6 +122,8 @@ test('free-throw sound preference survives a reload and the court fits short and
 });
 
 test('an official preview set records all ten balls at the end and shows the result', async ({ page }) => {
+  // Ten real throws with their flights take a while on a busy machine.
+  test.setTimeout(60_000);
   await page.route('**/api/**', route => route.abort());
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#/preview/play/freethrow');
@@ -146,6 +148,8 @@ test('an official preview set records all ten balls at the end and shows the res
 });
 
 test('an official set on the server is recorded once at the end, even across a lost response and a reload', async ({ page }) => {
+  // Ten real throws with their flights take a while on a busy machine.
+  test.setTimeout(60_000);
   await page.setExtraHTTPHeaders({ 'CF-Connecting-IP': '192.0.2.72' });
   await page.setViewportSize({ width: 390, height: 844 });
   const login = await page.request.post('/api/auth/login', {
@@ -160,7 +164,8 @@ test('an official set on the server is recorded once at the end, even across a l
   // Gentle throws fall short: the record changes, the shared fixture balances do not.
   // Nothing is sent while the set is being thrown.
   await page.route('**/api/freethrow/finish', route => route.abort());
-  await throwSet(page, () => 1.0);
+  // 1.3 falls short with margin above the too-slow cutoff even on a busy machine.
+  await throwSet(page, () => 1.3);
   const result = page.locator('.play-result-dialog');
   await expect(result).toContainText('0골 성공!');
   await expect(result).toContainText('기록을 보내지 못했어요', { timeout: 6000 });
@@ -184,7 +189,7 @@ test('leaving an official set midway asks first and ends it unfinished', async (
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#/preview/play/freethrow');
   await page.getByRole('button', { name: '세트 시작하기' }).click();
-  await flick(page, 1.0);
+  await flick(page, 1.3);
   await expect(decided(page)).toHaveCount(1, { timeout: 6000 });
   await idle(page);
   await page.getByRole('button', { name: '나가기' }).click();
