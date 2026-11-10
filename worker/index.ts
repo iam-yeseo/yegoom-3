@@ -12,8 +12,8 @@ import { RankingError, readRanking } from './ranking';
 import { equipTag, tagShopRoute, discardTag } from './nickname-tags';
 import type { NicknameTagGrade } from '../shared/nickname-tags';
 import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary, readRemainingWords } from './catchmind';
-import { FreeThrowError, getFreeThrowState, getFreeThrowSummary, shootFreeThrow, startFreeThrowSet } from './freethrow';
-import { SantaError, dropSantaGift, getSantaState, getSantaSummary, startSantaRun } from './santa';
+import { FreeThrowError, finishFreeThrowSet, getFreeThrowState, getFreeThrowSummary, startFreeThrowSet } from './freethrow';
+import { SantaError, finishSantaRun, getSantaState, getSantaSummary, startSantaRun } from './santa';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
 import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
@@ -752,23 +752,23 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     return json(await getFreeThrowState(env.DB, user, now.getTime()));
   }
-  if (url.pathname === '/api/freethrow/sets' || url.pathname === '/api/freethrow/shots') {
+  if (url.pathname === '/api/freethrow/sets' || url.pathname === '/api/freethrow/finish') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     const input = await body(request);
     return json(await (url.pathname.endsWith('/sets')
       ? startFreeThrowSet(env.DB, user, input, now.getTime())
-      : shootFreeThrow(env.DB, user, input, now.getTime())));
+      : finishFreeThrowSet(env.DB, user, input, now.getTime())));
   }
   if (url.pathname === '/api/santa') {
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     return json(await getSantaState(env.DB, user, now.getTime()));
   }
-  if (url.pathname === '/api/santa/runs' || url.pathname === '/api/santa/drops') {
+  if (url.pathname === '/api/santa/runs' || url.pathname === '/api/santa/finish') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     const input = await body(request);
     return json(await (url.pathname.endsWith('/runs')
       ? startSantaRun(env.DB, user, input, now.getTime())
-      : dropSantaGift(env.DB, user, input, now.getTime())));
+      : finishSantaRun(env.DB, user, input, now.getTime())));
   }
   if (url.pathname === '/api/me/attendance') {
     if (request.method === 'GET') return json({ attendance: await readAttendance(env.DB, user, now, url.searchParams.get('month') ?? undefined) });

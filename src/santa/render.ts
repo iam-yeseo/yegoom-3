@@ -89,8 +89,10 @@ export class SantaRenderer {
     const rect = this.canvas.getBoundingClientRect();
     const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
     const width = Math.round((rect.width || W) * ratio), height = Math.round((rect.height || H) * ratio);
+    // Another renderer (a remounted screen) may already have sized this canvas: the scale still has to match it.
+    this.ratio = width / W;
     if (this.canvas.width === width && this.canvas.height === height) return false;
-    this.canvas.width = width; this.canvas.height = height; this.ratio = width / W;
+    this.canvas.width = width; this.canvas.height = height;
     return true;
   }
   draw(scene: SantaScene) {

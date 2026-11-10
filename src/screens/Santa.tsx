@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SANTA_RULES, santaHalf } from "../../shared/balance";
-import { santaCourse, type DropResult } from "../../shared/santa-engine";
-import type { LedgerEntry, SantaDropInput, SantaDropResponse, SantaRunInput, SantaState, SantaSummary, User } from "../../shared/types";
+import { santaCourse, type DropResult, type SantaHouse } from "../../shared/santa-engine";
+import type { LedgerEntry, SantaFinishInput, SantaFinishResponse, SantaRun, SantaRunInput, SantaState, SantaSummary, User } from "../../shared/types";
 import { api, ApiFailure } from "../api";
+import { PlayProgress, PlayShell, QuitDialog, ResultDialog, type RecordStatus } from "../components/PlayShell";
 import { Avatar, Toolbar, useDisplayNameLookup } from "../components/UI";
 import { anim, reduced } from "../motion";
 import { SantaController, type SantaMode } from "../santa/controller";
 import { previewSantaEngine } from "../santa/preview";
 import { STAGE } from "../santa/render";
 import { createSantaSound, type SantaSound } from "../santa/sound";
+import { santaOpensAt } from "../santa/summary";
 import "../santa/santa.css";
 
 const { houses, hitScore, perfectBonus, clearGold, graceMs } = SANTA_RULES;
@@ -29,26 +31,26 @@ export function dropCopy(index: number, result: DropResult): { title: string; de
     case "pass": return { title: "그냥 지나쳤어요", detail: "이 집 아이는 내년을 기약해요…" };
   }
 }
-const kstClock = (time: number) => { const date = new Date(time + 9 * 3_600_000); return `${String(date.getUTCHours()).padStart(2, "0")}시 ${String(date.getUTCMinutes()).padStart(2, "0")}분`; };
-/** "오전 배달" / "오후 배달" opening time for a slot start. */
-const opensAt = (time: number) => (new Date(time + 9 * 3_600_000).getUTCHours() === 12 ? "오후 12시" : "자정");
 interface Source {
   load(): Promise<SantaState>;
   start(input: SantaRunInput): Promise<SantaState>;
-  drop(input: SantaDropInput): Promise<SantaDropResponse>;
+  finish(input: SantaFinishInput): Promise<SantaFinishResponse>;
 }
-/** The drop sent to the server is remembered until it is acknowledged, so a
- * reload or lost response re-sends it instead of letting the house be thrown again. */
-const pendingKey = (userId: string) => `yegoom3:santa:pending:${userId}`;
-function readPending(userId: string): SantaDropInput | null {
-  try { const value = JSON.parse(localStorage.getItem(pendingKey(userId)) ?? "null"); return typeof value?.runId === "string" ? value : null; } catch { return null; }
+/** A finished run is kept on the device until the server has it, so a reload or
+ * lost response re-sends it. Only a whole run is ever kept: leaving mid-run
+ * keeps nothing, and that run ends unfinished. */
+const pendingKey = (userId: string) => `yegoom3:santa:finish:${userId}`;
+function readPending(userId: string): SantaFinishInput | null {
+  try { const value = JSON.parse(localStorage.getItem(pendingKey(userId)) ?? "null"); return typeof value?.runId === "string" && Array.isArray(value.releases) ? value : null; } catch { return null; }
 }
-function writePending(userId: string, value: SantaDropInput | null) {
+function writePending(userId: string, value: SantaFinishInput | null) {
   try { if (value) localStorage.setItem(pendingKey(userId), JSON.stringify(value)); else localStorage.removeItem(pendingKey(userId)); } catch { /* Memory still holds it. */ }
 }
-/** Answers that mean the drop can never be recorded as sent; anything else is retried. */
+/** Answers that mean the run can never be recorded as sent; anything else is retried. */
 const finalRefusal = (error: unknown) => error instanceof ApiFailure && (error.status === 400 || error.status === 403 || error.status === 404 || error.status === 409);
-type Mark = boolean | null;
+/** Points as the server will count them (hits before 23:50 of the run's day). */
+const pointsOf = (hits: number) => hits * hitScore + (hits === houses ? perfectBonus : 0);
+interface Result { runId: string; hits: number; points: number; status: RecordStatus; message: string }
 
 export function Santa({ user, onBack, demo = false, transact, onSummary, onPreviewChange, onRevealed }: {
   user: User; onBack: () => void; demo?: boolean;
@@ -59,37 +61,23 @@ export function Santa({ user, onBack, demo = false, transact, onSummary, onPrevi
   /** A recorded reward is now visible: refresh balances (signed in only). */
   onRevealed?: () => void;
 }) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const controller = useRef<SantaController | null>(null);
-  const sound = useRef<SantaSound | null>(null);
-  const callout = useRef<HTMLDivElement>(null);
-  const throwButton = useRef<HTMLButtonElement>(null);
-  const [mode, setMode] = useState<SantaMode>("idle");
-  const [houseIndex, setHouseIndex] = useState(0);
-  const [throwable, setThrowable] = useState(false);
-  const [marks, setMarks] = useState<Mark[]>([]);
-  const [last, setLast] = useState<{ index: number; result: DropResult } | null>(null);
-  const [muted, setMuted] = useState(false);
-  const [error, setError] = useState("");
-  const [visible, setVisible] = useState(!document.hidden);
   const [state, setState] = useState<SantaState | null>(null);
   const [loadError, setLoadError] = useState("");
   const [starting, setStarting] = useState(false);
+  /** The run being played right now, held only in memory. */
+  const [playing, setPlaying] = useState<{ run: SantaRun; course: SantaHouse[] } | null>(null);
+  const [result, setResult] = useState<Result | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
-  const [finishedHere, setFinishedHere] = useState(false);
-  const stateRef = useRef(state); stateRef.current = state;
-  const pending = useRef<SantaDropInput | null>(null);
-  /** A server answer waits until the gift has landed, so the board never spoils the drop. */
-  const reveal = useRef<{ response: SantaDropResponse | null; shown: boolean }>({ response: null, shown: true });
-  const marksRef = useRef<Mark[]>([]);
+  const [visible, setVisible] = useState(!document.hidden);
+  const pending = useRef<SantaFinishInput | null>(null);
   const admin = user.role === "admin";
   const name = useDisplayNameLookup();
 
   const props = useRef({ transact, onSummary, onPreviewChange, onRevealed });
   props.current = { transact, onSummary, onPreviewChange, onRevealed };
   const notify = useCallback((next: SantaState) => {
-    const summary: SantaSummary = { open: next.open, available: next.available, inProgress: next.inProgress, hits: next.hits, drops: next.drops,
+    const summary: SantaSummary = { open: next.open, available: next.available, played: next.played, completed: next.completed, hits: next.hits,
       nextSlotAt: next.nextSlotAt, endsAt: next.endsAt, serverNow: next.serverNow, isAdmin: next.isAdmin };
     if (demo) { const engine = previewSantaEngine(user.username, admin); props.current.onPreviewChange?.(summary, engine.gold, engine.score, [...engine.ledger]); }
     else props.current.onSummary?.(summary);
@@ -97,241 +85,253 @@ export function Santa({ user, onBack, demo = false, transact, onSummary, onPrevi
   const source = useMemo<Source>(() => {
     if (demo) {
       const engine = previewSantaEngine(user.username, admin);
-      return { load: () => engine.load(), start: input => engine.start(input), drop: input => engine.drop(input) };
+      return { load: () => engine.load(), start: input => engine.start(input), finish: input => engine.finish(input) };
     }
     const write = <T,>(action: () => Promise<T>) => (props.current.transact ?? (next => next()))(action) as Promise<T>;
-    return { load: () => api.santa(), start: input => write(() => api.startSantaRun(input)), drop: input => write(() => api.dropSantaGift(input)) };
+    return { load: () => api.santa(), start: input => write(() => api.startSantaRun(input)), finish: input => write(() => api.finishSantaRun(input)) };
   }, [demo, user.username, admin]);
   const sourceRef = useRef(source); sourceRef.current = source;
-
-  const setMarksBoth = (next: Mark[]) => { marksRef.current = next; setMarks(next); };
   const apply = useCallback((next: SantaState) => { setState(next); notify(next); }, [notify]);
-  const show = useCallback((response: SantaDropResponse) => {
-    reveal.current = { response: null, shown: true };
-    apply(response);
-    if (!demo && (response.drop.hit || response.current?.completed)) props.current.onRevealed?.();
-  }, [apply, demo]);
-  const send = useCallback(async (input: SantaDropInput) => {
+
+  const send = useCallback(async (input: SantaFinishInput) => {
     pending.current = input; writePending(user.id, input);
     setSyncing(true); setSyncError("");
+    setResult(current => current && current.runId === input.runId ? { ...current, status: "saving" } : current);
     try {
-      const response = await sourceRef.current.drop(input);
+      const response = await sourceRef.current.finish(input);
       pending.current = null; writePending(user.id, null);
-      if (reveal.current.shown) show(response); else reveal.current.response = response;
+      apply(response);
+      setResult(current => current && current.runId === input.runId ? { ...current, points: response.run.points, status: "saved" } : current);
+      if (!demo) props.current.onRevealed?.();
     } catch (failure) {
       const message = failure instanceof Error ? failure.message : "기록을 보내지 못했어요.";
       if (finalRefusal(failure)) {
-        // The run closed or moved on: drop the record, stop flying and show the server's view.
         pending.current = null; writePending(user.id, null);
-        reveal.current = { response: null, shown: true };
-        controller.current?.stop();
+        setResult(current => current && current.runId === input.runId ? { ...current, status: "refused", message } : current);
         setSyncError(message);
         void sourceRef.current.load().then(apply).catch(() => {});
-      } else setSyncError("기록을 보내지 못했어요. 다시 보내기를 눌러 주세요. 산타가 하늘에서 기다릴게요.");
+      } else {
+        setResult(current => current && current.runId === input.runId ? { ...current, status: "retry" } : current);
+        setSyncError("배달 기록을 보내지 못했어요. 다시 보내기를 눌러 주세요.");
+      }
     } finally { setSyncing(false); }
-  }, [user.id, show, apply]);
+  }, [user.id, apply, demo]);
   const load = useCallback(async () => {
     if (pending.current) return;
     try {
       const next = await sourceRef.current.load();
       apply(next); setLoadError("");
-      // A drop sent just before a reload is re-sent before anything else.
+      // A run finished just before a reload is sent before anything else.
       const saved = readPending(user.id);
-      if (saved && next.current && saved.runId === next.current.id && saved.index === next.current.drops.length && !next.current.finished) void send(saved);
+      if (saved && next.current && saved.runId === next.current.id && !next.current.completed && !next.current.finished) void send(saved);
       else if (saved) writePending(user.id, null);
     } catch (failure) { setLoadError(failure instanceof Error ? failure.message : "배달 기록을 불러오지 못했어요."); }
   }, [apply, send, user.id]);
 
-  const sendRef = useRef(send); sendRef.current = send;
-  const showRef = useRef(show); showRef.current = show;
   useEffect(() => {
-    const effects = createSantaSound();
-    sound.current = effects; setMuted(effects.muted);
-    let runtime: SantaController;
-    try {
-      runtime = new SantaController(canvas.current!, effects, {
-        onState: next => { setMode(next.mode); setHouseIndex(next.index); setThrowable(next.throwable); },
-        canContinue: () => !pending.current,
-        onDrop: (index, release) => {
-          const run = stateRef.current?.current;
-          if (!run || run.finished) return;
-          // An answer still waiting for its gift is shown before the next drop takes the slot.
-          const waiting = reveal.current.response;
-          if (waiting) showRef.current(waiting);
-          reveal.current = { response: null, shown: false };
-          void sendRef.current({ runId: run.id, index, release });
-        },
-        onResult: (index, result) => {
-          const next = [...marksRef.current]; next[index] = result.hit;
-          setMarksBoth(next);
-          setLast({ index, result });
-          const waiting = reveal.current.response;
-          reveal.current.shown = true;
-          if (waiting) showRef.current(waiting);
-          if (!reduced()) anim(callout.current, [{ scale: ".7", opacity: 0 }, { scale: "1.06", opacity: 1, offset: .6 }, { scale: "1", opacity: 1 }], { dur: 320, ease: "spring" });
-        },
-        onFinish: () => {
-          setFinishedHere(true);
-          effects.finish(marksRef.current.filter(Boolean).length === houses);
-        },
-      });
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "하늘을 표시하지 못했어요."); return; }
-    controller.current = runtime;
     const visibility = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", visibility);
-    return () => { runtime.destroy(); effects.dispose(); controller.current = null; document.removeEventListener("visibilitychange", visibility); };
+    return () => document.removeEventListener("visibilitychange", visibility);
   }, []);
   // Entry, returning to the page and the next slot are the only reads (no polling).
-  useEffect(() => { if (visible) void load(); }, [visible, load]);
-  useEffect(() => { if (visible) controller.current?.resume(); else controller.current?.pause(); }, [visible]);
+  useEffect(() => { if (visible && !playing) void load(); }, [visible, load, playing]);
   useEffect(() => {
-    if (!state) return;
-    const wait = Math.min(state.nextSlotAt, state.current && !state.current.finished ? state.current.deadline : Infinity) - state.serverNow;
+    if (!state || playing) return;
+    const wait = state.nextSlotAt - state.serverNow;
     if (!(wait > 0) || wait > 13 * 3_600_000) return;
     const timer = window.setTimeout(() => { if (!document.hidden) void load(); }, wait + 1000);
     return () => clearTimeout(timer);
-  }, [state, load]);
-  // Space or Enter drops the gift on a keyboard.
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => {
-      if (event.repeat || (event.code !== "Space" && event.key !== "Enter")) return;
-      if (controller.current?.current !== "flying") return;
-      event.preventDefault();
-      controller.current.throwGift(event.timeStamp);
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, []);
-
-  const run = state?.current ?? null;
-  const running = mode === "countdown" || mode === "flying" || mode === "waiting";
-  // The calm scene previews this run's next house, or a sample house before a run.
-  useEffect(() => {
-    if (running || mode === "done") return;
-    const course = run ? santaCourse(run.slot, houses) : null;
-    controller.current?.showIdle(course && !run!.finished ? course[run!.drops.length] ?? null : null);
-    if (run) setMarksBoth(Array.from({ length: houses }, (_, i) => run.drops[i]?.hit ?? null));
-    else setMarksBoth([]);
-  }, [run?.id, run?.drops.length, run?.finished, running, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state, load, playing]);
 
   async function start() {
     if (starting) return;
-    setStarting(true); setLoadError(""); setSyncError(""); setLast(null); setFinishedHere(false);
+    setStarting(true); setLoadError(""); setSyncError("");
     try {
       const next = await source.start({ requestId: crypto.randomUUID() });
       apply(next);
-      if (next.current && !next.current.finished) fly(next.current.slot, next.current.drops.length);
+      const run = next.current;
+      if (run && !run.completed && !run.finished && !run.drops.length) setPlaying({ run, course: santaCourse(run.slot, houses) });
     } catch (failure) { setLoadError(failure instanceof Error ? failure.message : "출발하지 못했어요."); void load(); }
     finally { setStarting(false); }
   }
-  function fly(slot: number, from: number) {
-    const current = stateRef.current?.current;
-    setMarksBoth(Array.from({ length: houses }, (_, i) => current?.drops[i]?.hit ?? null));
-    setLast(null); setFinishedHere(false);
-    controller.current?.run(santaCourse(slot, houses), from);
-    // The sky and the throw button fit one phone screen: bring both into view.
-    requestAnimationFrame(() => throwButton.current?.scrollIntoView?.({ block: "end", behavior: reduced() ? "auto" : "smooth" }));
+  function finished(runId: string, releases: number[], hits: number) {
+    setResult({ runId, hits, points: pointsOf(hits), status: "saving", message: "" });
+    void send({ runId, releases });
   }
-  function toggleSound() {
-    const next = !muted;
-    sound.current?.setMuted(next); setMuted(next);
-  }
-  const copy = last ? dropCopy(last.index, last.result) : null;
-  const hitsNow = marks.filter(Boolean).length;
-  const lock = !running && mode !== "done" ? !state ? "기록을 불러오는 중…" : "" : "";
+  function quit() { setPlaying(null); void load(); }
+
+  const run = state?.current ?? null;
+  const unfinished = !!run && !run.completed && !pending.current && !playing;
   return <section className="santa-page">
     <Toolbar title="산타 선물 배달" onBack={onBack} gold={user.gold} />
     <section className="santa-event card" aria-label="이벤트 안내">
       <strong>🎄 크리스마스 한정</strong>
       <small>12월 25일까지 · 오전·오후 1번씩</small>
     </section>
-    <RunPanel state={state} admin={admin} running={running} mode={mode} houseIndex={houseIndex} marks={marks} hitsNow={hitsNow}
-      starting={starting} error={loadError} finishedHere={finishedHere}
-      onStart={() => void start()} onResume={() => run && fly(run.slot, run.drops.length)} />
-    {error && <p className="form-message error santa-error" role="alert">{error}</p>}
-    <div className="santa-sky" data-mode={mode} data-notouchfx>
-      <canvas ref={canvas} width={STAGE.width} height={STAGE.height} role="img"
-        aria-label="밤하늘을 나는 산타 썰매와 아래를 지나가는 집. 굴뚝이 다가올 때 선물 던지기를 누르면 선물이 떨어져요." data-notouchfx />
-      {running && <div className="santa-hud" aria-hidden="true"><b>{Math.min(houseIndex + 1, houses)}</b><span>/{houses}집</span></div>}
-      {mode === "countdown" && <div className="santa-banner" aria-live="polite"><strong>{houseIndex ? "다시 출발!" : "산타 출발!"}</strong></div>}
-      {mode === "waiting" && <div className="santa-banner is-small"><strong>{syncError ? "기록을 기다리는 중" : "기록하는 중…"}</strong></div>}
-      <div ref={callout} className={`santa-callout ${last?.result.hit ? "is-hit" : "is-miss"}`} aria-hidden={!copy || mode === "countdown"}>
-        {copy && mode !== "countdown" && <strong>{copy.title}</strong>}
-      </div>
-      {lock && <div className="santa-lock"><span>{lock}</span></div>}
-    </div>
-    <button ref={throwButton} type="button" className="primary-button santa-throw" disabled={!throwable}
-      onPointerDown={event => { if (event.button === 0 && controller.current?.throwGift(event.timeStamp)) event.preventDefault(); }}>
-      🎁 선물 던지기
-    </button>
-    {(syncing || syncError) && <div className="santa-sync" role={syncError ? "alert" : "status"}>
-      {syncError ? <><span>{syncError}</span>{pending.current && <button type="button" className="text-button" onClick={() => pending.current && void send(pending.current)}>다시 보내기</button>}</> : <span>기록하는 중…</span>}
+    <RunPanel state={state} admin={admin} unfinished={unfinished} starting={starting} error={loadError} onStart={() => void start()} />
+    {(syncing || syncError) && <div className="santa-sync card" role={syncError ? "alert" : "status"}>
+      {syncError ? <><span>{syncError}</span>{pending.current && <button type="button" className="text-button" onClick={() => pending.current && void send(pending.current)}>다시 보내기</button>}</> : <span>배달 기록을 보내는 중…</span>}
     </div>}
-    <p className="santa-status" role="status" aria-live="polite">{copy && mode !== "countdown" ? copy.detail : running ? "굴뚝이 다가오면 타이밍을 맞춰 선물을 던져요. 화면을 눌러도 돼요." : "굴뚝 높이가 집마다 달라요. 높을수록 늦게, 낮을수록 일찍!"}</p>
     {state && <TodayBoard state={state} me={user.username} name={name} />}
-    <div className="santa-tools">
-      <span />
-      <button type="button" className="santa-sound" aria-pressed={!muted} onClick={toggleSound}>소리 {muted ? "꺼짐" : "켜짐"}</button>
-    </div>
     <details className="santa-guide card"><summary>게임 방법 &amp; 보상</summary><ol>
-      <li>[산타 출발!]을 누르면 썰매가 집 {houses}곳 위를 차례로 날아가요.</li>
-      <li>굴뚝이 다가올 때 [선물 던지기]를 누르면 선물이 떨어져요. 화면을 눌러도, PC에서는 스페이스 바를 눌러도 돼요.</li>
+      <li>[산타 출발!]을 누르면 화면 전체에서 썰매가 집 {houses}곳 위를 차례로 날아가요.</li>
+      <li>굴뚝이 다가올 때 아래 [선물 던지기]를 누르면 선물이 떨어져요. 하늘을 눌러도, PC에서는 스페이스 바를 눌러도 돼요.</li>
       <li>선물은 썰매와 같은 속도로 앞으로 가면서 떨어져요. 굴뚝 바로 위가 아니라 조금 앞에서 던져야 해요.</li>
       <li>굴뚝 높이가 집마다 달라요. 높은 굴뚝은 금방 닿으니 늦게, 낮은 굴뚝은 오래 떨어지니 일찍 던져요.</li>
       <li>집마다 선물은 한 번만 던질 수 있어요. 뒤로 갈수록 썰매가 조금씩 빨라져요.</li>
     </ol>
-    <p>연습 모드는 없어요. 한국 시간 오전(0~12시)과 오후(12~24시)에 한 번씩 배달할 수 있어요. 굴뚝에 들어간 선물 1개마다 {hitScore}점, {houses}곳 모두 성공하면 보너스 {perfectBonus}점을 받고 랭킹 점수에 들어가요. 성공 수와 상관없이 {houses}곳을 끝까지 배달하면 {clearGold}G를 받아요. 출발하면 그 시간의 기회를 쓴 거예요. 중간에 나가도 다음 집부터 이어서 할 수 있고, 시간이 끝나도 {graceMs / 60_000}분 안에는 마저 배달할 수 있어요. 그 뒤 남은 집은 미배달로 기록되고 완료 골드는 받지 못해요. 밤 11시 50분 이후 성공은 점수에 들어가지 않아요. 이벤트는 12월 25일까지예요.</p></details>
+    <p>연습 모드는 없어요. 한국 시간 오전(0~12시)과 오후(12~24시)에 한 번씩 배달할 수 있어요. 출발하면 그 시간의 기회를 쓴 거예요. 10곳을 다 돌면 한 번에 기록돼요. 굴뚝에 들어간 선물 1개마다 {hitScore}점, {houses}곳 모두 성공하면 보너스 {perfectBonus}점을 받고 랭킹 점수에 들어가요. 성공 수와 상관없이 끝까지 배달하면 {clearGold}G를 받아요. <strong>중간에 나가면 그 배달은 미완료로 끝나고</strong> 점수·골드를 받지 못해요. 다른 앱을 잠깐 봤다 오는 건 괜찮아요(그 집부터 다시 출발해요). 늦게 출발했다면 시간이 끝난 뒤 {graceMs / 60_000}분 안에 마치면 돼요. 밤 11시 50분 이후 기록은 점수에 들어가지 않아요. 이벤트는 12월 25일까지예요.</p></details>
+    {playing && <SantaPlay key={playing.run.id} course={playing.course}
+      onFinish={(releases, hits) => finished(playing.run.id, releases, hits)} onQuit={quit} />}
+    {result && <ResultDialog title={result.hits === houses ? "완벽한 배달!" : `${result.hits}곳 배달 성공!`}
+      art={result.hits >= houses / 2 ? "/santa/result.webp" : "/santa/oops.webp"}
+      lines={<>
+        <strong>{result.points ? `+${result.points}점 · ` : ""}+{clearGold}G</strong>
+        <span>{result.hits === houses ? `${houses}곳 모두 성공해서 보너스 ${perfectBonus}점까지! 루돌프가 코로 박수를 쳐요.` : result.hits ? "수고했어요, 산타! 굴뚝을 놓친 집은 다음 배달에 챙겨요." : "선물은 마음이 중요한 거래요. 완료 골드는 챙겼어요!"}</span>
+      </>}
+      status={result.status} message={result.message} onRetry={() => pending.current && void send(pending.current)}
+      onClose={() => { setResult(null); setPlaying(null); }} />}
   </section>;
 }
 
-function HouseRow({ marks, current }: { marks: Mark[]; current?: number }) {
-  return <span className="santa-houses">{Array.from({ length: houses }, (_, i) => {
-    const mark = marks[i];
-    return <i key={i} className={mark === true ? "is-hit" : mark === false ? "is-miss" : i === current ? "is-now" : ""} />;
-  })}</span>;
+/** The full-screen run: the sky, a progress bar on top and the throw button below.
+ * Outcomes stay on the device until the last house; then the whole run is handed over. */
+function SantaPlay({ course, onFinish, onQuit }: { course: SantaHouse[]; onFinish: (releases: number[], hits: number) => void; onQuit: () => void }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const controller = useRef<SantaController | null>(null);
+  const sound = useRef<SantaSound | null>(null);
+  const callout = useRef<HTMLDivElement>(null);
+  const releases = useRef<number[]>([]);
+  const marksRef = useRef<(boolean | null)[]>([]);
+  const finishRef = useRef(onFinish); finishRef.current = onFinish;
+  const [mode, setMode] = useState<SantaMode>("idle");
+  const [index, setIndex] = useState(0);
+  const [throwable, setThrowable] = useState(false);
+  const [marks, setMarks] = useState<(boolean | null)[]>([]);
+  const [last, setLast] = useState<{ index: number; result: DropResult } | null>(null);
+  const [muted, setMuted] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState("");
+  const confirmingRef = useRef(confirming); confirmingRef.current = confirming;
+
+  useEffect(() => {
+    const effects = createSantaSound();
+    sound.current = effects; setMuted(effects.muted);
+    let runtime: SantaController;
+    try {
+      runtime = new SantaController(canvas.current!, effects, {
+        onState: next => { setMode(next.mode); setIndex(next.index); setThrowable(next.throwable); },
+        canContinue: () => true,
+        onDrop: (house, release) => { releases.current[house] = release; },
+        onResult: (house, result) => {
+          const next = [...marksRef.current]; next[house] = result.hit;
+          marksRef.current = next; setMarks(next);
+          setLast({ index: house, result });
+          if (!reduced()) anim(callout.current, [{ scale: ".7", opacity: 0 }, { scale: "1.06", opacity: 1, offset: .6 }, { scale: "1", opacity: 1 }], { dur: 320, ease: "spring" });
+        },
+        onFinish: () => {
+          const hits = marksRef.current.filter(Boolean).length;
+          effects.finish(hits === houses);
+          finishRef.current(Array.from({ length: houses }, (_, i) => releases.current[i] ?? -1), hits);
+        },
+      });
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "하늘을 표시하지 못했어요."); return; }
+    controller.current = runtime;
+    runtime.run(course, 0);
+    // Another app for a moment: freeze, then start that house over.
+    const visibility = () => { if (document.hidden) runtime.pause(); else if (!confirmingRef.current) runtime.resume(); };
+    document.addEventListener("visibilitychange", visibility);
+    const key = (event: KeyboardEvent) => {
+      if (event.repeat || (event.code !== "Space" && event.key !== "Enter") || runtime.current !== "flying") return;
+      event.preventDefault();
+      runtime.throwGift(event.timeStamp);
+    };
+    window.addEventListener("keydown", key);
+    return () => { runtime.destroy(); effects.dispose(); controller.current = null; document.removeEventListener("visibilitychange", visibility); window.removeEventListener("keydown", key); };
+  }, [course]);
+  function askQuit() {
+    if (controller.current?.current === "done") { onQuit(); return; }
+    controller.current?.pause(); setConfirming(true);
+  }
+  function stay() { setConfirming(false); controller.current?.resume(); }
+  function toggleSound() { const next = !muted; sound.current?.setMuted(next); setMuted(next); }
+  const copy = last ? dropCopy(last.index, last.result) : null;
+  const running = mode === "countdown" || mode === "flying" || mode === "waiting";
+  return <PlayShell label="산타 선물 배달" theme={{ background: "linear-gradient(180deg, #1c2150 0%, #3c3772 60%, #6b5c9a 100%)" }} onClose={askQuit}
+    top={<PlayProgress marks={marks} total={houses} current={running ? index : null} label="배달한 집" />}
+    right={<button type="button" className="play-icon-button" aria-pressed={!muted} aria-label={muted ? "소리 켜기" : "소리 끄기"} onClick={toggleSound}>
+      <SoundIcon muted={muted} />
+    </button>}
+    stage={{ width: STAGE.width, height: STAGE.height, content: <>
+      <canvas ref={canvas} width={STAGE.width} height={STAGE.height} role="img" className="santa-canvas"
+        aria-label="밤하늘을 나는 산타 썰매와 아래를 지나가는 집. 굴뚝이 다가올 때 선물 던지기를 누르면 선물이 떨어져요." />
+      {mode === "countdown" && <div className="santa-banner" aria-live="polite"><strong>{index ? "다시 출발!" : "산타 출발!"}</strong></div>}
+      <div ref={callout} className={`santa-callout ${last?.result.hit ? "is-hit" : "is-miss"}`} aria-hidden={!copy || mode === "countdown"}>
+        {copy && mode !== "countdown" && <><strong>{copy.title}</strong><small>{copy.detail}</small></>}
+      </div>
+      {error && <p className="santa-play-error" role="alert">{error}</p>}
+    </> }}
+    bottom={<button type="button" className="primary-button santa-throw" disabled={!throwable}
+      onPointerDown={event => { if (event.button === 0 && controller.current?.throwGift(event.timeStamp)) event.preventDefault(); }}>
+      🎁 선물 던지기
+    </button>}>
+    {confirming && <QuitDialog title="배달을 그만둘까요?" detail="지금 나가면 이번 배달은 미완료로 끝나요. 점수와 골드를 받지 못하고, 이번 시간에는 다시 출발할 수 없어요."
+      stay="계속 배달하기" onStay={stay} onQuit={() => { setConfirming(false); onQuit(); }} />}
+  </PlayShell>;
+}
+export function SoundIcon({ muted }: { muted: boolean }) {
+  return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 9v6h4l5 4V5L8 9H4Z" fill="currentColor" />
+    {muted ? <path d="m17 9 5 6m0-6-5 6" /> : <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" />}
+  </svg>;
 }
 
-function RunPanel({ state, admin, running, mode, houseIndex, marks, hitsNow, starting, error, finishedHere, onStart, onResume }: {
-  state: SantaState | null; admin: boolean; running: boolean; mode: SantaMode; houseIndex: number; marks: Mark[]; hitsNow: number;
-  starting: boolean; error: string; finishedHere: boolean; onStart(): void; onResume(): void;
+function RunPanel({ state, admin, unfinished, starting, error, onStart }: {
+  state: SantaState | null; admin: boolean; unfinished: boolean; starting: boolean; error: string; onStart(): void;
 }) {
   const run = state?.current ?? null;
   let body;
   if (!state) body = <p className="santa-note">{error || "배달 기록을 불러오는 중…"}</p>;
   else if (admin) body = <p className="santa-note">운영자는 배달에 참여하지 않아요. 친구들의 오늘 기록만 볼 수 있어요.</p>;
-  else if (running || (mode === "done" && !run?.finished)) body = <>
-    <div className="santa-head"><strong>{Math.min(houseIndex + 1, houses)}번째 집</strong><small>{hitsNow}곳 배달 성공</small></div>
-    <HouseRow marks={marks} current={houseIndex} />
+  else if (state.available) body = <>
+    <div className="santa-head"><strong>{santaHalf(state.slot)} 배달</strong><small>굴뚝 1곳 {hitScore}점 · 모두 성공 +{perfectBonus}점 · 완료 {clearGold}G</small></div>
+    <img className="santa-hero" src="/santa/tile.webp" alt="" />
+    <button type="button" className="primary-button santa-start" onClick={onStart} disabled={starting}>{starting ? "썰매 준비 중…" : "🛷 산타 출발!"}</button>
+    <small className="santa-warn">출발하면 이번 시간의 기회를 써요. 끝까지 배달해야 기록돼요!</small>
   </>;
-  else if (run && run.finished) {
+  else if (run && run.completed) {
     const perfect = run.hits === houses;
     body = <>
       <div className="santa-done">
         <img src={run.hits >= houses / 2 ? "/santa/result.webp" : "/santa/oops.webp"} alt="" />
         <div className="santa-head is-done"><strong>{perfect ? "완벽한 배달!" : `${run.hits}곳 배달 성공`}</strong>
-          <small>{run.completed ? `${run.points ? `+${run.points}점 · ` : ""}+${run.gold}G 받았어요` : "시간이 끝나 완료하지 못했어요"}</small></div>
+          <small>{`${run.points ? `+${run.points}점 · ` : ""}+${run.gold}G 받았어요`}</small></div>
       </div>
       <HouseRow marks={run.drops.map(entry => entry.hit)} />
-      {finishedHere && run.completed && <p className="santa-note">{perfect ? `${houses}곳 모두 성공해서 보너스 ${perfectBonus}점까지! 루돌프가 코로 박수를 쳐요.` : run.hits ? "수고했어요, 산타! 굴뚝을 놓친 집은 다음 배달에 챙겨요." : "선물은 마음이 중요한 거래요. 완료 골드는 챙겼어요!"}</p>}
-      <div className="santa-next">{state.nextSlotAt >= state.endsAt ? <span>올해 배달은 이게 마지막이었어요. 메리 크리스마스!</span> : <span>다음 배달 {opensAt(state.nextSlotAt)}</span>}</div>
+      <NextRun state={state} />
     </>;
   }
-  else if (run) body = <>
-    <div className="santa-head"><strong>{run.drops.length + 1}번째 집부터</strong><small>{kstClock(run.deadline)}까지 배달할 수 있어요</small></div>
-    <HouseRow marks={run.drops.map(entry => entry.hit)} current={run.drops.length} />
-    <button type="button" className="primary-button santa-start" onClick={onResume}>이어서 배달하기</button>
+  else if (run && unfinished) body = <>
+    <div className="santa-head"><strong>미완료로 끝났어요</strong></div>
+    <p className="santa-note">중간에 나가서 이번 배달은 기록되지 않았어요. 점수와 골드도 없어요.</p>
+    <NextRun state={state} />
   </>;
-  else if (state.available) body = <>
-    <div className="santa-head"><strong>{santaHalf(state.slot)} 배달</strong><small>굴뚝 1곳 {hitScore}점 · 모두 성공 +{perfectBonus}점 · 완료 {clearGold}G</small></div>
-    <button type="button" className="primary-button santa-start" onClick={onStart} disabled={starting}>{starting ? "썰매 준비 중…" : "🛷 산타 출발!"}</button>
-    <small className="santa-warn">출발하면 이번 시간의 기회를 써요. 연습 모드는 없어요!</small>
-  </>;
+  else if (run) body = <p className="santa-note">배달 기록을 보내는 중…</p>;
   else if (!state.open) body = <p className="santa-note">올해 크리스마스 배달은 끝났어요. 산타는 내년에 다시 출발해요!</p>;
-  else body = <p className="santa-note">{state.nextSlotAt >= state.endsAt ? "올해 배달은 모두 끝났어요. 메리 크리스마스!" : `다음 배달은 ${opensAt(state.nextSlotAt)}에 열려요.`}</p>;
+  else body = <p className="santa-note">{state.nextSlotAt >= state.endsAt ? "올해 배달은 모두 끝났어요. 메리 크리스마스!" : `다음 배달은 ${santaOpensAt(state.nextSlotAt)}에 열려요.`}</p>;
   return <section className="santa-run card" aria-label="이번 배달">
     {body}
     {state && error && <p className="form-message error" role="alert">{error}</p>}
   </section>;
+}
+function NextRun({ state }: { state: SantaState }) {
+  return <div className="santa-next">{state.nextSlotAt >= state.endsAt ? <span>올해 배달은 이게 마지막이었어요. 메리 크리스마스!</span> : <span>다음 배달 {santaOpensAt(state.nextSlotAt)}</span>}</div>;
+}
+function HouseRow({ marks }: { marks: (boolean | null)[] }) {
+  return <span className="santa-houses">{Array.from({ length: houses }, (_, i) => {
+    const mark = marks[i];
+    return <i key={i} className={mark === true ? "is-hit" : mark === false ? "is-miss" : ""} />;
+  })}</span>;
 }
 
 function TodayBoard({ state, me, name }: { state: SantaState; me: string; name: (username: string) => string }) {
@@ -345,7 +345,7 @@ function TodayBoard({ state, me, name }: { state: SantaState; me: string; name: 
       : <ol>{players.map(player => <li key={player.username} className={player.username === me ? "is-me" : ""}>
         <Avatar username={player.username} size={34} nameFormat="plain" />
         <span className="santa-today-name"><strong>{name(player.username)}</strong>
-          <small>{player.runs.map(entry => `${santaHalf(entry.slot)} ${entry.hits}${entry.finished ? "" : "…"}`).join(" · ")}</small></span>
+          <small>{player.runs.map(entry => `${santaHalf(entry.slot)} ${entry.hits}`).join(" · ")}</small></span>
         <b>{player.best}<span>곳</span></b>
       </li>)}</ol>}
   </section>;

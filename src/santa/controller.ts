@@ -49,9 +49,10 @@ export class SantaController {
   private frame = 0;
   private observer: ResizeObserver | null = null;
   private paused = false;
+  private destroyed = false;
 
   constructor(private canvas: HTMLCanvasElement, private sound: SantaSound, private callbacks: SantaCallbacks) {
-    this.renderer = new SantaRenderer(canvas, () => this.paint());
+    this.renderer = new SantaRenderer(canvas, () => { if (!this.destroyed) this.paint(); });
     canvas.addEventListener("pointerdown", this.tap);
     if (typeof ResizeObserver !== "undefined") {
       this.observer = new ResizeObserver(() => { if (this.renderer.resize()) this.paint(); });
@@ -63,6 +64,7 @@ export class SantaController {
   get current() { return this.mode; }
   get index() { return this.approach?.index ?? this.nextIndex; }
   destroy() {
+    this.destroyed = true;
     cancelAnimationFrame(this.frame);
     this.observer?.disconnect();
     this.canvas.removeEventListener("pointerdown", this.tap);

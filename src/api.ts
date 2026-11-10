@@ -10,8 +10,8 @@ import type {
   ShopState, KujiResponse, KujiPurchaseInput, LottoResponse, LottoPurchaseInput,
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
-  ClawResponse, ClawPlayInput, ClawCoinInput, FreeThrowSetInput, FreeThrowShotInput, FreeThrowShotResponse, FreeThrowState,
-  SantaDropInput, SantaDropResponse, SantaRunInput, SantaState,
+  ClawResponse, ClawPlayInput, ClawCoinInput, FreeThrowSetInput, FreeThrowFinishInput, FreeThrowFinishResponse, FreeThrowState,
+  SantaFinishInput, SantaFinishResponse, SantaRunInput, SantaState,
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse, NotificationsResponse, NotificationSummary,
   AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
 import type { RankingPeriod } from "../shared/ranking-periods";
@@ -78,10 +78,10 @@ export const api = {
   playClaw: (input: ClawPlayInput) => request<ClawResponse>("/claw/play", { method: "POST", body: JSON.stringify(input) }),
   freeThrow: () => request<FreeThrowState>("/freethrow"),
   startFreeThrowSet: (input: FreeThrowSetInput) => request<FreeThrowState>("/freethrow/sets", { method: "POST", body: JSON.stringify(input) }),
-  shootFreeThrow: (input: FreeThrowShotInput) => request<FreeThrowShotResponse>("/freethrow/shots", { method: "POST", body: JSON.stringify(input) }),
+  finishFreeThrowSet: (input: FreeThrowFinishInput) => request<FreeThrowFinishResponse>("/freethrow/finish", { method: "POST", body: JSON.stringify(input) }),
   santa: () => request<SantaState>("/santa"),
   startSantaRun: (input: SantaRunInput) => request<SantaState>("/santa/runs", { method: "POST", body: JSON.stringify(input) }),
-  dropSantaGift: (input: SantaDropInput) => request<SantaDropResponse>("/santa/drops", { method: "POST", body: JSON.stringify(input) }),
+  finishSantaRun: (input: SantaFinishInput) => request<SantaFinishResponse>("/santa/finish", { method: "POST", body: JSON.stringify(input) }),
   catchmind: (since?: number) => request<CatchmindPollResponse>(`/catchmind${since === undefined ? "" : `?since=${since}`}`),
   catchmindGallery: (before?: number) => request<CatchmindGalleryResponse>(`/catchmind/gallery${before === undefined ? "" : `?before=${before}`}`),
   catchmindAction: (action: CatchmindAction, input: CatchmindInput) => request<CatchmindResponse>(`/catchmind/${action}`, { method: "POST", body: JSON.stringify(input) }),

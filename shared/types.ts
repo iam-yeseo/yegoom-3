@@ -246,71 +246,87 @@ export interface CatchmindGuessInput extends CatchmindMutationInput { answer: st
 export interface CatchmindSkipInput extends CatchmindMutationInput { expectedTurnId: string }
 export type CatchmindInput = CatchmindMutationInput | CatchmindRerollInput | CatchmindPublishInput | CatchmindGuessInput | CatchmindSkipInput;
 
-/** Free-throw official sets (docs/plan-freethrow.md §3). Times are epoch ms. */
+/** Free-throw official sets (docs/plan-freethrow.md §3). A set is played on the
+ * device and recorded in one request when its 10th ball lands; a set started
+ * but never recorded (the player left) ends unfinished. Times are epoch ms. */
 export interface FreeThrowSummary {
   /** A new official set can start now. */
   available: boolean;
-  /** An unfinished set (this slot, or the previous one within its grace time). */
-  inProgress: boolean;
-  made: number; shots: number;
+  /** This slot's set was started. */
+  played: boolean;
+  /** This slot's set was recorded in full. */
+  completed: boolean;
+  made: number;
   nextSlotAt: number; serverNow: number; isAdmin: boolean;
 }
 export interface FreeThrowShotRecord { index: number; power: number; aim: number; made: boolean; kind: string }
 export interface FreeThrowSet {
   id: string; requestId: string; slot: number; slotStart: number;
-  /** Shots are accepted until this time (slot end plus grace). */
+  /** The set can be recorded until this time (slot end plus grace). */
   deadline: number; engine: number;
-  made: number; shots: FreeThrowShotRecord[]; finished: boolean;
-  points: number; gold: number;
-}
-export interface FreeThrowBoardEntry { username: string; slot: number; slotStart: number; made: number; shots: number; finished: boolean }
-export interface FreeThrowState extends FreeThrowSummary {
-  date: string; slot: number; slotStart: number;
-  current: FreeThrowSet | null;
-  /** Every active player's sets that started on this KST date, oldest first. */
-  today: FreeThrowBoardEntry[];
-}
-export interface FreeThrowSetInput { requestId: string }
-export interface FreeThrowShotInput { setId: string; index: number; power: number; aim: number }
-export interface FreeThrowShotResponse extends FreeThrowState {
-  shot: FreeThrowShotRecord & { points: number; gold: number };
-  replayed: boolean;
-}
-
-/** Santa's gift delivery (docs/plan-santa.md §3). Times are epoch ms. */
-export interface SantaSummary {
-  /** The event still takes new runs (until 2026-12-25 24:00 KST). */
-  open: boolean;
-  /** A new run can start now. */
-  available: boolean;
-  /** An unfinished run (this half day, or the previous one within its grace time). */
-  inProgress: boolean;
-  hits: number; drops: number;
-  nextSlotAt: number; endsAt: number; serverNow: number; isAdmin: boolean;
-}
-export interface SantaDropRecord { index: number; release: number; hit: boolean; kind: string }
-export interface SantaRun {
-  id: string; requestId: string; slot: number; slotStart: number;
-  /** Drops are accepted until this time (slot end plus grace). */
-  deadline: number; engine: number;
-  hits: number; drops: SantaDropRecord[];
-  /** Every house was thrown at or passed. */
+  made: number; shots: FreeThrowShotRecord[];
+  /** All 10 shots were recorded. */
   completed: boolean;
   /** Completed, or past the deadline. */
   finished: boolean;
   points: number; gold: number;
 }
-export interface SantaBoardEntry { username: string; slot: number; slotStart: number; hits: number; drops: number; finished: boolean }
+export interface FreeThrowBoardEntry { username: string; slot: number; slotStart: number; made: number; completed: boolean }
+export interface FreeThrowState extends FreeThrowSummary {
+  date: string; slot: number; slotStart: number;
+  /** This slot's set, or the previous slot's while it can still be recorded. */
+  current: FreeThrowSet | null;
+  /** Every active player's recorded sets that started on this KST date, oldest first. */
+  today: FreeThrowBoardEntry[];
+}
+export interface FreeThrowSetInput { requestId: string }
+export interface FreeThrowFinishInput { setId: string; shots: { power: number; aim: number }[] }
+export interface FreeThrowFinishResponse extends FreeThrowState {
+  /** The set just recorded (it may already be the previous slot's). */
+  set: FreeThrowSet;
+  replayed: boolean;
+}
+
+/** Santa's gift delivery (docs/plan-santa.md §3). A run is played on the device
+ * and recorded in one request when its last house is done; a run started but
+ * never recorded (the player left) ends unfinished. Times are epoch ms. */
+export interface SantaSummary {
+  /** The event still takes new runs (until 2026-12-25 24:00 KST). */
+  open: boolean;
+  /** A new run can start now. */
+  available: boolean;
+  /** This half day's run was started. */
+  played: boolean;
+  /** This half day's run was recorded in full. */
+  completed: boolean;
+  hits: number;
+  nextSlotAt: number; endsAt: number; serverNow: number; isAdmin: boolean;
+}
+export interface SantaDropRecord { index: number; release: number; hit: boolean; kind: string }
+export interface SantaRun {
+  id: string; requestId: string; slot: number; slotStart: number;
+  /** The run can be recorded until this time (slot end plus grace). */
+  deadline: number; engine: number;
+  hits: number; drops: SantaDropRecord[];
+  /** Every house was recorded. */
+  completed: boolean;
+  /** Completed, or past the deadline. */
+  finished: boolean;
+  points: number; gold: number;
+}
+export interface SantaBoardEntry { username: string; slot: number; slotStart: number; hits: number; completed: boolean }
 export interface SantaState extends SantaSummary {
   date: string; slot: number; slotStart: number;
+  /** This half day's run, or the previous one's while it can still be recorded. */
   current: SantaRun | null;
-  /** Every active player's runs that started on this KST date, oldest first. */
+  /** Every active player's recorded runs that started on this KST date, oldest first. */
   today: SantaBoardEntry[];
 }
 export interface SantaRunInput { requestId: string }
-export interface SantaDropInput { runId: string; index: number; release: number }
-export interface SantaDropResponse extends SantaState {
-  drop: SantaDropRecord & { points: number };
+export interface SantaFinishInput { runId: string; releases: number[] }
+export interface SantaFinishResponse extends SantaState {
+  /** The run just recorded (it may already be the previous half day's). */
+  run: SantaRun;
   replayed: boolean;
 }
 

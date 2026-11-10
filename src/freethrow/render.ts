@@ -66,7 +66,8 @@ export class FreeThrowRenderer {
     const rect = this.canvas.getBoundingClientRect();
     const ratio = Math.min(2, window.devicePixelRatio || 1) * (rect.width ? rect.width / STAGE.width : 1);
     const width = Math.round(STAGE.width * ratio), height = Math.round(STAGE.height * ratio);
-    if (width === this.canvas.width && height === this.canvas.height) return false;
+    // Another renderer (a remounted screen) may already have sized this canvas: the scale still has to match it.
+    if (width === this.canvas.width && height === this.canvas.height) { if (this.ratio !== ratio) { this.ratio = ratio; this.backdrop = null; } return false; }
     this.canvas.width = width; this.canvas.height = height; this.ratio = ratio; this.backdrop = null;
     return true;
   }
