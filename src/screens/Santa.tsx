@@ -306,8 +306,11 @@ function RunPanel({ state, admin, running, mode, houseIndex, marks, hitsNow, sta
   else if (run && run.finished) {
     const perfect = run.hits === houses;
     body = <>
-      <div className="santa-head is-done"><strong>{perfect ? "완벽한 배달!" : `${run.hits}곳 배달 성공`}</strong>
-        <small>{run.completed ? `${run.points ? `+${run.points}점 · ` : ""}+${run.gold}G 받았어요` : "시간이 끝나 완료하지 못했어요"}</small></div>
+      <div className="santa-done">
+        <img src={run.hits >= houses / 2 ? "/santa/result.webp" : "/santa/oops.webp"} alt="" />
+        <div className="santa-head is-done"><strong>{perfect ? "완벽한 배달!" : `${run.hits}곳 배달 성공`}</strong>
+          <small>{run.completed ? `${run.points ? `+${run.points}점 · ` : ""}+${run.gold}G 받았어요` : "시간이 끝나 완료하지 못했어요"}</small></div>
+      </div>
       <HouseRow marks={run.drops.map(entry => entry.hit)} />
       {finishedHere && run.completed && <p className="santa-note">{perfect ? `${houses}곳 모두 성공해서 보너스 ${perfectBonus}점까지! 루돌프가 코로 박수를 쳐요.` : run.hits ? "수고했어요, 산타! 굴뚝을 놓친 집은 다음 배달에 챙겨요." : "선물은 마음이 중요한 거래요. 완료 골드는 챙겼어요!"}</p>}
       <div className="santa-next">{state.nextSlotAt >= state.endsAt ? <span>올해 배달은 이게 마지막이었어요. 메리 크리스마스!</span> : <span>다음 배달 {opensAt(state.nextSlotAt)}</span>}</div>

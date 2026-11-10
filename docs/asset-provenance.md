@@ -44,3 +44,24 @@ python3 scripts/prepare-claw-dolls.py /path/to/yegoom/public/assets
 | --- | ---: | ---: | --- |
 | tile | 167,718 | 13,172 | 210×210 |
 | ball | 139,426 | 14,486 | 256×256 |
+
+## 산타 선물 배달 그림
+
+- `public/santa/*.webp` 13장은 사용자가 2026-11-10에 제공한 이미지다. 사용자가 [이미지 프롬프트](santa-image-prompts.md)로 이미지 생성기에서 만들었다. 지인용 비공개 서비스 전용이다.
+- `scripts/prepare-santa-art.py`가 원본 PNG를 읽기만 하고 다듬는다. 알파 24 이하의 옅은 잡티를 투명으로 바꾸고 투명 여백을 자른 뒤 화면 크기의 약 2배로 줄여 WebP(RGB quality 85, 알파 무손실)로 저장한다. 밤하늘은 좌우를 뒤집고 달이 오른쪽 위에 오도록 화면 비율만큼 잘라 quality 82로 저장한다.
+- 같은 스크립트가 그림에서 잰 크기와 집 지붕선, 굴뚝 입구 위치를 `src/santa/art.ts`로 쓴다. 그림을 바꾸면 스크립트를 다시 돌린다.
+- 모두 서비스 워커 precache에 들어간다. 합계 약 220KB.
+
+| 파일 | 원본 | 결과 (바이트) | 크기 |
+| --- | --- | ---: | --- |
+| sleigh | santa-sleigh.png 1536×1024 | 23,984 | 360×189 |
+| gift-red · green · blue | 1254×1254 | 2,796 · 2,902 · 2,612 | 60×60 |
+| house-1 ~ 4 | 1254×1254 | 20,076 · 20,400 · 21,822 · 15,342 | 높이 344~390 |
+| chimney | 1024×1536 | 24,484 | 192×768 |
+| sky | 1774×887 | 10,634 | 570×887 |
+| tile | 1254×1254 | 15,864 | 210×210 |
+| result · oops | santa-result · santa-oops 1254×1254 | 21,174 · 20,022 | 240×240 |
+
+```sh
+python3 scripts/prepare-santa-art.py /path/to/santa-images
+```

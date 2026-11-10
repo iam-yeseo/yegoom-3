@@ -1,5 +1,6 @@
 import { SANTA_WORLD, chimneyX, giftY, judgeDrop, type DropResult, type SantaHouse } from "../../shared/santa-engine";
 import { reduced } from "../motion";
+import { SANTA_ART } from "./art";
 import { SantaRenderer, emptyScene, surfaceAt, type GiftSprite, type SantaScene } from "./render";
 import type { SantaSound } from "./sound";
 
@@ -16,7 +17,8 @@ export interface SantaCallbacks {
   onFinish?(): void;
 }
 export const COUNTDOWN_MS = 1500;
-const CHIMNEY_HALF = SANTA_WORLD.mouthHalf + SANTA_WORLD.wall;
+/** Half the chimney's brick body below the cap (an early gift is nudged by it). */
+const CHIMNEY_HALF = SANTA_ART.chimney.body / 2;
 const GIFT = SANTA_WORLD.giftHalf;
 const FADE_MS = 700;
 
@@ -49,7 +51,7 @@ export class SantaController {
   private paused = false;
 
   constructor(private canvas: HTMLCanvasElement, private sound: SantaSound, private callbacks: SantaCallbacks) {
-    this.renderer = new SantaRenderer(canvas);
+    this.renderer = new SantaRenderer(canvas, () => this.paint());
     canvas.addEventListener("pointerdown", this.tap);
     if (typeof ResizeObserver !== "undefined") {
       this.observer = new ResizeObserver(() => { if (this.renderer.resize()) this.paint(); });

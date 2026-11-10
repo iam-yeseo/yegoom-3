@@ -258,12 +258,7 @@ export function SoloGames({ go, claw, freethrow, santa, stock }: { go: Go; claw:
       <div className="tile-grid">
         {santaTileVisible(santa) && <button className="card solo-tile santa-tile" onClick={() => go("/play/santa")}>
           <span className="solo-icon" style={{ background: "#FFE3DE" }}>
-            <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
-              <rect x="5" y="13" width="24" height="17" rx="4" fill="#EF6B5B" />
-              <rect x="3" y="9" width="28" height="7" rx="3" fill="#F47C66" />
-              <rect x="15" y="9" width="4" height="21" fill="#FFF1D6" />
-              <path d="M17 9c-3-5-9-5-8-1 1 3 5 2 8 1zm0 0c3-5 9-5 8-1-1 3-5 2-8 1z" fill="#5CC2A0" />
-            </svg>
+            <img className="character" src="/santa/tile.webp" alt="" />
           </span>
           <span className="solo-text">
             <strong>산타 선물 배달</strong>

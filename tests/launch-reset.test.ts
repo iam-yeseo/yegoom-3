@@ -128,6 +128,8 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO ai_usage (date, calls, cost_micro_usd) VALUES ('2026-11-05', 1, 1000)"),
       db.prepare("INSERT INTO freethrow_sets (id, user_id, request_id, slot, date, engine, shots, made, created_at) VALUES ('00000000-0000-4000-8000-000000000001', 'min', 'retained-freethrow-request', 164703, '2026-11-07', 1, 1, 0, '2026-11-07T03:00:00Z')"),
       db.prepare("INSERT INTO freethrow_shots (id, set_id, shot_index, power, aim, made, kind, created_at) VALUES ('retained-shot', '00000000-0000-4000-8000-000000000001', 0, 10, 0, 0, 'short', '2026-11-07T03:00:01Z')"),
+      db.prepare("INSERT INTO santa_runs (id, user_id, request_id, slot, date, engine, drops, hits, created_at) VALUES ('00000000-0000-4000-8000-000000000002', 'min', 'retained-santa-request', 41231, '2026-11-10', 1, 1, 0, '2026-11-10T03:00:00Z')"),
+      db.prepare("INSERT INTO santa_drops (id, run_id, house_index, release_ms, hit, kind, created_at) VALUES ('retained-drop', '00000000-0000-4000-8000-000000000002', 0, -1, 0, 'pass', '2026-11-10T03:00:01Z')"),
     ]);
   });
   afterAll(async () => { await worker?.dispose(); });

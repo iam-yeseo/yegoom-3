@@ -97,6 +97,6 @@ describe('santa drops', () => {
 
   it('keeps every result for a fixed course (bump SANTA_RULES.engine when this changes)', () => {
     const fingerprint = course.map(house => [house.level, house.approachMs, idealRelease(house), judgeDrop(house, 1300).kind].join(':')).join(' ');
-    expect(fingerprint).toMatchInlineSnapshot(`"2:3058:1457:rim-early 0:3008:1340:in 3:2960:1442:rim-early 1:2913:1319:in 0:2867:1249:in 4:2823:1408:rim-early 2:2780:1278:in 4:2739:1354:in 3:2698:1273:in 1:2659:1155:rim-late"`);
+    expect(fingerprint).toMatchInlineSnapshot(`"2:3058:1529:rim-early 0:3008:1410:rim-early 3:2960:1516:rim-early 1:2913:1390:rim-early 0:2867:1319:in 4:2823:1486:rim-early 2:2780:1350:in 4:2739:1431:rim-early 3:2698:1347:in 1:2659:1226:rim-late"`);
   });
 });

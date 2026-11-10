@@ -13,17 +13,17 @@
 /** Logical canvas size; the buffer is scaled by devicePixelRatio (max 2). */
 export const SANTA_STAGE = { width: 360, height: 560 } as const;
 export const SANTA_WORLD = {
-  /** Gift release point (under the sleigh). */
-  sleighX: 104, releaseY: 118,
+  /** Gift release point (under the sleigh's runners). */
+  sleighX: 104, releaseY: 112,
   gravity: 1500 / 1_000_000, // px/ms²
   /** Chimney centre at the start and end of each house's approach. */
   startX: 440, endX: -80,
   /** First house speed (px/ms); the last one is speedUp faster. */
   baseSpeed: 170 / 1000, speedUp: 0.15,
-  /** Gift half width, chimney mouth half width (inside), wall thickness. */
-  giftHalf: 13, mouthHalf: 25, wall: 7,
-  /** Chimney top y for each height level, lowest chimney first. */
-  tops: [392, 356, 320, 284, 248],
+  /** Gift half width, chimney mouth half width (inside), rim width; they match the drawn art. */
+  giftHalf: 11, mouthHalf: 23, wall: 25,
+  /** Chimney mouth y for each height level, lowest chimney first. */
+  tops: [326, 294, 262, 230, 198],
   ground: 528,
 } as const;
 export type DropKind = 'in' | 'rim-early' | 'rim-late' | 'early' | 'late' | 'pass';
