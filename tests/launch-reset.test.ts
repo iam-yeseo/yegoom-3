@@ -30,7 +30,9 @@ const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_ph
   // Free-throw official sets (0026) are newer than the launch-era reset.
   'freethrow_sets', 'freethrow_shots',
   // Ranking result snapshots (0027) sit beside their settlement markers.
-  'ranking_results'];
+  'ranking_results',
+  // The Christmas gift delivery (0028) is newer than the launch-era reset.
+  'santa_runs', 'santa_drops'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -126,6 +128,8 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO ai_usage (date, calls, cost_micro_usd) VALUES ('2026-11-05', 1, 1000)"),
       db.prepare("INSERT INTO freethrow_sets (id, user_id, request_id, slot, date, engine, shots, made, created_at) VALUES ('00000000-0000-4000-8000-000000000001', 'min', 'retained-freethrow-request', 164703, '2026-11-07', 1, 1, 0, '2026-11-07T03:00:00Z')"),
       db.prepare("INSERT INTO freethrow_shots (id, set_id, shot_index, power, aim, made, kind, created_at) VALUES ('retained-shot', '00000000-0000-4000-8000-000000000001', 0, 10, 0, 0, 'short', '2026-11-07T03:00:01Z')"),
+      db.prepare("INSERT INTO santa_runs (id, user_id, request_id, slot, date, engine, drops, hits, created_at) VALUES ('00000000-0000-4000-8000-000000000002', 'min', 'retained-santa-request', 41231, '2026-11-10', 1, 1, 0, '2026-11-10T03:00:00Z')"),
+      db.prepare("INSERT INTO santa_drops (id, run_id, house_index, release_ms, hit, kind, created_at) VALUES ('retained-drop', '00000000-0000-4000-8000-000000000002', 0, -1, 0, 'pass', '2026-11-10T03:00:01Z')"),
     ]);
   });
   afterAll(async () => { await worker?.dispose(); });
