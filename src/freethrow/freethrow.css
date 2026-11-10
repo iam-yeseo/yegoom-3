@@ -1,5 +1,7 @@
 .freethrow-page { padding-bottom: 28px; }
+.freethrow-mode, .freethrow-official, .freethrow-sync, .freethrow-today, .freethrow-guide { width: calc(100% - 32px); margin: 0 auto 12px; }
 .freethrow-mode { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; }
+.freethrow-mode > div { flex: 1; min-width: 0; word-break: keep-all; }
 .freethrow-mode strong { display: block; font-size: 16px; font-weight: 800; }
 .freethrow-mode small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
 .freethrow-court { position: absolute; inset: 0; overflow: hidden; background: #eee8fc; }
@@ -61,7 +63,7 @@
 .freethrow-today li > b { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .freethrow-today li > b span { margin-left: 1px; color: var(--faint); font-size: 12px; }
 
-.freethrow-mode .freethrow-practice { flex-shrink: 0; height: 42px; padding: 0 18px; font-size: 14px; }
+.freethrow-mode .freethrow-practice { flex-shrink: 0; width: auto; height: 42px; padding: 0 18px; font-size: 14px; }
 .freethrow-sync { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 16px; color: var(--muted); font-size: 13px; text-align: center; word-break: keep-all; }
 .freethrow-sync[role="alert"] { color: #d9604c; }
 .freethrow-practice-stats { display: flex; align-items: baseline; gap: 12px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
