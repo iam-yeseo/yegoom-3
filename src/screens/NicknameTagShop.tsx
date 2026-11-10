@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { DAILY_FREE, NICKNAME_TAG_RULES } from "../../shared/balance";
 import { TAG_GRADES, gradeLabel } from "../../shared/nickname-tags";
 import type { NicknameTag, TagDrawInput } from "../../shared/types";
-import { NickTag, Toolbar, honorific, useDisplayName } from "../components/UI";
+import { NickTag, Toolbar, honorific, useNameParts } from "../components/UI";
 import { confetti, flipY, openSheet, reduced, toast, useCountUp } from "../motion";
 import { ticketCount, useShop } from "../shop";
 import { usePurchaseConfirm } from "../components/PurchaseConfirm";
@@ -43,7 +43,8 @@ export function NicknameTagShop({ username, displayName, onBack, go }: {
   username: string; displayName?: string; onBack: () => void; go: (path: string) => void;
 }) {
   const shop = useShop();
-  const name = honorific(useDisplayName(username, displayName));
+  // The bare nickname: the drawn tag stands in for the one worn now, so the preview must not show both.
+  const name = honorific(useNameParts(username, displayName).name);
   const latest = useRef(shop);
   latest.current = shop;
   const shownGold = useCountUp(shop.gold);
