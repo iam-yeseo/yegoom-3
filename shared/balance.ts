@@ -97,6 +97,29 @@ export const FREETHROW_RULES = {
 export const freeThrowSlot = (now: number): number => Math.floor(now / FREETHROW_RULES.setIntervalMs);
 export const freeThrowSlotStart = (slot: number): number => slot * FREETHROW_RULES.setIntervalMs;
 export const freeThrowDeadline = (slot: number): number => (slot + 1) * FREETHROW_RULES.setIntervalMs + FREETHROW_RULES.graceMs;
+/** Santa's gift delivery, a limited Christmas event (docs/plan-santa.md). One run
+ * of `houses` chimneys per KST half day (오전 00–12시, 오후 12–24시). Each gift in a
+ * chimney pays hitScore, all of them adds perfectBonus, and finishing the run
+ * (every house thrown at or passed) pays clearGold whatever the hits. A run
+ * started near the end of its half day may finish within graceMs after it.
+ * engine is stored with each run; bump it whenever shared/santa-engine.ts
+ * changes outcomes. */
+export const SANTA_RULES = {
+  houses: 10, slotMs: 12 * 60 * 60 * 1000, graceMs: 10 * 60 * 1000,
+  hitScore: 1, perfectBonus: 3, clearGold: 100, engine: 1,
+  /** No new run starts from this moment (2026-12-26 00:00 KST). */
+  endsAt: Date.parse('2026-12-26T00:00:00+09:00'),
+  lastDay: '2026-12-25',
+} as const;
+const KST_OFFSET = 9 * 60 * 60 * 1000;
+/** Half-day slots are aligned to KST midnight and noon, not to UTC. */
+export const santaSlot = (now: number): number => Math.floor((now + KST_OFFSET) / SANTA_RULES.slotMs);
+export const santaSlotStart = (slot: number): number => slot * SANTA_RULES.slotMs - KST_OFFSET;
+export const santaDeadline = (slot: number): number => santaSlotStart(slot + 1) + SANTA_RULES.graceMs;
+/** The event takes new runs until endsAt; it has no start date (it opens with the release). */
+export const santaOpen = (now: number): boolean => now < SANTA_RULES.endsAt;
+/** "오전" or "오후" for a slot. */
+export const santaHalf = (slot: number): '오전' | '오후' => (slot % 2 === 0 ? '오전' : '오후');
 /** Shop prices, odds and rewards are shared by the Worker and every screen. */
 export const KUJI_RULES = {
   size: 100, basePrice: 300, higherPrice: 400, basePriceCount: 5, lastOneGold: 1000, historyLimit: 20,

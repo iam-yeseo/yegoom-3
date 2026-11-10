@@ -3,7 +3,8 @@ import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FREETHROW_RUL
 import { usePlayClosed } from "../play-window";
 import { ticketCount, useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
-import type { CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
+import type { CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice, SantaSummary } from "../../shared/types";
+import { santaTileText, santaTileVisible } from "../santa/summary";
 import type { StockHomeSummary } from "../../shared/stock-types";
 import { STOCKS } from "../../shared/stocks";
 import { advanceNoticeOffset, hasSeenLotto, lottoSeenKey, markLottoSeen, nextKstMidnight, noticeDate } from "../lotto-notice";
@@ -57,6 +58,7 @@ export interface HomeData {
   catchmind: CatchmindSummary;
   claw: ClawSummary;
   freethrow: FreeThrowSummary;
+  santa: SantaSummary;
   lottoNotice: LottoNotice | null;
   /** null while the market is not open to players. */
   stock: StockHomeSummary | null;
@@ -245,7 +247,7 @@ export function freeThrowTileText(summary: FreeThrowSummary): string {
   if (summary.available) return "이번 세트 도전 가능";
   return `다음 세트 ${String(new Date(summary.nextSlotAt + 9 * 3_600_000).getUTCHours()).padStart(2, "0")}시`;
 }
-export function SoloGames({ go, claw, freethrow, stock }: { go: Go; claw: ClawSummary; freethrow: FreeThrowSummary; stock: StockHomeSummary | null }) {
+export function SoloGames({ go, claw, freethrow, santa, stock }: { go: Go; claw: ClawSummary; freethrow: FreeThrowSummary; santa: SantaSummary; stock: StockHomeSummary | null }) {
   const nextGrant = formatTime(new Date(claw.nextGrantAt).toISOString());
   const open = !!stock?.open;
   const pnl = stock ? stock.value - stock.cost : 0;
@@ -254,6 +256,21 @@ export function SoloGames({ go, claw, freethrow, stock }: { go: Go; claw: ClawSu
     <>
       <SectionTitle title="혼자 하기" />
       <div className="tile-grid">
+        {santaTileVisible(santa) && <button className="card solo-tile santa-tile" onClick={() => go("/play/santa")}>
+          <span className="solo-icon" style={{ background: "#FFE3DE" }}>
+            <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+              <rect x="5" y="13" width="24" height="17" rx="4" fill="#EF6B5B" />
+              <rect x="3" y="9" width="28" height="7" rx="3" fill="#F47C66" />
+              <rect x="15" y="9" width="4" height="21" fill="#FFF1D6" />
+              <path d="M17 9c-3-5-9-5-8-1 1 3 5 2 8 1zm0 0c3-5 9-5 8-1-1 3-5 2-8 1z" fill="#5CC2A0" />
+            </svg>
+          </span>
+          <span className="solo-text">
+            <strong>산타 선물 배달</strong>
+            <small>{santaTileText(santa)}</small>
+          </span>
+          {santa.available && <span className="santa-tile-badge">이벤트</span>}
+        </button>}
         <button className="card solo-tile" onClick={() => go("/play/claw")}>
           <span className="solo-icon" style={{ background: "#FFF4CC" }}>
             <img className="character" src={artSrc("cat")} alt="" />
@@ -621,7 +638,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
         />
         <LottoNoticeCard data={data} go={go} />
         <TodayGames data={data} go={go} />
-        <SoloGames go={go} claw={data.claw} freethrow={data.freethrow} stock={data.stock} />
+        <SoloGames go={go} claw={data.claw} freethrow={data.freethrow} santa={data.santa} stock={data.stock} />
         <SectionTitle title="상점" right="전체" onClick={() => go("/shop")} />
         <ShopCards go={go} />
         <SectionTitle title="이번 주 랭킹" right={settleText()} />

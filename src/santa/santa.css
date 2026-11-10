@@ -1,0 +1,55 @@
+.santa-page { padding-bottom: 28px; }
+.santa-event, .santa-run, .santa-today, .santa-sky, .santa-throw, .santa-guide, .santa-error { width: calc(100% - 32px); margin: 0 auto 12px; }
+.santa-event { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 12px 16px; background: linear-gradient(90deg, #fff1ee, #eaf7f1); }
+.santa-event strong { font-size: 14px; font-weight: 800; color: #d9534a; white-space: nowrap; }
+.santa-event small { color: var(--muted); font-size: 12px; text-align: right; word-break: keep-all; }
+.santa-run { display: grid; gap: 12px; padding: 16px; }
+.santa-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.santa-head strong { font-size: 18px; font-weight: 800; }
+.santa-head small { color: var(--muted); font-size: 12px; text-align: right; word-break: keep-all; }
+.santa-head.is-done strong { color: #d9534a; font-size: 22px; }
+.santa-note { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; word-break: keep-all; }
+.santa-warn { color: var(--muted); font-size: 12px; text-align: center; word-break: keep-all; }
+.santa-start { width: 100%; }
+.santa-next { color: var(--muted); font-size: 13px; font-weight: 700; }
+.santa-houses { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px; }
+.santa-houses i { aspect-ratio: 1; border-radius: 8px; background: #f6f1eb; transition: background var(--dur-m) var(--ease-out); }
+.santa-houses i.is-hit { background: #ef6b5b; }
+.santa-houses i.is-miss { background: #fff; box-shadow: inset 0 0 0 2px #e4dce6; }
+.santa-houses i.is-now { background: #fff; box-shadow: inset 0 0 0 2px #ef6b5b; }
+.santa-sky { position: relative; overflow: hidden; border-radius: 28px; background: #2a2a5e; box-shadow: 0 10px 30px rgba(40, 34, 96, 0.22); }
+.santa-sky canvas { display: block; width: 100%; aspect-ratio: 360 / 560; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.santa-sky[data-mode="flying"] canvas { cursor: pointer; }
+.santa-hud { position: absolute; top: 12px; right: 14px; border-radius: 999px; padding: 5px 11px; background: rgba(255, 255, 255, 0.9); color: var(--text); font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; pointer-events: none; }
+.santa-hud span { margin-left: 1px; color: var(--muted); font-weight: 700; }
+.santa-banner { position: absolute; left: 50%; top: 38%; translate: -50% -50%; pointer-events: none; }
+.santa-banner strong { display: block; border-radius: 999px; padding: 10px 22px; background: #ef6b5b; color: #fff; font-size: 24px; font-weight: 800; white-space: nowrap; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); animation: santa-pop 420ms var(--ease-out) both; }
+.santa-banner.is-small strong { padding: 8px 16px; background: rgba(58, 51, 64, 0.82); font-size: 15px; }
+@keyframes santa-pop { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.santa-callout { position: absolute; left: 50%; top: 31%; translate: -50% 0; pointer-events: none; }
+.santa-callout strong { display: block; border-radius: 999px; padding: 8px 16px; background: rgba(255, 255, 255, 0.94); color: var(--text); font-size: 17px; font-weight: 800; white-space: nowrap; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); }
+.santa-callout.is-hit strong { background: #ef6b5b; color: #fff; }
+.santa-lock { position: absolute; inset: auto 0 8% 0; display: flex; justify-content: center; pointer-events: none; }
+.santa-lock span { border-radius: 999px; padding: 8px 14px; background: rgba(58, 51, 64, 0.78); color: #fff; font-size: 13px; font-weight: 800; }
+.santa-throw { display: block; min-height: 56px; font-size: 18px; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+.santa-throw:not(:disabled):active { transform: scale(.97); }
+.santa-sync { display: flex; align-items: center; justify-content: center; gap: 10px; width: calc(100% - 32px); margin: -2px auto 6px; color: var(--muted); font-size: 12px; text-align: center; word-break: keep-all; }
+.santa-sync[role="alert"] { color: #d9604c; }
+.santa-status { width: calc(100% - 40px); min-height: 40px; margin: 0 auto 10px; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: center; word-break: keep-all; }
+.santa-today { padding: 16px; }
+.santa-today h2 { margin: 0 0 10px; font-size: 15px; font-weight: 800; }
+.santa-today ol { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.santa-today li { display: flex; align-items: center; gap: 10px; }
+.santa-today li.is-me .santa-today-name strong { color: #d9534a; }
+.santa-today-name { display: grid; flex: 1; min-width: 0; }
+.santa-today-name strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.santa-today-name small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.santa-today li > b { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.santa-today li > b span { margin-left: 1px; color: var(--faint); font-size: 12px; }
+.santa-tools { display: flex; justify-content: space-between; align-items: center; width: calc(100% - 32px); margin: 0 auto 12px; }
+.santa-sound { display: inline-flex; gap: 6px; align-items: center; border: 0; border-radius: 999px; padding: 8px 12px; color: #7c7383; background: #fff; font-size: 12px; }
+.santa-guide { padding: 14px 16px; font-size: 13px; line-height: 1.6; }
+.santa-guide summary { font-weight: 800; cursor: pointer; }
+.santa-guide ol { margin: 10px 0 8px; padding-left: 18px; }
+.santa-guide p { margin: 0; color: var(--muted); word-break: keep-all; }
+@media (prefers-reduced-motion: reduce) { .santa-banner strong { animation: none; } }

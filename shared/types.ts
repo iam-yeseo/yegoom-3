@@ -96,6 +96,7 @@ export interface BootstrapResponse {
   catchmind: CatchmindSummary;
   claw: ClawSummary;
   freethrow: FreeThrowSummary;
+  santa: SantaSummary;
   /** Today's free uses left; each item's 이용권 count adds them to owned tickets. */
   dailyFree: DailyFreeLeft;
   launchGift: LaunchGiftState;
@@ -273,6 +274,43 @@ export interface FreeThrowSetInput { requestId: string }
 export interface FreeThrowShotInput { setId: string; index: number; power: number; aim: number }
 export interface FreeThrowShotResponse extends FreeThrowState {
   shot: FreeThrowShotRecord & { points: number; gold: number };
+  replayed: boolean;
+}
+
+/** Santa's gift delivery (docs/plan-santa.md §3). Times are epoch ms. */
+export interface SantaSummary {
+  /** The event still takes new runs (until 2026-12-25 24:00 KST). */
+  open: boolean;
+  /** A new run can start now. */
+  available: boolean;
+  /** An unfinished run (this half day, or the previous one within its grace time). */
+  inProgress: boolean;
+  hits: number; drops: number;
+  nextSlotAt: number; endsAt: number; serverNow: number; isAdmin: boolean;
+}
+export interface SantaDropRecord { index: number; release: number; hit: boolean; kind: string }
+export interface SantaRun {
+  id: string; requestId: string; slot: number; slotStart: number;
+  /** Drops are accepted until this time (slot end plus grace). */
+  deadline: number; engine: number;
+  hits: number; drops: SantaDropRecord[];
+  /** Every house was thrown at or passed. */
+  completed: boolean;
+  /** Completed, or past the deadline. */
+  finished: boolean;
+  points: number; gold: number;
+}
+export interface SantaBoardEntry { username: string; slot: number; slotStart: number; hits: number; drops: number; finished: boolean }
+export interface SantaState extends SantaSummary {
+  date: string; slot: number; slotStart: number;
+  current: SantaRun | null;
+  /** Every active player's runs that started on this KST date, oldest first. */
+  today: SantaBoardEntry[];
+}
+export interface SantaRunInput { requestId: string }
+export interface SantaDropInput { runId: string; index: number; release: number }
+export interface SantaDropResponse extends SantaState {
+  drop: SantaDropRecord & { points: number };
   replayed: boolean;
 }
 

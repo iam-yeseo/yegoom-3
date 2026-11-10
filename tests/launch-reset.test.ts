@@ -30,7 +30,9 @@ const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_ph
   // Free-throw official sets (0026) are newer than the launch-era reset.
   'freethrow_sets', 'freethrow_shots',
   // Ranking result snapshots (0027) sit beside their settlement markers.
-  'ranking_results'];
+  'ranking_results',
+  // The Christmas gift delivery (0028) is newer than the launch-era reset.
+  'santa_runs', 'santa_drops'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
