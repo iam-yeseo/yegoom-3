@@ -1,4 +1,4 @@
-import { FREETHROW_RULES, freeThrowDeadline, freeThrowSlot, freeThrowSlotStart } from '../shared/balance';
+import { FREETHROW_RULES, PLAY_RULES, freeThrowDeadline, freeThrowSlot, freeThrowSlotStart, playClosed, scoreCounts } from '../shared/balance';
 import { simulateShot, validShot } from '../shared/freethrow-physics';
 import type {
   FreeThrowBoardEntry, FreeThrowSet, FreeThrowShotRecord, FreeThrowShotResponse, FreeThrowState, FreeThrowSummary,
@@ -7,7 +7,7 @@ import { kstDate, weekStart } from './rules';
 
 interface Actor { id: string; role: 'player' | 'admin' }
 interface SetRow { id: string; request_id: string; slot: number; engine: number; shots: number; made: number }
-interface ShotRow { id: string; shot_index: number; power: number; aim: number; made: number; kind: string }
+interface ShotRow { id: string; shot_index: number; power: number; aim: number; made: number; kind: string; created_at: string }
 interface BoardRow { username: string; slot: number; made: number; shots: number }
 
 export class FreeThrowError extends Error {
@@ -16,6 +16,10 @@ export class FreeThrowError extends Error {
 const requestIdValid = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{16,80}$/.test(value);
 const setIdValid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
 const { shotsPerSet, goalScore, goalGold, engine } = FREETHROW_RULES;
+/** A set belongs to the KST day its slot starts on. Goals after that day closed
+ * (23:50), including the 21시 set's grace past midnight, pay gold but no score. */
+const setDay = (slot: number) => kstDate(new Date(freeThrowSlotStart(slot)));
+const goalCounts = (slot: number, at: number) => scoreCounts(setDay(slot), at);
 const finishedAt = (row: Pick<SetRow, 'slot' | 'shots'>, now: number) => row.shots >= shotsPerSet || now >= freeThrowDeadline(row.slot);
 
 /** The player's two most recent slots: the current one and, while its grace
@@ -45,11 +49,13 @@ export async function getFreeThrowSummary(db: D1Database, user: Actor, now = Dat
 }
 
 async function setView(db: D1Database, row: SetRow, now: number): Promise<FreeThrowSet> {
-  const shots = (await db.prepare('SELECT id, shot_index, power, aim, made, kind FROM freethrow_shots WHERE set_id = ? ORDER BY shot_index')
-    .bind(row.id).all<ShotRow>()).results.map(shotView);
+  const rows = (await db.prepare('SELECT id, shot_index, power, aim, made, kind, created_at FROM freethrow_shots WHERE set_id = ? ORDER BY shot_index')
+    .bind(row.id).all<ShotRow>()).results;
+  const shots = rows.map(shotView);
+  const scored = rows.filter(shot => shot.made === 1 && goalCounts(row.slot, Date.parse(shot.created_at))).length;
   return {
     id: row.id, requestId: row.request_id, slot: row.slot, slotStart: freeThrowSlotStart(row.slot), deadline: freeThrowDeadline(row.slot),
-    engine: row.engine, made: row.made, shots, finished: finishedAt(row, now), points: row.made * goalScore, gold: row.made * goalGold,
+    engine: row.engine, made: row.made, shots, finished: finishedAt(row, now), points: scored * goalScore, gold: row.made * goalGold,
   };
 }
 const shotView = (row: ShotRow): FreeThrowShotRecord => ({ index: row.shot_index, power: row.power, aim: row.aim, made: row.made === 1, kind: row.kind });
@@ -73,6 +79,7 @@ export async function startFreeThrowSet(db: D1Database, user: Actor, input: Reco
   const prior = () => db.prepare('SELECT slot FROM freethrow_sets WHERE user_id = ? AND request_id = ?').bind(user.id, input.requestId).first<{ slot: number }>();
   // A retried start returns the same set; it never opens a second one.
   if (await prior()) return getFreeThrowState(db, user, now);
+  if (playClosed(now)) throw new FreeThrowError(409, 'PLAY_CLOSED', PLAY_RULES.closedMessage);
   const sets = await recentSets(db, user, now);
   if (sets.open) throw new FreeThrowError(409, 'SET_IN_PROGRESS', '지난 세트를 먼저 마쳐 주세요.');
   if (sets.currentSlot) throw new FreeThrowError(409, 'SET_USED', '이번 시간의 공식 도전은 이미 시작했어요. 다음 세트를 기다려 주세요.');
@@ -108,11 +115,11 @@ export async function shootFreeThrow(db: D1Database, user: Actor, input: Record<
   const setId = input.setId as string, index = input.index as number, power = input.power as number, aim = input.aim as number;
   const set = await db.prepare('SELECT id, request_id, slot, engine, shots, made FROM freethrow_sets WHERE id = ? AND user_id = ?').bind(setId, user.id).first<SetRow>();
   if (!set) throw new FreeThrowError(404, 'SET_NOT_FOUND', '이 세트를 찾을 수 없어요. 화면을 새로고침해 주세요.');
-  const recorded = () => db.prepare('SELECT id, shot_index, power, aim, made, kind FROM freethrow_shots WHERE set_id = ? AND shot_index = ?').bind(setId, index).first<ShotRow>();
+  const recorded = () => db.prepare('SELECT id, shot_index, power, aim, made, kind, created_at FROM freethrow_shots WHERE set_id = ? AND shot_index = ?').bind(setId, index).first<ShotRow>();
   const respond = async (row: ShotRow, replayed: boolean): Promise<FreeThrowShotResponse> => {
     if (row.power !== power || row.aim !== aim) throw new FreeThrowError(409, 'SHOT_CONFLICT', '이미 다른 슛으로 기록된 공이에요. 화면을 새로고침해 주세요.');
     const shot = shotView(row);
-    return { ...await getFreeThrowState(db, user, now), shot: { ...shot, points: shot.made ? goalScore : 0, gold: shot.made ? goalGold : 0 }, replayed };
+    return { ...await getFreeThrowState(db, user, now), shot: { ...shot, points: shot.made && goalCounts(set.slot, Date.parse(row.created_at)) ? goalScore : 0, gold: shot.made ? goalGold : 0 }, replayed };
   };
   const old = await recorded();
   // A retry of a recorded shot (lost response) returns it without simulating again.
@@ -132,7 +139,7 @@ export async function shootFreeThrow(db: D1Database, user: Actor, input: Record<
       WHERE id = ? AND shots = ? AND EXISTS (SELECT 1 FROM freethrow_shots WHERE id = ?)`).bind(made, setId, index, id),
   ];
   if (made) {
-    for (const [currency, amount] of [['score', goalScore], ['gold', goalGold]] as const) {
+    for (const [currency, amount] of [...(goalCounts(set.slot, now) ? [['score', goalScore]] as const : []), ['gold', goalGold]] as const) {
       writes.push(db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
         SELECT ?, s.user_id, ?, ?, '자유투 대결 골', ?, sh.created_at, ? FROM freethrow_shots sh JOIN freethrow_sets s ON s.id = sh.set_id WHERE sh.id = ?`)
         .bind(crypto.randomUUID(), currency, amount, `freethrow:goal:${setId}:${index}:${currency}`, currency === 'score' ? weekStart(date) : null, id));

@@ -1,4 +1,4 @@
-import { CLAW_RULES } from '../shared/balance';
+import { CLAW_RULES, PLAY_RULES, playClosed } from '../shared/balance';
 import { ADMIN_LIMITS, type AdminClawConfig } from '../shared/admin';
 import { CLAW, MACHINE, createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
 import type { ClawCoinInput, ClawPlayInput, ClawResponse, ClawResult, ClawState, ClawSummary } from '../shared/types';
@@ -184,6 +184,7 @@ export async function playClaw(db: D1Database, user: Actor, input: Record<string
   const stop = play.stop == null ? null : Number(play.stop.toFixed(2));
   const old = await priorPlay(db, user, play, stop);
   if (old) return replay(db, user, old, now);
+  if (playClosed(now)) throw new ClawError(409, 'PLAY_CLOSED', PLAY_RULES.closedMessage);
   await machine(db, user, now);
   const [account, config] = await Promise.all([
     db.prepare(`SELECT ${machineColumns}, power_counter FROM claw_accounts WHERE user_id = ?`).bind(user.id).first<AccountRow>(),

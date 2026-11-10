@@ -14,6 +14,7 @@ import type {
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse, NotificationsResponse, NotificationSummary,
   AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
 import type { RankingPeriod } from "../shared/ranking-periods";
+import type { RankResult, RankResultKey } from "../shared/ranking-rewards";
 import type { StockDetailView, StockMarketView, StockNewsPage, StockTradeInput, StockTradeResponse, StockUnchanged } from "../shared/stock-types";
 import type { ArtKey } from "../shared/characters";
 import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/admin";
@@ -70,6 +71,7 @@ export const api = {
   deleteProfilePhoto: (expectedUserId: string) => request<AuthResponse>("/me/photo", { method: "DELETE", body: JSON.stringify({ expectedUserId }) }),
   uploadLuckPhoto: (roundDate: string, image: string) => request<LuckPhotoResponse>("/games/luck/photo", { method: "PUT", body: JSON.stringify({ roundDate, image }) }),
   launchGift: () => request<LaunchGiftResponse>("/events/launch-gift", { method: "POST", body: "{}" }),
+  rankResultsSeen: (results: RankResultKey[]) => request<{ results: RankResult[] }>("/ranking/results/seen", { method: "POST", body: JSON.stringify({ results: results.map(({ period, key }) => ({ period, key })) }) }),
   claw: () => request<ClawResponse>("/claw"),
   buyClawCoins: (input: ClawCoinInput) => request<ClawResponse>("/claw/coins", { method: "POST", body: JSON.stringify(input) }),
   playClaw: (input: ClawPlayInput) => request<ClawResponse>("/claw/play", { method: "POST", body: JSON.stringify(input) }),

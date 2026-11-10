@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FREETHROW_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, SLOT_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FREETHROW_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, PLAY_RULES, SLOT_RULES } from "../../shared/balance";
+import { usePlayClosed } from "../play-window";
 import { ticketCount, useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
 import type { CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice } from "../../shared/types";
@@ -173,7 +174,7 @@ function catchmindRow(game: CatchmindSummary, me: string, displayNameOf: Display
     sub: game.winner
       ? `${answer} · ${game.winner.username === me ? "내가 맞힘" : `${honorific(displayNameOf(game.winner.username, game.winner.displayName))} 정답`} · 다음 출제 ${game.turn ? honorific(displayNameOf(game.turn.username, game.turn.displayName)) : "대기"}`
       : `${answer} · 다음 출제 ${game.turn ? honorific(displayNameOf(game.turn.username, game.turn.displayName)) : drawer}`,
-    right: game.winner?.username === me ? `+${CATCHMIND_RULES.score}점` : "",
+    right: game.winner?.username === me ? game.winnerScored ? `+${CATCHMIND_RULES.score}점` : `+${CATCHMIND_RULES.gold}G` : "",
   };
 }
 export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, kuji: KujiSummary | null, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username): GameRow[] {
@@ -378,7 +379,7 @@ const rankColors = [
 ];
 function settleText() {
   const days = 6 - kstParts().weekday;
-  return days ? `이번 주 종료까지 ${days}일` : "오늘 주간 집계 종료";
+  return days ? `이번 주 종료까지 ${days}일` : "오늘 밤 11시 50분 집계 마감";
 }
 
 function AttendanceCard({ data, go, onClaimed }: {
@@ -589,6 +590,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
   const max = Math.max(top?.weeklyScore ?? 0, 1);
   const score = useCountUp(me?.weeklyScore ?? 0);
   const summary = rankSummary(table, data.username);
+  const playClosed = usePlayClosed();
   return (
     <div className={`home ${evening ? "evening" : ""}`}>
       <Room data={data} gold={data.gold} evening={evening} jumpRequest={jumpRequest} onJumpDone={finishJump} go={go} />
@@ -611,6 +613,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
         )}
       </div>
       <div className="home-body">
+        {playClosed && <p className="connection-banner play-closed-banner" role="status">{PLAY_RULES.closedMessage}</p>}
         <AttendanceCard
           data={data}
           go={go}

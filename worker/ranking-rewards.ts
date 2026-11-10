@@ -1,5 +1,5 @@
 import { addDays, mondayOf, rankingRange, scoreGameDate, weeksOverlapping } from '../shared/ranking-periods';
-import { RANKING_REWARDS, RANKING_SETTLEMENT_CATCHUP, rankScores, rankingReward, type RewardPeriod } from '../shared/ranking-rewards';
+import { RANKING_REWARDS, RANKING_SETTLEMENT_CATCHUP, rankScores, rankingReward, type RankResult, type RankResultKey, type RewardPeriod } from '../shared/ranking-rewards';
 import { notify } from './notifications';
 import { syncAchievementsFor } from './achievements';
 import { kstDate } from './rules';
@@ -33,10 +33,16 @@ export function duePeriods(today: string): DuePeriod[] {
   return due;
 }
 
+/** A batch that lost the race for the settlement row: its plain INSERT hit the
+ * (period, key) primary key, so D1 rolled the whole batch back. */
+const lostSettlementRace = (error: unknown) =>
+  error instanceof Error && /UNIQUE constraint failed: ranking_settlements\.period, ranking_settlements\.key/.test(error.message);
+
 /** Pay every finished period that has no settlement row yet. Two reads and one
- * batch per settlement; a day with nothing owed costs a single indexed read.
- * `INSERT OR IGNORE` on both the payout reference and the settlement row makes
- * a retry, a concurrent Cron and a replayed catch-up all harmless. */
+ * batch per settlement; a run with nothing owed costs a single indexed read.
+ * The batch claims the settlement row first with a plain INSERT, so exactly one
+ * run's snapshot is ever paid: a concurrent run that read different scores
+ * fails on the primary key and its whole batch rolls back. */
 export async function settleDueRankingRewards(db: D1Database, now: Date): Promise<void> {
   const due = duePeriods(kstDate(now));
   if (!due.length) return;
@@ -71,26 +77,71 @@ export async function settleDueRankingRewards(db: D1Database, now: Date): Promis
     const ordered = players.results
       .map(player => ({ userId: player.id, username: player.username, score: totals.get(player.id) ?? 0 }))
       .sort((left, right) => right.score - left.score || left.username.localeCompare(right.username));
-    const payouts = rankScores(ordered)
-      .map(entry => ({ ...entry, gold: rankingReward(period.period, entry.rank, entry.score) }))
-      .filter(entry => entry.gold > 0);
-    await db.batch([
-      ...payouts.flatMap(entry => {
-        const reference = `rank:${period.period}:${period.key}:${entry.userId}`;
-        return [
-          db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
-            VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
-            .bind(crypto.randomUUID(), entry.userId, entry.gold, RANKING_REWARDS[period.period].reason, reference, createdAt),
-          // Only this player sees it, and only once: the reference is UNIQUE.
-          notify(db, { kind: 'rank', audience: 'user', userId: entry.userId, actorId: entry.userId,
-            payload: { kind: 'rank', period: period.period, place: entry.rank, gold: entry.gold },
-            reference: `notification:${reference}`, createdAt }),
-        ];
-      }),
-      db.prepare('INSERT OR IGNORE INTO ranking_settlements (period, key, settled_at) VALUES (?, ?, ?)')
-        .bind(period.period, period.key, createdAt),
-    ]);
+    const ranked = rankScores(ordered)
+      .map(entry => ({ ...entry, gold: rankingReward(period.period, entry.rank, entry.score) }));
+    const payouts = ranked.filter(entry => entry.gold > 0);
+    try {
+      await db.batch([
+        // First statement on purpose: the whole period commits under one claim.
+        db.prepare('INSERT INTO ranking_settlements (period, key, settled_at) VALUES (?, ?, ?)')
+          .bind(period.period, period.key, createdAt),
+        // Every ranked player's snapshot, paid or not, for the result dialog.
+        ...ranked.map(entry => db.prepare(`INSERT INTO ranking_results (period, key, user_id, place, score, gold, players)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(period.period, period.key, entry.userId, entry.rank, entry.score, entry.gold, ranked.length)),
+        ...payouts.flatMap(entry => {
+          const reference = `rank:${period.period}:${period.key}:${entry.userId}`;
+          return [
+            db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
+              VALUES (?, ?, 'gold', ?, ?, ?, ?)`)
+              .bind(crypto.randomUUID(), entry.userId, entry.gold, RANKING_REWARDS[period.period].reason, reference, createdAt),
+            // Only this player sees it, and only once: the reference is UNIQUE.
+            notify(db, { kind: 'rank', audience: 'user', userId: entry.userId, actorId: entry.userId,
+              payload: { kind: 'rank', period: period.period, place: entry.rank, gold: entry.gold },
+              reference: `notification:${reference}`, createdAt }),
+          ];
+        }),
+      ]);
+    } catch (error) {
+      // Another run already paid this period from its own snapshot. Anything
+      // else is a real failure: nothing committed, and the next run retries.
+      if (lostSettlementRace(error)) continue;
+      throw error;
+    }
     // A first place or a podium finish is also an achievement.
     await syncAchievementsFor(db, payouts.map(entry => entry.userId), now);
   }
+}
+
+interface ResultRow { period: RewardPeriod; key: string; place: number; score: number; gold: number; players: number }
+
+/** The newest finished week and month: the periods a result dialog may still
+ * announce. Older unseen results are history the ranking screen already shows. */
+function latestPeriods(today: string): { week: string; month: string } {
+  return { week: addDays(mondayOf(today), -7), month: previousMonth(monthKey(today), 1) };
+}
+
+/** This player's unseen results for the newest finished week and month, from
+ * one partial-index probe (at most two rows). */
+export async function readRankResults(db: D1Database, user: { id: string; role: string }, now: Date): Promise<RankResult[]> {
+  if (user.role !== 'player') return [];
+  const latest = latestPeriods(kstDate(now));
+  const rows = (await db.prepare(`SELECT period, key, place, score, gold, players FROM ranking_results
+    WHERE user_id = ? AND seen_at IS NULL AND ((period = 'week' AND key = ?) OR (period = 'month' AND key = ?))
+    ORDER BY period DESC`).bind(user.id, latest.week, latest.month).all<ResultRow>()).results;
+  return rows.map(row => ({ ...row, ...range(row.period, row.key) }));
+}
+
+export class RankResultError extends Error {
+  constructor(readonly status: number, readonly code: string, message: string) { super(message); }
+}
+/** Closing the dialog marks the shown results as seen, on every device. */
+export async function markRankResultsSeen(db: D1Database, user: { id: string; role: string }, input: unknown, now: Date): Promise<{ results: RankResult[] }> {
+  const list = input && typeof input === 'object' ? (input as { results?: unknown }).results : undefined;
+  const valid = Array.isArray(list) && list.length >= 1 && list.length <= 2 && list.every(item => item && typeof item === 'object'
+    && ((item as RankResultKey).period === 'week' || (item as RankResultKey).period === 'month')
+    && typeof (item as RankResultKey).key === 'string' && (item as RankResultKey).key.length <= 10);
+  if (!valid) throw new RankResultError(400, 'INVALID_RESULTS', '확인할 랭킹 결과를 다시 불러와 주세요.');
+  await db.batch((list as RankResultKey[]).map(item => db.prepare(`UPDATE ranking_results SET seen_at = ?
+    WHERE user_id = ? AND period = ? AND key = ? AND seen_at IS NULL`).bind(now.toISOString(), user.id, item.period, item.key)));
+  return { results: await readRankResults(db, user, now) };
 }

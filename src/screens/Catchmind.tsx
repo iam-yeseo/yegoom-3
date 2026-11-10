@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { CATCHMIND_RULES } from "../../shared/balance";
+import { CATCHMIND_RULES, PLAY_RULES } from "../../shared/balance";
+import { kstDateOf } from "../../shared/ranking-periods";
+import { todayKst, usePlayClosed } from "../play-window";
 import type { CatchmindAction, CatchmindInput, CatchmindRound, CatchmindState, User } from "../../shared/types";
 import { useCatchmind } from "../catchmind";
 import { DrawingCanvas } from "../components/DrawingCanvas";
@@ -97,7 +99,7 @@ function Result({ state, user, locked, onNext, onSkip, canSkip, demo }: {
     {round.winner ? <div className="pg-card pg-winner" ref={winner}>
       <Avatar username={round.winner.username} userId={round.winner.id} photoVersion={round.winner.photoVersion} artKey={demo ? undefined : round.winner.character} size={64} />
       <div><small>{round.winner.id === user.id ? "내가 맞힘" : "맞힌 사람"}</small><strong><PersonName username={round.winner.username} fallback={round.winner.displayName} /></strong></div>
-      <div className="pg-winner-points"><b>+{CATCHMIND_RULES.score}점</b><b>+{CATCHMIND_RULES.gold}G</b></div>
+      <div className="pg-winner-points">{round.winnerScored ? <b>+{CATCHMIND_RULES.score}점</b> : <small>마감 후 정답이라 점수는 집계되지 않아요</small>}<b>+{CATCHMIND_RULES.gold}G</b></div>
     </div> : <div className="pg-ended" role="status"><strong>{round.endReason === "manual" ? "출제자가 판을 마쳤어요" : "아무도 맞히지 못했어요"}</strong><span>보상 없이 판이 끝났어요. {state.turn ? `다음은 ${honorific(displayNameOf(state.turn.username, state.turn.displayName))}이 그려요.` : "다음 출제자를 기다리고 있어요."}</span></div>}
     <FailCount round={round} demo={demo} />
     <GuessLog round={round} />
@@ -109,6 +111,7 @@ function Result({ state, user, locked, onNext, onSkip, canSkip, demo }: {
 export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: () => void; demo?: boolean }) {
   const displayNameOf = useDisplayNameLookup();
   const game = useCatchmind();
+  const closed = usePlayClosed();
   const latest = useRef(game);
   latest.current = game;
   const [answer, setAnswer] = useState("");
@@ -203,6 +206,7 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
       {state && round?.status === "draft" && (isDrawer ? <>
         <div className="pg-prompt"><span>제시어</span><strong>{round.word ?? "불러오는 중"}</strong></div>
         <div className="cm-draft-note"><span>나에게만 보이는 제시어예요.</span><button className="text-button" disabled={locked || !state.canReroll} onClick={() => void run("reroll", { ...mutation(), wordVersion: round.wordVersion })}>제시어 바꾸기 ({round.rerollsLeft}회 남음)</button></div>
+        {closed && <p className="subtle-note" role="status">{PLAY_RULES.closedMessage}</p>}
         <DrawingCanvas key={`${round.id}:${round.wordVersion}`} disabled={locked || !state.canPublish} publishing={game.busy && game.pending?.action === "publish"} onPublish={publish} />
       </> : <div className="pg-card cm-waiting">
         <Avatar username={round.drawer.username} userId={round.drawer.id} photoVersion={round.drawer.photoVersion} artKey={demo ? undefined : round.drawer.character} size={64} />
@@ -215,6 +219,8 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
         <FailCount round={round} demo={demo} />
         {round.hint && <HintTiles key={round.id} hint={round.hint} />}
         <GuessLog round={round} />
+        {closed ? <p className="subtle-note" role="status">{PLAY_RULES.closedMessage}</p>
+          : round.publishedAt && kstDateOf(round.publishedAt) < todayKst() && <p className="subtle-note" role="status">지난 날 공개된 그림이라 맞혀도 점수는 집계되지 않아요. 골드는 받아요.</p>}
         {user.role === "player" && !isDrawer ? <form className="pg-answer" onSubmit={guess} ref={form}>
           <input aria-label="캐치마인드 정답" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="정답 입력" maxLength={CATCHMIND_RULES.maxAnswerLength} disabled={locked || !state.canGuess} autoComplete="off" />
           <button type="submit" disabled={locked || !state.canGuess || !answer.replace(/\s/g, "")}>{acting || game.busy ? "확인 중…" : "정답"}</button>
@@ -229,6 +235,7 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
       <details className="pg-card cm-help"><summary>게임 방법</summary><ul>
         <li>{CATCHMIND_RULES.hintAfter}번째 오답에 첫 글자 힌트가 나오고, {CATCHMIND_RULES.endAfter}번째 오답이면 보상 없이 즉시 끝나요.</li>
         <li>첫 정답자는 {CATCHMIND_RULES.score}점과 {CATCHMIND_RULES.gold}G를 받아요.</li>
+        <li>그림 공개와 정답은 매일 밤 11시 50분에 마감해요. 그림이 공개된 날 마감 전에 맞혀야 점수가 들어가고, 그 뒤에 맞히면 골드만 받아요.</li>
         <li>정답·오답·수동 종료 모두 활성 플레이어의 로그인 아이디 순서대로 다음 출제를 맡아요.</li>
         <li>다음 출제자가 {CATCHMIND_RULES.skipAfterMs / 60000}분 안에 시작하지 않으면 다른 플레이어가 차례를 넘길 수 있어요.</li>
         <li>보여 준 제시어와 바꾸기 전 단어는 다시 나오지 않아요. 전체 제시어를 다 쓰면 새로 시작해요.</li>

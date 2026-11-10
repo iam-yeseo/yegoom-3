@@ -284,7 +284,7 @@ export function FreeThrow({ user, onBack, demo = false, transact, onSummary, onP
       <li>같은 동작이면 언제나 같은 슛이 나가요. 방금 슛의 세기와 방향을 보고 조절해 보세요.</li>
       <li>PC에서는 마우스로 공을 끌어서 똑같이 던져요.</li>
     </ol>
-    <p>연습 모드는 횟수 제한도 보상도 없어요. 공식 도전은 한국 시간 {HOURS}시마다 {FREETHROW_RULES.shotsPerSet}구 한 세트예요. 1골마다 {FREETHROW_RULES.goalScore}점 + {FREETHROW_RULES.goalGold}G를 받고, 랭킹 점수에도 들어가요. 세트를 시작하면 그 시간의 기회를 쓴 거예요. 시간이 끝나도 {FREETHROW_RULES.graceMs / 60_000}분 안에는 마저 던질 수 있고, 그 뒤 남은 공은 실패로 기록돼요.</p></details>
+    <p>연습 모드는 횟수 제한도 보상도 없어요. 공식 도전은 한국 시간 {HOURS}시마다 {FREETHROW_RULES.shotsPerSet}구 한 세트예요. 1골마다 {FREETHROW_RULES.goalScore}점 + {FREETHROW_RULES.goalGold}G를 받고, 랭킹 점수에도 들어가요. 세트를 시작하면 그 시간의 기회를 쓴 거예요. 시간이 끝나도 {FREETHROW_RULES.graceMs / 60_000}분 안에는 마저 던질 수 있고, 그 뒤 남은 공은 실패로 기록돼요. 공식 도전은 밤 11시 50분에 마감하고, 그 뒤에 들어간 골은 골드만 받고 점수에는 들어가지 않아요.</p></details>
   </section>;
 }
 
@@ -308,7 +308,7 @@ function OfficialPanel({ official, admin, starting, error, onStart, onPractice, 
     <BallRow results={set.shots.map(shot => shot.made)} />
   </>;
   else if (set && set.finished) body = <>
-    <div className="freethrow-official-head is-done"><strong>{set.made}골 성공!</strong><small>{set.made ? `+${set.points}점 · +${set.gold}G 받았어요` : "이번엔 골이 없었어요. 다음 세트에서 만회해요!"}</small></div>
+    <div className="freethrow-official-head is-done"><strong>{set.made}골 성공!</strong><small>{set.made ? `${set.points ? `+${set.points}점 · ` : ""}+${set.gold}G 받았어요${set.points < set.made * FREETHROW_RULES.goalScore ? " (밤 11시 50분 이후 골은 점수에 들어가지 않아요)" : ""}` : "이번엔 골이 없었어요. 다음 세트에서 만회해요!"}</small></div>
     <BallRow results={set.shots.map(shot => shot.made)} />
     <div className="freethrow-official-next"><span>다음 세트 {kstHour(official.nextSlotAt)}</span><button type="button" className="text-button" onClick={onPractice}>연습하러 가기</button></div>
   </>;

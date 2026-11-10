@@ -21,7 +21,7 @@ function draft(snapshot: BootstrapResponse, version: number): CatchmindResponse 
   return { version, viewerId: player.id, serverTime: snapshot.serverTime, catchmind: {
     round: { id: 'auth-draft', number: 1, status: 'draft', drawer, word: version === 7 ? '사과' : '바나나',
       wordVersion: version - 7, rerollsLeft: CATCHMIND_RULES.rerolls - (version - 7), image: null, wrongCount: 0, hint: null,
-      winner: null, endReason: null, publishedAt: null, endedAt: null, guesses: [] },
+      winner: null, winnerScored: false, endReason: null, publishedAt: null, endedAt: null, guesses: [] },
     turn: drawer, nextDrawer: next ? { ...next, character: next.character ?? 'cat' } : drawer,
     previousRound: null, canClaim: false, canReroll: true, canPublish: true,
     canGuess: false, canEnd: false, canNext: false, canSkip: false, skipAvailableAt: null,
