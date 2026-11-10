@@ -17,12 +17,16 @@ const GIFT_COLORS = ["#ef6b5b", "#5cc2a0", "#7fb4ec"] as const;
 export const SANTA_IMAGES = ["sky", "sleigh", "chimney", "house-1", "house-2", "house-3", "house-4", ...GIFT_NAMES.map(name => `gift-${name}`)]
   .map(name => `/santa/${name}.webp`);
 
-/** House height for each chimney level: a taller chimney top stands on a bigger house. */
-export const LEVEL_HOUSE_HEIGHT = [158, 184, 210, 236, 262] as const;
-/** Where a house is drawn when its chimney's centre is at screen x. */
-export function housePlacement(house: Pick<SantaHouse, "style" | "level">, chimney: number) {
+/** How far each level's chimney mouth rises above the roof under it. A taller
+ * chimney top mostly stands on a bigger house, so the chimney itself grows a little. */
+export const LEVEL_RISE = [34, 42, 50, 58, 66] as const;
+/** Where a house is drawn when its chimney's centre is at screen x. The chimney
+ * stands in the middle of every house; the house is sized so the roof there
+ * sits LEVEL_RISE below the chimney mouth. */
+export function housePlacement(house: Pick<SantaHouse, "style" | "level" | "top">, chimney: number) {
   const art = SANTA_ART.houses[house.style % SANTA_ART.houses.length]!;
-  const height = LEVEL_HOUSE_HEIGHT[house.level] ?? LEVEL_HOUSE_HEIGHT[0], scale = height / art.height;
+  const under = art.roof[Math.round(art.chimneyX / art.roofStep)]! / art.height;
+  const height = (HOUSE_BOTTOM - house.top - (LEVEL_RISE[house.level] ?? LEVEL_RISE[0])) / (1 - under), scale = height / art.height;
   const left = chimney - art.chimneyX * scale, top = HOUSE_BOTTOM - height;
   const index = (x: number) => Math.round((x - left) / (art.roofStep * scale));
   /** Roof top (snow surface) y at screen x, or null beside the house. */
@@ -32,7 +36,7 @@ export function housePlacement(house: Pick<SantaHouse, "style" | "level">, chimn
   return { art, scale, left, top, width: art.width * scale, height, right: left + art.width * scale, roofAt, roofLine };
 }
 /** Roof (or ground) y at screen x, for a gift landing near a house. */
-export function surfaceAt(house: Pick<SantaHouse, "style" | "level">, chimney: number, x: number) {
+export function surfaceAt(house: Pick<SantaHouse, "style" | "level" | "top">, chimney: number, x: number) {
   return Math.min(GROUND, housePlacement(house, chimney).roofAt(x) ?? GROUND);
 }
 
@@ -169,7 +173,7 @@ export class SantaRenderer {
       ctx.fillStyle = light; ctx.fillRect(chimney - 80, house.top - 80, 160, 160);
     }
     // The chimney stands on the roof in front of it: its foot is cut along the
-    // roof's snow line, so it rises out of the snow on the slope.
+    // roof's snow line, so it rises out of the snow on the ridge.
     const from = chimney - CHIMNEY.cap / 2 - 2, to = chimney + CHIMNEY.cap / 2 + 2;
     ctx.save();
     ctx.beginPath(); ctx.moveTo(from, 0); ctx.lineTo(to, 0);

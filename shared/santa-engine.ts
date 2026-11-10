@@ -55,8 +55,8 @@ export interface DropResult {
 
 const LEVELS = SANTA_WORLD.tops.length;
 export const HOUSE_STYLES = 4;
-/** The last house style is narrow: it only fits a chimney as one of the big houses. */
-export const NARROW_HOUSE_LEVEL = 3;
+/** The last house style is narrow: its chimney only fits it as the biggest house. */
+export const NARROW_HOUSE_LEVEL = 4;
 export const GIFT_STYLES = 3;
 /** Chimney centre minus gift centre within this distance → the gift drops in. */
 export const HIT_TOLERANCE = SANTA_WORLD.mouthHalf - SANTA_WORLD.giftHalf;

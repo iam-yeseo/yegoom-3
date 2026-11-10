@@ -25,8 +25,6 @@ GIFT_SIZE = 22
 # Houses are measured at this height; the canvas scales them per chimney level
 # (taller chimney tops stand on bigger houses), up to about this size.
 HOUSE_HEIGHT = 250
-# The chimney stands this far down the roof's right slope (peak → eave).
-CHIMNEY_ALONG_SLOPE = 0.42
 # The chimney's mouth is 38 logical px wide (engine mouthHalf 19).
 CHIMNEY_MOUTH = 38
 SKY_HEIGHT = 560
@@ -82,8 +80,8 @@ def main(src: Path) -> None:
         save(square, f"gift-{color}", (GIFT_SIZE * 2, GIFT_SIZE * 2))
     geometry["giftSize"] = GIFT_SIZE
 
-    # Houses: the roof line (first opaque row per column) and where the chimney
-    # stands: on the right slope of the highest peak, part way down to the eave.
+    # Houses: the roof line (first opaque row per column). Every chimney stands
+    # in the middle of its house.
     houses = []
     for number in (1, 2, 3, 4):
         house = trim(load(src, f"house-{number}"))
@@ -98,10 +96,7 @@ def main(src: Path) -> None:
             column = alpha[:, min(w - 1, int(x / scale))]
             rows = np.where(column)[0]
             roof.append(round(float(rows.min()) * scale, 1) if rows.size else float(HOUSE_HEIGHT))
-        peak = min(roof)
-        # Rightmost column within 3 px of the peak, then part way down the right slope.
-        peak_index = max(i for i, y in enumerate(roof) if y <= peak + 3)
-        chimney = round(peak_index + (len(roof) - 1 - peak_index) * CHIMNEY_ALONG_SLOPE)
+        chimney = round(width / 2 / step)
         houses.append({"width": width, "height": HOUSE_HEIGHT, "chimneyX": chimney * step, "roofStep": step, "roof": roof})
     geometry["houses"] = houses
 
