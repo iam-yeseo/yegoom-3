@@ -212,7 +212,7 @@ export class SantaController {
         flight.vy += gravity * dt; flight.x += flight.vx * dt; flight.y += flight.vy * dt; flight.angle += flight.spin * dt;
         // An early gift beside the chimney is nudged along by its wall.
         if (flight.phase === "drop" && flight.y > house.top && flight.x + GIFT > chimney - CHIMNEY_HALF && flight.x < chimney) flight.x = chimney - CHIMNEY_HALF - GIFT;
-        const floor = surfaceAt(house.style, chimney, flight.x) - GIFT;
+        const floor = surfaceAt(house, chimney, flight.x) - GIFT;
         if (flight.y >= floor && flight.vy > 0) { flight.y = floor; flight.phase = "landed"; flight.landedAt = now; this.sound.thud(); }
       } else {
         flight.x -= house.speed * dt;

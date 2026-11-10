@@ -19,11 +19,13 @@ export const SANTA_WORLD = {
   /** Chimney centre at the start and end of each house's approach. */
   startX: 440, endX: -80,
   /** First house speed (px/ms); the last one is speedUp faster. */
-  baseSpeed: 170 / 1000, speedUp: 0.15,
+  baseSpeed: 160 / 1000, speedUp: 0.15,
   /** Gift half width, chimney mouth half width (inside), rim width; they match the drawn art. */
-  giftHalf: 11, mouthHalf: 23, wall: 25,
-  /** Chimney mouth y for each height level, lowest chimney first. */
-  tops: [326, 294, 262, 230, 198],
+  giftHalf: 8, mouthHalf: 19, wall: 21,
+  /** Chimney mouth y for each height level, lowest chimney first. Taller
+   * levels stand on bigger houses (src/santa/render.ts), so the chimney itself
+   * only rises a little more each level. */
+  tops: [366, 338, 308, 278, 250],
   ground: 528,
 } as const;
 export type DropKind = 'in' | 'rim-early' | 'rim-late' | 'early' | 'late' | 'pass';
@@ -53,6 +55,8 @@ export interface DropResult {
 
 const LEVELS = SANTA_WORLD.tops.length;
 export const HOUSE_STYLES = 4;
+/** The last house style is narrow: it only fits a chimney as one of the big houses. */
+export const NARROW_HOUSE_LEVEL = 3;
 export const GIFT_STYLES = 3;
 /** Chimney centre minus gift centre within this distance → the gift drops in. */
 export const HIT_TOLERANCE = SANTA_WORLD.mouthHalf - SANTA_WORLD.giftHalf;
@@ -95,7 +99,7 @@ export function santaCourse(slot: number, houses = 10): SantaHouse[] {
     const speed = houseSpeed(index, houses);
     return { index, level, top: SANTA_WORLD.tops[level]!, speed,
       approachMs: Math.floor((SANTA_WORLD.startX - SANTA_WORLD.endX) / speed),
-      style: pick(next, HOUSE_STYLES), gift: pick(next, GIFT_STYLES) };
+      style: pick(next, level >= NARROW_HOUSE_LEVEL ? HOUSE_STYLES : HOUSE_STYLES - 1), gift: pick(next, GIFT_STYLES) };
   });
 }
 

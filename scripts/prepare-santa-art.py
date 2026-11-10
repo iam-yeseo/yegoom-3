@@ -21,10 +21,14 @@ ALPHA = 24  # faint generator noise below this is treated as transparent
 
 # Logical (canvas) sizes; files are written at about 2× for sharp phones.
 SLEIGH_WIDTH = 180
-GIFT_SIZE = 30
-HOUSE_HEIGHT = {1: 185, 2: 180, 3: 172, 4: 195}
-# The chimney's mouth is 46 logical px wide (engine mouthHalf 23).
-CHIMNEY_MOUTH = 46
+GIFT_SIZE = 22
+# Houses are measured at this height; the canvas scales them per chimney level
+# (taller chimney tops stand on bigger houses), up to about this size.
+HOUSE_HEIGHT = 250
+# The chimney stands this far down the roof's right slope (peak → eave).
+CHIMNEY_ALONG_SLOPE = 0.42
+# The chimney's mouth is 38 logical px wide (engine mouthHalf 19).
+CHIMNEY_MOUTH = 38
 SKY_HEIGHT = 560
 SKY_WIDTH = 360
 # The moon sits top right, clear of the sleigh (logical x).
@@ -79,26 +83,26 @@ def main(src: Path) -> None:
     geometry["giftSize"] = GIFT_SIZE
 
     # Houses: the roof line (first opaque row per column) and where the chimney
-    # stands, just right of the highest peak, so it rises from near the ridge.
+    # stands: on the right slope of the highest peak, part way down to the eave.
     houses = []
     for number in (1, 2, 3, 4):
         house = trim(load(src, f"house-{number}"))
         w, h = house.size
-        scale = HOUSE_HEIGHT[number] / h
+        scale = HOUSE_HEIGHT / h
         width = round(w * scale)
-        save(house, f"house-{number}", (width * 2, HOUSE_HEIGHT[number] * 2))
+        save(house, f"house-{number}", (width * 2, HOUSE_HEIGHT * 2))
         alpha = np.array(house.getchannel("A")) > 128
         step = 2  # logical px between roof samples
         roof = []
         for x in range(0, width + 1, step):
             column = alpha[:, min(w - 1, int(x / scale))]
             rows = np.where(column)[0]
-            roof.append(round(float(rows.min()) * scale, 1) if rows.size else float(HOUSE_HEIGHT[number]))
+            roof.append(round(float(rows.min()) * scale, 1) if rows.size else float(HOUSE_HEIGHT))
         peak = min(roof)
-        # Rightmost column within 3 px of the peak, then down the right slope by 16 px.
+        # Rightmost column within 3 px of the peak, then part way down the right slope.
         peak_index = max(i for i, y in enumerate(roof) if y <= peak + 3)
-        chimney = next(i for i in range(peak_index, len(roof)) if roof[i] >= peak + 16)
-        houses.append({"width": width, "height": HOUSE_HEIGHT[number], "chimneyX": chimney * step, "roofStep": step, "roof": roof})
+        chimney = round(peak_index + (len(roof) - 1 - peak_index) * CHIMNEY_ALONG_SLOPE)
+        houses.append({"width": width, "height": HOUSE_HEIGHT, "chimneyX": chimney * step, "roofStep": step, "roof": roof})
     geometry["houses"] = houses
 
     # Chimney: scaled so the mouth is CHIMNEY_MOUTH wide; mouthY is the mouth's

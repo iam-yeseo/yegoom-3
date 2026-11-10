@@ -17,19 +17,23 @@ const GIFT_COLORS = ["#ef6b5b", "#5cc2a0", "#7fb4ec"] as const;
 export const SANTA_IMAGES = ["sky", "sleigh", "chimney", "house-1", "house-2", "house-3", "house-4", ...GIFT_NAMES.map(name => `gift-${name}`)]
   .map(name => `/santa/${name}.webp`);
 
-const houseArt = (style: number) => SANTA_ART.houses[style % SANTA_ART.houses.length]!;
+/** House height for each chimney level: a taller chimney top stands on a bigger house. */
+export const LEVEL_HOUSE_HEIGHT = [158, 184, 210, 236, 262] as const;
 /** Where a house is drawn when its chimney's centre is at screen x. */
-export function housePlacement(style: number, chimney: number) {
-  const art = houseArt(style);
-  const left = chimney - art.chimneyX, top = HOUSE_BOTTOM - art.height;
-  return { art, left, top, right: left + art.width };
+export function housePlacement(house: Pick<SantaHouse, "style" | "level">, chimney: number) {
+  const art = SANTA_ART.houses[house.style % SANTA_ART.houses.length]!;
+  const height = LEVEL_HOUSE_HEIGHT[house.level] ?? LEVEL_HOUSE_HEIGHT[0], scale = height / art.height;
+  const left = chimney - art.chimneyX * scale, top = HOUSE_BOTTOM - height;
+  const index = (x: number) => Math.round((x - left) / (art.roofStep * scale));
+  /** Roof top (snow surface) y at screen x, or null beside the house. */
+  const roofAt = (x: number) => { const i = index(x); return i < 0 || i >= art.roof.length ? null : top + art.roof[i]! * scale; };
+  /** The roof line carried on past the eaves (for the chimney's foot). */
+  const roofLine = (x: number) => top + art.roof[Math.max(0, Math.min(art.roof.length - 1, index(x)))]! * scale;
+  return { art, scale, left, top, width: art.width * scale, height, right: left + art.width * scale, roofAt, roofLine };
 }
 /** Roof (or ground) y at screen x, for a gift landing near a house. */
-export function surfaceAt(style: number, chimney: number, x: number) {
-  const { art, left, top } = housePlacement(style, chimney);
-  const index = Math.round((x - left) / art.roofStep);
-  if (index < 0 || index >= art.roof.length) return GROUND;
-  return Math.min(GROUND, top + art.roof[index]!);
+export function surfaceAt(house: Pick<SantaHouse, "style" | "level">, chimney: number, x: number) {
+  return Math.min(GROUND, housePlacement(house, chimney).roofAt(x) ?? GROUND);
 }
 
 export interface GiftSprite { x: number; y: number; angle: number; color: number; alpha: number;
@@ -148,34 +152,37 @@ export class SantaRenderer {
     for (let x = -offset; x < W + spacing; x += spacing) { ctx.beginPath(); ctx.ellipse(x, GROUND + 16, 12, 3, 0, 0, Math.PI * 2); ctx.fill(); }
   }
   private drawHouse(house: SantaHouse, chimney: number, glow: SantaScene["glow"]) {
-    const ctx = this.ctx, { art, left, top, right } = housePlacement(house.style, chimney);
-    if (right < -CHIMNEY.cap || left > W + CHIMNEY.cap) return;
+    const ctx = this.ctx, place = housePlacement(house, chimney);
+    if (place.right < -CHIMNEY.cap || place.left > W + CHIMNEY.cap) return;
+    const image = this.image(`house-${(house.style % SANTA_ART.houses.length) + 1}`);
+    if (image) ctx.drawImage(image, place.left, place.top, place.width, place.height);
+    else {
+      ctx.fillStyle = "#fff3e0";
+      ctx.beginPath(); ctx.moveTo(place.left, HOUSE_BOTTOM);
+      for (let x = place.left; x <= place.right; x += 4) ctx.lineTo(x, place.roofAt(x) ?? HOUSE_BOTTOM);
+      ctx.lineTo(place.right, HOUSE_BOTTOM); ctx.closePath(); ctx.fill();
+    }
     const amount = glow && glow.index === house.index ? glow.amount : 0;
     if (amount > 0) {
       const light = ctx.createRadialGradient(chimney, house.top, 4, chimney, house.top, 80);
       light.addColorStop(0, `rgba(255, 228, 140, ${0.8 * amount})`); light.addColorStop(1, "rgba(255, 228, 140, 0)");
       ctx.fillStyle = light; ctx.fillRect(chimney - 80, house.top - 80, 160, 160);
     }
-    // The chimney stands behind the roof: only the part above it shows.
-    const roofHere = top + art.roof[Math.round(art.chimneyX / art.roofStep)]!;
+    // The chimney stands on the roof in front of it: its foot is cut along the
+    // roof's snow line, so it rises out of the snow on the slope.
+    const from = chimney - CHIMNEY.cap / 2 - 2, to = chimney + CHIMNEY.cap / 2 + 2;
     ctx.save();
-    ctx.beginPath(); ctx.rect(0, 0, W, roofHere + 22); ctx.clip();
+    ctx.beginPath(); ctx.moveTo(from, 0); ctx.lineTo(to, 0);
+    for (let x = to; x >= from; x -= 2) ctx.lineTo(x, place.roofLine(x) + 4);
+    ctx.closePath(); ctx.clip();
     const chimneyImage = this.image("chimney");
     if (chimneyImage) ctx.drawImage(chimneyImage, chimney - CHIMNEY.mouthX, house.top - CHIMNEY.mouthY, CHIMNEY.width, CHIMNEY.height);
     else {
       ctx.fillStyle = "#e0604f"; ctx.fillRect(chimney - CHIMNEY.body / 2, house.top, CHIMNEY.body, GROUND - house.top);
-      ctx.fillStyle = "#f07a66"; ctx.fillRect(chimney - CHIMNEY.cap / 2, house.top - 12, CHIMNEY.cap, 26);
-      ctx.fillStyle = "#3a2430"; ctx.beginPath(); ctx.ellipse(chimney, house.top, SANTA_WORLD.mouthHalf, 6, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#f07a66"; ctx.fillRect(chimney - CHIMNEY.cap / 2, house.top - 10, CHIMNEY.cap, 22);
+      ctx.fillStyle = "#3a2430"; ctx.beginPath(); ctx.ellipse(chimney, house.top, SANTA_WORLD.mouthHalf, 5, 0, 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
-    const image = this.image(`house-${(house.style % SANTA_ART.houses.length) + 1}`);
-    if (image) ctx.drawImage(image, left, top, art.width, art.height);
-    else {
-      ctx.fillStyle = "#fff3e0";
-      ctx.beginPath(); ctx.moveTo(left, top + art.roof[0]!);
-      art.roof.forEach((y, i) => ctx.lineTo(left + i * art.roofStep, top + y));
-      ctx.lineTo(right, HOUSE_BOTTOM); ctx.lineTo(left, HOUSE_BOTTOM); ctx.closePath(); ctx.fill();
-    }
   }
   private drawGift(gift: GiftSprite) {
     const ctx = this.ctx, image = this.image(`gift-${GIFT_NAMES[gift.color % GIFT_NAMES.length]}`);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SANTA_RULES, santaDeadline, santaHalf, santaOpen, santaSlot, santaSlotStart } from '../shared/balance';
-import { HIT_TOLERANCE, RIM_TOLERANCE, SANTA_WORLD, chimneyX, fallMs, idealRelease, judgeDrop, santaCourse, validRelease } from '../shared/santa-engine';
+import { HIT_TOLERANCE, HOUSE_STYLES, NARROW_HOUSE_LEVEL, RIM_TOLERANCE, SANTA_WORLD, chimneyX, fallMs, idealRelease, judgeDrop, santaCourse, validRelease } from '../shared/santa-engine';
 
 const at = (kst: string) => Date.parse(`${kst}+09:00`);
 
@@ -42,6 +42,8 @@ describe('santa course', () => {
       levels.forEach((level, i) => { if (i) expect(level).not.toBe(levels[i - 1]); });
       course.forEach((house, i) => { if (i) expect(house.speed).toBeGreaterThan(course[i - 1]!.speed); });
     }
+    // The narrow house only appears among the big houses.
+    for (let slot = 40_000; slot < 40_200; slot++) for (const house of santaCourse(slot)) if (house.style === HOUSE_STYLES - 1) expect(house.level).toBeGreaterThanOrEqual(NARROW_HOUSE_LEVEL);
     const course = santaCourse(40_000);
     expect(course[9]!.speed / course[0]!.speed).toBeCloseTo(1 + SANTA_WORLD.speedUp, 10);
   });
@@ -97,6 +99,6 @@ describe('santa drops', () => {
 
   it('keeps every result for a fixed course (bump SANTA_RULES.engine when this changes)', () => {
     const fingerprint = course.map(house => [house.level, house.approachMs, idealRelease(house), judgeDrop(house, 1300).kind].join(':')).join(' ');
-    expect(fingerprint).toMatchInlineSnapshot(`"2:3058:1529:rim-early 0:3008:1410:rim-early 3:2960:1516:rim-early 1:2913:1390:rim-early 0:2867:1319:in 4:2823:1486:rim-early 2:2780:1350:in 4:2739:1431:rim-early 3:2698:1347:in 1:2659:1226:rim-late"`);
+    expect(fingerprint).toMatchInlineSnapshot(`"2:3250:1589:rim-early 0:3196:1484:rim-early 3:3145:1562:rim-early 1:3095:1451:rim-early 0:3046:1387:rim-early 4:3000:1510:rim-early 2:2954:1398:rim-early 4:2910:1452:rim-early 3:2867:1382:rim-early 1:2826:1277:in"`);
   });
 });
