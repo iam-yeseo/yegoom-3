@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { SANTA_RULES, santaDeadline, santaSlot, santaSlotStart } from '../shared/balance';
 import { scoreSource } from '../shared/ranking-periods';
 import { idealRelease, santaCourse } from '../shared/santa-engine';
-import { SantaError, dropSantaGift, getSantaState, getSantaSummary, startSantaRun } from '../worker/santa';
+import { SantaError, finishSantaRun, getSantaState, getSantaSummary, startSantaRun } from '../worker/santa';
 
 type Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
 const player = (id: string) => ({ id, role: 'player' as const });
@@ -39,9 +39,11 @@ async function start(user = 'min', now = MORNING, label = 'start') {
   const state = await startSantaRun(d1(), player(user), { requestId: rid(`${user}-${label}`) }, now);
   return state.current!;
 }
-const drop = (user: string, runId: string, index: number, release: number, now = MORNING) =>
-  dropSantaGift(d1(), player(user), { runId, index, release }, now);
+const finish = (user: string, runId: string, releases: number[], now = MORNING) =>
+  finishSantaRun(d1(), player(user), { runId, releases }, now);
 const hit = (index: number, slot = SLOT) => idealRelease(santaCourse(slot)[index]!);
+/** The first `hits` houses get a perfect drop, the rest are passed. */
+const plan = (hits: number, slot = SLOT) => Array.from({ length: SANTA_RULES.houses }, (_, i) => (i < hits ? hit(i, slot) : -1));
 const ledger = (runId: string) => db.prepare("SELECT currency, amount, reason, reference, week_start FROM ledger WHERE user_id = 'min' AND reference LIKE ? ORDER BY reference")
   .bind(`santa:%${runId}%`).all<{ currency: string; amount: number; reason: string; reference: string; week_start: string | null }>().then(result => result.results);
 
@@ -62,7 +64,7 @@ beforeEach(async () => {
 describe('santa runs', () => {
   it('derives availability without writing and keeps admins out', async () => {
     expect(await getSantaSummary(d1(), player('min'), MORNING)).toEqual({
-      open: true, available: true, inProgress: false, hits: 0, drops: 0, nextSlotAt: NOON, endsAt: SANTA_RULES.endsAt, serverNow: MORNING, isAdmin: false });
+      open: true, available: true, played: false, completed: false, hits: 0, nextSlotAt: NOON, endsAt: SANTA_RULES.endsAt, serverNow: MORNING, isAdmin: false });
     expect(await getSantaSummary(d1(), admin, MORNING)).toMatchObject({ available: false, isAdmin: true });
     expect(await db.prepare('SELECT COUNT(*) AS n FROM santa_runs').first('n')).toBe(0);
     await rejects(startSantaRun(d1(), admin, { requestId: rid('admin') }, MORNING), 403, 'CANNOT_PLAY');
@@ -70,98 +72,92 @@ describe('santa runs', () => {
 
   it('opens one run per half day, and a retried start returns the same run', async () => {
     const run = await start();
-    expect(run).toMatchObject({ drops: [], hits: 0, finished: false, completed: false, slotStart: santaSlotStart(SLOT), deadline: NOON + SANTA_RULES.graceMs, engine: SANTA_RULES.engine });
+    expect(run).toMatchObject({ drops: [], hits: 0, completed: false, finished: false, slotStart: santaSlotStart(SLOT), deadline: NOON + SANTA_RULES.graceMs, engine: SANTA_RULES.engine });
     expect((await start()).id).toBe(run.id);
     await rejects(startSantaRun(d1(), player('min'), { requestId: rid('again') }, MORNING + 60_000), 409, 'RUN_USED');
-    expect(await getSantaSummary(d1(), player('min'), MORNING)).toMatchObject({ available: false, inProgress: true });
+    expect(await getSantaSummary(d1(), player('min'), MORNING)).toMatchObject({ available: false, played: true, completed: false });
     expect(await db.prepare('SELECT date FROM santa_runs').first('date')).toBe('2026-12-01');
   });
 
-  it('pays a point per chimney, the perfect bonus, and 100G for finishing', async () => {
+  it('records the whole run at once: a point per chimney, the perfect bonus and 100G', async () => {
     const run = await start();
-    let response;
-    for (let index = 0; index < SANTA_RULES.houses; index++) {
-      response = await drop('min', run.id, index, hit(index), MORNING + index * 3000);
-      expect(response.drop).toMatchObject({ index, hit: true, kind: 'in', points: 1 });
-    }
-    expect(response!.current).toMatchObject({ hits: 10, completed: true, finished: true, points: 13, gold: 100 });
-    expect(response!).toMatchObject({ available: false, inProgress: false, hits: 10, drops: 10 });
-    const rows = await ledger(run.id);
-    expect(rows.filter(row => row.currency === 'score').reduce((sum, row) => sum + row.amount, 0)).toBe(13);
-    expect(rows.filter(row => row.currency === 'gold')).toEqual([
-      { currency: 'gold', amount: 100, reason: '산타 선물 배달 완료', reference: `santa:clear:${run.id}:gold`, week_start: null }]);
-    expect(rows.find(row => row.reference.startsWith('santa:perfect:'))).toMatchObject({ amount: 3 });
-    expect(scoreSource(`santa:hit:${run.id}:0:score`, '산타 선물 배달')).toEqual({ game: 'santa', label: '산타 선물 배달' });
+    const done = await finish('min', run.id, plan(10));
+    expect(done.replayed).toBe(false);
+    expect(done.run).toMatchObject({ hits: 10, completed: true, finished: true, points: 13, gold: 100 });
+    expect(done.run.drops.map(entry => entry.kind)).toEqual(Array(10).fill('in'));
+    expect(done).toMatchObject({ available: false, played: true, completed: true, hits: 10 });
+    expect(await ledger(run.id)).toEqual([
+      { currency: 'gold', amount: 100, reason: '산타 선물 배달 완료', reference: `santa:clear:${run.id}:gold`, week_start: null },
+      { currency: 'score', amount: 10, reason: '산타 선물 배달', reference: `santa:hits:${run.id}:score`, week_start: '2026-11-30' },
+      { currency: 'score', amount: 3, reason: '산타 선물 배달 · 10곳 모두 성공', reference: `santa:perfect:${run.id}:score`, week_start: '2026-11-30' },
+    ]);
+    expect(scoreSource(`santa:hits:${run.id}:score`, '산타 선물 배달')).toEqual({ game: 'santa', label: '산타 선물 배달' });
     expect(scoreSource(`santa:perfect:${run.id}:score`, 'x')).toEqual({ game: 'santa', label: '산타 선물 배달 · 10곳 모두 성공' });
-    await rejects(drop('min', run.id, 9, hit(9) + 1), 409, 'DROP_CONFLICT');
+    // A lost response is retried with the same run: no second payment; a different one is refused.
+    expect((await finish('min', run.id, plan(10), MORNING + 5000)).replayed).toBe(true);
+    expect(await ledger(run.id)).toHaveLength(3);
+    await rejects(finish('min', run.id, plan(9)), 409, 'RUN_CONFLICT');
   });
 
-  it('pays 100G for a finished run even with no hits, and passes count as drops', async () => {
+  it('pays 100G for a finished run even with no hits, and no perfect bonus for 9 of 10', async () => {
+    const zero = await start();
+    expect((await finish('min', zero.id, Array(10).fill(0))).run).toMatchObject({ hits: 0, completed: true, points: 0, gold: 100 });
+    expect(await ledger(zero.id)).toEqual([{ currency: 'gold', amount: 100, reason: '산타 선물 배달 완료', reference: `santa:clear:${zero.id}:gold`, week_start: null }]);
+    const nine = await start('min', NOON + 1000, 'nine');
+    const done = await finish('min', nine.id, plan(9, SLOT + 1), NOON + 2000);
+    expect(done.run).toMatchObject({ hits: 9, points: 9, gold: 100 });
+    expect((await ledger(nine.id)).some(row => row.reference.startsWith('santa:perfect:'))).toBe(false);
+  });
+
+  it('refuses incomplete or invalid runs and other players\' runs', async () => {
     const run = await start();
-    for (let index = 0; index < SANTA_RULES.houses; index++) await drop('min', run.id, index, index % 2 ? -1 : 0);
-    const state = await getSantaState(d1(), player('min'), MORNING);
-    expect(state.current).toMatchObject({ hits: 0, completed: true, points: 0, gold: 100 });
-    expect(state.current!.drops.map(entry => entry.kind)).toEqual(['early', 'pass', 'early', 'pass', 'early', 'pass', 'early', 'pass', 'early', 'pass']);
-    const rows = await ledger(run.id);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ currency: 'gold', amount: 100 });
+    for (const releases of [plan(3).slice(0, 9), [...plan(3), 0], [...plan(3).slice(0, 9), 1.5], [...plan(3).slice(0, 9), santaCourse(SLOT)[9]!.approachMs + 1], [...plan(3).slice(0, 9), -2]]) {
+      await rejects(finish('min', run.id, releases), 400, 'INVALID_RUN');
+    }
+    await rejects(finish('siwon', run.id, plan(3)), 404, 'RUN_NOT_FOUND');
+    await rejects(finishSantaRun(d1(), admin, { runId: run.id, releases: plan(3) }, MORNING), 403, 'CANNOT_PLAY');
+    expect(await db.prepare('SELECT drops FROM santa_runs').first('drops')).toBe(0);
   });
 
-  it('no perfect bonus for 9 of 10', async () => {
+  it('records simultaneous retries of one run exactly once', async () => {
     const run = await start();
-    for (let index = 0; index < SANTA_RULES.houses; index++) await drop('min', run.id, index, index === 4 ? -1 : hit(index));
-    const state = await getSantaState(d1(), player('min'), MORNING);
-    expect(state.current).toMatchObject({ hits: 9, points: 9, gold: 100 });
-    expect((await ledger(run.id)).some(row => row.reference.startsWith('santa:perfect:'))).toBe(false);
+    const results = await Promise.all([finish('min', run.id, plan(4)), finish('min', run.id, plan(4)), finish('min', run.id, plan(4))]);
+    expect(results.filter(result => !result.replayed).length).toBeLessThanOrEqual(1);
+    expect(await db.prepare('SELECT drops, hits FROM santa_runs').first()).toEqual({ drops: 10, hits: 4 });
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM santa_drops').first('n')).toBe(10);
+    expect(await ledger(run.id)).toHaveLength(2);
   });
 
-  it('replays a lost response, refuses out of order or invalid releases', async () => {
-    const run = await start();
-    const first = await drop('min', run.id, 0, hit(0));
-    const again = await drop('min', run.id, 0, hit(0));
-    expect(again.replayed).toBe(true);
-    expect(again.drop).toEqual(first.drop);
-    expect((await ledger(run.id)).length).toBe(1);
-    await rejects(drop('min', run.id, 2, hit(2)), 409, 'DROP_ORDER');
-    await rejects(drop('min', run.id, 1, COURSE[1]!.approachMs + 1), 400, 'INVALID_DROP');
-    await rejects(drop('min', run.id, 1, 3.5), 400, 'INVALID_DROP');
-    await rejects(drop('siwon', run.id, 1, hit(1)), 404, 'RUN_NOT_FOUND');
-    await rejects(dropSantaGift(d1(), admin, { runId: run.id, index: 1, release: hit(1) }, MORNING), 403, 'CANNOT_PLAY');
-  });
-
-  it('lets a late run finish within the grace time, then closes it', async () => {
+  it('a run left unrecorded ends unfinished; a late start may be recorded within the grace time', async () => {
     const lastMinute = NOON - 60_000;
-    const run = await start('min', lastMinute);
-    await drop('min', run.id, 0, hit(0), lastMinute);
-    // In the 오후 slot the 오전 run is still open, so no new run yet.
-    expect(await getSantaSummary(d1(), player('min'), NOON + 1000)).toMatchObject({ available: false, inProgress: true });
-    await rejects(startSantaRun(d1(), player('min'), { requestId: rid('noon') }, NOON + 1000), 409, 'RUN_IN_PROGRESS');
-    await drop('min', run.id, 1, hit(1), NOON + 1000);
-    const deadline = santaDeadline(SLOT);
-    await rejects(drop('min', run.id, 2, hit(2), deadline), 409, 'RUN_CLOSED');
-    const after = await getSantaState(d1(), player('min'), deadline);
-    expect(after.available).toBe(true);
-    expect(after.current).toBeNull();
-    // The unfinished run never pays the completion gold.
-    expect((await ledger(run.id)).filter(row => row.currency === 'gold')).toHaveLength(0);
+    const late = await start('min', lastMinute);
+    // In the 오후 half day a new run may start while the late one can still be recorded.
+    expect(await getSantaSummary(d1(), player('min'), NOON + 1000)).toMatchObject({ available: true, played: false });
+    expect((await finish('min', late.id, plan(2), NOON + 30_000)).run).toMatchObject({ id: late.id, hits: 2, completed: true });
+    const left = await start('siwon', MORNING);
+    await rejects(finish('siwon', left.id, plan(2), santaDeadline(SLOT)), 409, 'RUN_CLOSED');
+    // A run from the old one-house-at-a-time records is not completed later.
+    await db.prepare('UPDATE santa_runs SET drops = 1 WHERE id = ?').bind(left.id).run();
+    await rejects(finish('siwon', left.id, plan(2)), 409, 'RUN_CLOSED');
   });
 
-  it('refuses new runs after Christmas and during the 23:50 close', async () => {
+  it('refuses new runs after Christmas and during the 23:50 close, and scores nothing recorded after it', async () => {
     await rejects(startSantaRun(d1(), player('min'), { requestId: rid('late') }, SANTA_RULES.endsAt), 409, 'EVENT_CLOSED');
     expect(await getSantaSummary(d1(), player('min'), SANTA_RULES.endsAt)).toMatchObject({ open: false, available: false });
     await rejects(startSantaRun(d1(), player('min'), { requestId: rid('closed') }, Date.parse('2026-12-01T23:55:00+09:00')), 409, 'PLAY_CLOSED');
+    const evening = Date.parse('2026-12-01T23:49:00+09:00');
+    const run = await start('min', evening, 'evening');
+    const done = await finish('min', run.id, plan(10, santaSlot(evening)), Date.parse('2026-12-01T23:51:00+09:00'));
+    expect(done.run).toMatchObject({ hits: 10, points: 0, gold: 100 });
+    expect((await ledger(run.id)).map(row => row.currency)).toEqual(['gold']);
   });
 
-  it('shows everyone\'s runs today on the board', async () => {
+  it('shows only recorded runs on today\'s board', async () => {
     const mine = await start();
-    await drop('min', mine.id, 0, hit(0));
-    const theirs = await start('siwon');
-    await drop('siwon', theirs.id, 0, -1);
+    await finish('min', mine.id, plan(6));
+    await start('siwon');
     const state = await getSantaState(d1(), admin, MORNING);
-    expect(state.today).toEqual([
-      { username: 'min', slot: SLOT, slotStart: santaSlotStart(SLOT), hits: 1, drops: 1, finished: false },
-      { username: 'siwon', slot: SLOT, slotStart: santaSlotStart(SLOT), hits: 0, drops: 1, finished: false },
-    ]);
+    expect(state.today).toEqual([{ username: 'min', slot: SLOT, slotStart: santaSlotStart(SLOT), hits: 6, completed: true }]);
     expect(state.current).toBeNull();
   });
 });

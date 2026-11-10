@@ -763,8 +763,8 @@ export default function App() {
     ...(adminDemo ? { userId: "preview-admin", username: "preview-admin", displayName: "운영 미리보기", lottoNotice: null,
       games: previewAdminState.games.map(game => previewGame(game.id, game.rules)),
       claw: { ...previewClaw.summary, coins: 0, freeCoins: 0, purchasedCoins: 0, isAdmin: true },
-      freethrow: { ...previewFreeThrow.summary, available: false, inProgress: false, isAdmin: true },
-      santa: { ...previewSanta.summary, available: false, inProgress: false, isAdmin: true } } : {}),
+      freethrow: { ...previewFreeThrow.summary, available: false, played: false, completed: false, isAdmin: true },
+      santa: { ...previewSanta.summary, available: false, played: false, completed: false, isAdmin: true } } : {}),
     players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, displayName: previewProfile.displayName, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score + previewFreeThrow.score + previewSanta.score } : player) } : data ? homeData(data) : null;
   const me = demo ? { ...previewUser, displayName: previewProfile.displayName, photoVersion: previewProfile.photoVersion, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold + previewFreeThrow.gold + previewSanta.gold + previewStock.gold + previewAchievementGold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score + previewFreeThrow.score + previewSanta.score,
     ...(adminDemo ? { id: "preview-admin", username: "preview-admin", displayName: "운영 미리보기", role: "admin" as const, photoVersion: null, weeklyScore: 0 } : {}) } : data?.user;

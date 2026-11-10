@@ -5,7 +5,7 @@ import { FREETHROW_RULES, freeThrowDeadline, freeThrowSlot, freeThrowSlotStart }
 import { simulateShot } from '../shared/freethrow-physics';
 import { scoreSource } from '../shared/ranking-periods';
 import { syncAchievements } from '../worker/achievements';
-import { FreeThrowError, getFreeThrowState, getFreeThrowSummary, shootFreeThrow, startFreeThrowSet } from '../worker/freethrow';
+import { FreeThrowError, finishFreeThrowSet, getFreeThrowState, getFreeThrowSummary, startFreeThrowSet } from '../worker/freethrow';
 
 type Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
 const MAKE = { power: 55, aim: 0 } as const;
@@ -39,11 +39,14 @@ async function start(user = 'min', now = NOON, label = 'start') {
   const state = await startFreeThrowSet(db as unknown as D1Database, player(user), { requestId: rid(`${user}-${label}`) }, now);
   return state.current!;
 }
-const shoot = (user: string, setId: string, index: number, input: { power: number; aim: number }, now = NOON) =>
-  shootFreeThrow(db as unknown as D1Database, player(user), { setId, index, ...input }, now);
+type Shot = { power: number; aim: number };
+/** A set of ten: the first `made` balls go in, the rest fall short. */
+const balls = (made: number): Shot[] => Array.from({ length: FREETHROW_RULES.shotsPerSet }, (_, i) => (i < made ? MAKE : MISS));
+const finish = (user: string, setId: string, shots: Shot[], now = NOON) =>
+  finishFreeThrowSet(db as unknown as D1Database, player(user), { setId, shots }, now);
 // The ledger is append-only, so rows are scoped to the set under test.
 const ledger = (setId: string) => db.prepare("SELECT currency, amount, reason, reference, week_start FROM ledger WHERE user_id = 'min' AND substr(reference, 1, ?) = ? ORDER BY reference")
-  .bind(`freethrow:goal:${setId}:`.length, `freethrow:goal:${setId}:`).all<{ currency: string; amount: number; reason: string; reference: string; week_start: string | null }>().then(result => result.results);
+  .bind(`freethrow:set:${setId}:`.length, `freethrow:set:${setId}:`).all<{ currency: string; amount: number; reason: string; reference: string; week_start: string | null }>().then(result => result.results);
 
 beforeAll(async () => {
   mf = new Miniflare({ modules: true, script: 'export default { fetch() { return new Response("") } }', compatibilityDate: '2026-08-06', d1Databases: ['DB'] });
@@ -62,7 +65,7 @@ beforeEach(async () => {
 describe('free-throw official sets', () => {
   it('derives availability without writing and keeps admins to practice', async () => {
     expect(await getFreeThrowSummary(db as unknown as D1Database, player('min'), NOON)).toEqual({
-      available: true, inProgress: false, made: 0, shots: 0, nextSlotAt: SLOT_END, serverNow: NOON, isAdmin: false });
+      available: true, played: false, completed: false, made: 0, nextSlotAt: SLOT_END, serverNow: NOON, isAdmin: false });
     expect(await getFreeThrowSummary(db as unknown as D1Database, admin, NOON)).toMatchObject({ available: false, isAdmin: true });
     expect(await db.prepare('SELECT COUNT(*) AS n FROM freethrow_sets').first('n')).toBe(0);
     await rejects(startFreeThrowSet(db as unknown as D1Database, admin, { requestId: rid('admin') }, NOON), 403, 'CANNOT_PLAY');
@@ -70,11 +73,11 @@ describe('free-throw official sets', () => {
 
   it('opens one set per three-hour slot, and a retried start returns the same set', async () => {
     const set = await start();
-    expect(set).toMatchObject({ shots: [], made: 0, finished: false, slotStart: freeThrowSlotStart(freeThrowSlot(NOON)), deadline: SLOT_END + FREETHROW_RULES.graceMs, engine: FREETHROW_RULES.engine });
+    expect(set).toMatchObject({ shots: [], made: 0, completed: false, finished: false, slotStart: freeThrowSlotStart(freeThrowSlot(NOON)), deadline: SLOT_END + FREETHROW_RULES.graceMs, engine: FREETHROW_RULES.engine });
     expect((await start()).id).toBe(set.id);
     await rejects(startFreeThrowSet(db as unknown as D1Database, player('min'), { requestId: rid('again') }, NOON + 60_000), 409, 'SET_USED');
     const summary = await getFreeThrowSummary(db as unknown as D1Database, player('min'), NOON);
-    expect(summary).toMatchObject({ available: false, inProgress: true });
+    expect(summary).toMatchObject({ available: false, played: true, completed: false });
     // KST 15:00 opens the next slot.
     expect(await getFreeThrowSummary(db as unknown as D1Database, player('siwon'), SLOT_END)).toMatchObject({ available: true });
     expect(await db.prepare('SELECT date FROM freethrow_sets').first('date')).toBe('2026-11-07');
@@ -86,90 +89,86 @@ describe('free-throw official sets', () => {
     expect(await db.prepare('SELECT COUNT(*) AS n FROM freethrow_sets').first('n')).toBe(1);
   });
 
-  it('re-simulates each shot on the server and pays 1 point + 5G per goal once', async () => {
+  it('re-simulates the whole set on the server and pays 1 point + 5G per goal once', async () => {
     const set = await start();
-    const goal = await shoot('min', set.id, 0, MAKE);
-    expect(goal.shot).toEqual({ index: 0, ...MAKE, made: true, kind: simulateShot(MAKE).kind, points: 1, gold: 5 });
-    expect(goal.replayed).toBe(false);
-    expect(goal.current).toMatchObject({ made: 1, points: 1, gold: 5 });
+    const shots = balls(7);
+    const done = await finish('min', set.id, shots);
+    expect(done.replayed).toBe(false);
+    expect(done.current).toMatchObject({ made: 7, completed: true, finished: true, points: 7, gold: 35 });
+    expect(done.current!.shots).toEqual(shots.map((shot, index) => ({ index, ...shot, made: index < 7, kind: simulateShot(shot).kind })));
+    expect(done).toMatchObject({ available: false, played: true, completed: true, made: 7 });
     expect(await ledger(set.id)).toEqual([
-      { currency: 'gold', amount: 5, reason: '자유투 대결 골', reference: `freethrow:goal:${set.id}:0:gold`, week_start: null },
-      { currency: 'score', amount: 1, reason: '자유투 대결 골', reference: `freethrow:goal:${set.id}:0:score`, week_start: '2026-11-02' },
+      { currency: 'gold', amount: 35, reason: '자유투 대결 골', reference: `freethrow:set:${set.id}:gold`, week_start: null },
+      { currency: 'score', amount: 7, reason: '자유투 대결 골', reference: `freethrow:set:${set.id}:score`, week_start: '2026-11-02' },
     ]);
-    expect(scoreSource(`freethrow:goal:${set.id}:0:score`, '')).toEqual({ game: 'freethrow', label: '자유투 대결' });
+    expect(scoreSource(`freethrow:set:${set.id}:score`, '')).toEqual({ game: 'freethrow', label: '자유투 대결' });
     const goldBefore = await db.prepare("SELECT gold FROM user_balances WHERE user_id = 'min'").first('gold');
-    // A lost response is retried with the same shot: no second simulation or payment.
-    const retry = await shoot('min', set.id, 0, MAKE, NOON + 5_000);
+    // A lost response is retried with the same set: no second simulation or payment.
+    const retry = await finish('min', set.id, shots, NOON + 5_000);
     expect(retry.replayed).toBe(true);
-    expect(retry.shot.made).toBe(true);
     expect(await ledger(set.id)).toHaveLength(2);
     expect(await db.prepare("SELECT gold FROM user_balances WHERE user_id = 'min'").first('gold')).toBe(goldBefore);
-    const miss = await shoot('min', set.id, 1, MISS);
-    expect(miss.shot).toMatchObject({ made: false, kind: 'short', points: 0, gold: 0 });
-    expect(await ledger(set.id)).toHaveLength(2);
+    await rejects(finish('min', set.id, balls(8)), 409, 'SET_CONFLICT');
   });
 
-  it('rejects changed retries, skipped balls and other players\' sets', async () => {
+  it('pays nothing for a set without a goal', async () => {
     const set = await start();
-    await shoot('min', set.id, 0, MAKE);
-    await rejects(shoot('min', set.id, 0, { power: 56, aim: 0 }), 409, 'SHOT_CONFLICT');
-    await rejects(shoot('min', set.id, 2, MAKE), 409, 'SHOT_ORDER');
-    await rejects(shoot('siwon', set.id, 1, MAKE), 404, 'SET_NOT_FOUND');
-    await rejects(shootFreeThrow(db as unknown as D1Database, admin, { setId: set.id, index: 1, ...MAKE }, NOON), 403, 'CANNOT_PLAY');
-    for (const bad of [{ setId: 'nope', index: 1, ...MAKE }, { setId: set.id, index: 10, ...MAKE }, { setId: set.id, index: 1, power: 101, aim: 0 }, { setId: set.id, index: 1, power: 50, aim: 0.5 }]) {
-      await rejects(shootFreeThrow(db as unknown as D1Database, player('min'), bad, NOON), 400, 'INVALID_SHOT');
+    expect((await finish('min', set.id, balls(0))).current).toMatchObject({ made: 0, completed: true, points: 0, gold: 0 });
+    expect(await ledger(set.id)).toEqual([]);
+  });
+
+  it('rejects incomplete sets, bad shots and other players\' sets', async () => {
+    const set = await start();
+    await rejects(finish('siwon', set.id, balls(3)), 404, 'SET_NOT_FOUND');
+    await rejects(finishFreeThrowSet(db as unknown as D1Database, admin, { setId: set.id, shots: balls(3) }, NOON), 403, 'CANNOT_PLAY');
+    for (const shots of [balls(3).slice(0, 9), [...balls(3), MAKE], [...balls(3).slice(0, 9), { power: 101, aim: 0 }], [...balls(3).slice(0, 9), { power: 50, aim: 0.5 }]]) {
+      await rejects(finish('min', set.id, shots), 400, 'INVALID_SET');
     }
+    await rejects(finishFreeThrowSet(db as unknown as D1Database, player('min'), { setId: 'nope', shots: balls(3) }, NOON), 400, 'INVALID_SET');
+    expect(await db.prepare('SELECT shots FROM freethrow_sets').first('shots')).toBe(0);
   });
 
-  it('records simultaneous retries of one ball exactly once', async () => {
+  it('records simultaneous retries of one set exactly once', async () => {
     const set = await start();
-    const results = await Promise.all([shoot('min', set.id, 0, MAKE), shoot('min', set.id, 0, MAKE), shoot('min', set.id, 0, MAKE)]);
+    const results = await Promise.all([finish('min', set.id, balls(4)), finish('min', set.id, balls(4)), finish('min', set.id, balls(4))]);
     expect(results.filter(result => !result.replayed).length).toBeLessThanOrEqual(1);
-    expect(await db.prepare('SELECT shots, made FROM freethrow_sets').first()).toEqual({ shots: 1, made: 1 });
+    expect(await db.prepare('SELECT shots, made FROM freethrow_sets').first()).toEqual({ shots: 10, made: 4 });
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM freethrow_shots').first('n')).toBe(10);
     expect(await ledger(set.id)).toHaveLength(2);
   });
 
-  it('finishes after ten balls and lists everyone\'s sets on today\'s board', async () => {
+  it('lists only recorded sets on today\'s board; a set left unrecorded ends unfinished', async () => {
     const set = await start();
-    let state = null as Awaited<ReturnType<typeof shoot>> | null;
-    for (let index = 0; index < FREETHROW_RULES.shotsPerSet; index++) state = await shoot('min', set.id, index, index < 7 ? MAKE : MISS);
-    expect(state!.current).toMatchObject({ made: 7, finished: true, points: 7, gold: 35 });
-    expect(state!.current!.shots).toHaveLength(10);
-    expect(state).toMatchObject({ available: false, inProgress: false, made: 7, shots: 10 });
-    await rejects(shoot('min', set.id, 10 - 1, MAKE), 409, 'SHOT_CONFLICT');
-    const other = await start('siwon');
-    await shoot('siwon', other.id, 0, MAKE);
+    await finish('min', set.id, balls(7));
+    const left = await start('siwon');
     const board = await getFreeThrowState(db as unknown as D1Database, admin, NOON);
-    expect(board.today).toEqual([
-      { username: 'min', slot: set.slot, slotStart: set.slotStart, made: 7, shots: 10, finished: true },
-      { username: 'siwon', slot: set.slot, slotStart: set.slotStart, made: 1, shots: 1, finished: false },
-    ]);
+    expect(board.today).toEqual([{ username: 'min', slot: set.slot, slotStart: set.slotStart, made: 7, completed: true }]);
     expect(board.current).toBeNull();
+    // The player who left still used the slot; the set closes at its deadline.
+    expect(await getFreeThrowSummary(db as unknown as D1Database, player('siwon'), NOON)).toMatchObject({ available: false, played: true, completed: false, made: 0 });
+    const closed = freeThrowDeadline(left.slot);
+    await rejects(finish('siwon', left.id, balls(9), closed), 409, 'SET_CLOSED');
+    // A set from the old one-ball-at-a-time records is not completed later.
+    await db.prepare('UPDATE freethrow_sets SET shots = 3 WHERE id = ?').bind(left.id).run();
+    await rejects(finish('siwon', left.id, balls(9)), 409, 'SET_CLOSED');
   });
 
-  it('lets a set started late finish within the grace time, then closes it', async () => {
+  it('records a set started late within the grace time, and the next slot opens on time', async () => {
     const late = SLOT_END - 60_000;
     const set = await start('min', late);
-    await shoot('min', set.id, 0, MAKE, late);
     const afterBoundary = SLOT_END + 60_000;
-    // The unfinished set still belongs to the player and blocks a new one.
-    const summary = await getFreeThrowSummary(db as unknown as D1Database, player('min'), afterBoundary);
-    expect(summary).toMatchObject({ available: false, inProgress: true, shots: 1 });
-    await rejects(startFreeThrowSet(db as unknown as D1Database, player('min'), { requestId: rid('next') }, afterBoundary), 409, 'SET_IN_PROGRESS');
-    expect((await shoot('min', set.id, 1, MAKE, afterBoundary)).current!.made).toBe(2);
-    const closed = freeThrowDeadline(set.slot);
-    await rejects(shoot('min', set.id, 2, MAKE, closed), 409, 'SET_CLOSED');
-    expect(await getFreeThrowSummary(db as unknown as D1Database, player('min'), closed)).toMatchObject({ available: true, inProgress: false });
-    const next = await start('min', closed, 'next');
+    expect(await getFreeThrowSummary(db as unknown as D1Database, player('min'), afterBoundary)).toMatchObject({ available: true, played: false });
+    const state = await getFreeThrowState(db as unknown as D1Database, player('min'), afterBoundary);
+    expect(state.current).toMatchObject({ id: set.id, completed: false, finished: false });
+    expect((await finish('min', set.id, balls(2), afterBoundary)).set).toMatchObject({ id: set.id, made: 2, completed: true });
+    const next = await start('min', afterBoundary, 'next');
     expect(next.slot).toBe(set.slot + 1);
-    const state = await getFreeThrowState(db as unknown as D1Database, player('min'), closed);
-    expect(state.today.find(entry => entry.slot === set.slot)).toMatchObject({ made: 2, shots: 2, finished: true });
   });
 
   it('closes sets recorded with an older engine instead of re-simulating them differently', async () => {
     const set = await start();
     await db.prepare('UPDATE freethrow_sets SET engine = 0 + ? WHERE id = ?').bind(FREETHROW_RULES.engine + 1, set.id).run();
-    await rejects(shoot('min', set.id, 0, MAKE), 409, 'ENGINE_CHANGED');
+    await rejects(finish('min', set.id, balls(3)), 409, 'ENGINE_CHANGED');
   });
 
   it('earns the sheet\'s free-throw achievements from official sets only', async () => {
@@ -178,21 +177,21 @@ describe('free-throw official sets', () => {
     expect(await keys()).toEqual([]);
     const set = await start();
     expect(await keys()).toEqual(['freethrow_join:']);
-    for (let index = 0; index < 5; index++) await shoot('min', set.id, index, MAKE);
+    await finish('min', set.id, balls(5));
     expect(await keys()).toEqual(['freethrow_3:2026-11-07', 'freethrow_5:2026-11-07']);
     // A second qualifying set the same day earns nothing new (one per day).
     const later = SLOT_END + FREETHROW_RULES.graceMs;
     const next = await start('min', later, 'later');
-    for (let index = 0; index < 6; index++) await shoot('min', next.id, index, MAKE, later);
+    await finish('min', next.id, balls(6), later);
     expect(await keys(later)).toEqual([]);
     // Ten goals in one set, and a full set without a goal.
-    await db.prepare('UPDATE freethrow_sets SET shots = 10, made = 10 WHERE id = ?').bind(next.id).run();
-    expect(await keys(later)).toEqual(['freethrow_10:2026-11-07']);
-    const another = await start('min', later + FREETHROW_RULES.setIntervalMs, 'zero');
-    for (let index = 0; index < 9; index++) await shoot('min', another.id, index, MISS, later + FREETHROW_RULES.setIntervalMs);
-    expect(await keys(later + FREETHROW_RULES.setIntervalMs)).toEqual([]);
-    await shoot('min', another.id, 9, MISS, later + FREETHROW_RULES.setIntervalMs);
-    expect(await keys(later + FREETHROW_RULES.setIntervalMs)).toEqual(['freethrow_zero:']);
+    const ten = await start('min', later + FREETHROW_RULES.setIntervalMs, 'ten');
+    await finish('min', ten.id, balls(10), later + FREETHROW_RULES.setIntervalMs);
+    expect(await keys(later + FREETHROW_RULES.setIntervalMs)).toEqual(['freethrow_10:2026-11-07']);
+    const zero = await start('min', later + 2 * FREETHROW_RULES.setIntervalMs, 'zero');
+    expect(await keys(later + 2 * FREETHROW_RULES.setIntervalMs)).toEqual([]);
+    await finish('min', zero.id, balls(0), later + 2 * FREETHROW_RULES.setIntervalMs);
+    expect(await keys(later + 2 * FREETHROW_RULES.setIntervalMs)).toEqual(['freethrow_zero:']);
   });
 });
 
@@ -203,18 +202,13 @@ describe('23:50 daily close', () => {
     await rejects(start('min', at('2026-11-08T23:50:00'), 'closed'), 409, 'PLAY_CLOSED');
     await rejects(start('min', at('2026-11-08T23:59:59'), 'closed-2'), 409, 'PLAY_CLOSED');
   });
-  it('pays gold but no score for goals after the day closed, including the grace past midnight', async () => {
-    const set = await start('min', at('2026-11-08T23:40:00'), 'late');
-    expect((await shoot('min', set.id, 0, MAKE, at('2026-11-08T23:45:00'))).shot).toMatchObject({ made: true, points: 1, gold: 5 });
-    const closed = await shoot('min', set.id, 1, MAKE, at('2026-11-08T23:55:00'));
-    expect(closed.shot).toMatchObject({ made: true, points: 0, gold: 5 });
-    // Two goals, but only the one before 23:50 counts toward score.
-    expect(closed.current).toMatchObject({ id: set.id, made: 2, points: 1, gold: 10 });
-    expect((await shoot('min', set.id, 2, MAKE, at('2026-11-09T00:05:00'))).shot).toMatchObject({ made: true, points: 0, gold: 5 });
-    const rows = await ledger(set.id);
-    expect(rows.filter(row => row.currency === 'score')).toEqual([
-      { currency: 'score', amount: 1, reason: '자유투 대결 골', reference: `freethrow:goal:${set.id}:0:score`, week_start: '2026-11-02' },
-    ]);
-    expect(rows.filter(row => row.currency === 'gold')).toHaveLength(3);
+  it('pays gold but no score for a set recorded after the day closed, including the grace past midnight', async () => {
+    const before = await start('min', at('2026-11-08T23:40:00'), 'before');
+    expect((await finish('min', before.id, balls(3), at('2026-11-08T23:45:00'))).current).toMatchObject({ made: 3, points: 3, gold: 15 });
+    await db.prepare('DELETE FROM freethrow_shots').run();
+    await db.prepare('DELETE FROM freethrow_sets').run();
+    const late = await start('min', at('2026-11-08T23:40:00'), 'late');
+    expect((await finish('min', late.id, balls(3), at('2026-11-09T00:05:00'))).set).toMatchObject({ made: 3, points: 0, gold: 15 });
+    expect((await ledger(late.id)).map(row => row.currency)).toEqual(['gold']);
   });
 });

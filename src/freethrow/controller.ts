@@ -37,9 +37,10 @@ export class FreeThrowController {
   private frame = 0;
   private observer: ResizeObserver | null = null;
   private enabled = true;
+  private destroyed = false;
 
   constructor(private canvas: HTMLCanvasElement, private sound: FreeThrowSound, private callbacks: ThrowCallbacks) {
-    this.renderer = new FreeThrowRenderer(canvas, () => this.paint());
+    this.renderer = new FreeThrowRenderer(canvas, () => { if (!this.destroyed) this.paint(); });
     canvas.addEventListener("pointerdown", this.down);
     canvas.addEventListener("pointermove", this.move);
     canvas.addEventListener("pointerup", this.up);
@@ -62,6 +63,7 @@ export class FreeThrowController {
     this.launch(input, { x: 0, y: 0 });
   }
   destroy() {
+    this.destroyed = true;
     cancelAnimationFrame(this.frame);
     this.observer?.disconnect();
     this.canvas.removeEventListener("pointerdown", this.down);

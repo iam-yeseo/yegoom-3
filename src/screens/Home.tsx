@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, FREETHROW_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, PLAY_RULES, SLOT_RULES } from "../../shared/balance";
+import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, KUJI_RULES, LOTTO_RULES, NICKNAME_TAG_RULES, PLAY_RULES, SLOT_RULES } from "../../shared/balance";
 import { usePlayClosed } from "../play-window";
 import { ticketCount, useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
@@ -243,9 +243,9 @@ function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
 /** Home tile line: whether an official set can be thrown now, else when the next opens. */
 export function freeThrowTileText(summary: FreeThrowSummary): string {
   if (summary.isAdmin) return "연습 모드";
-  if (summary.inProgress) return `세트 진행 중 · ${summary.shots}/${FREETHROW_RULES.shotsPerSet}구`;
   if (summary.available) return "이번 세트 도전 가능";
-  return `다음 세트 ${String(new Date(summary.nextSlotAt + 9 * 3_600_000).getUTCHours()).padStart(2, "0")}시`;
+  const next = `다음 세트 ${String(new Date(summary.nextSlotAt + 9 * 3_600_000).getUTCHours()).padStart(2, "0")}시`;
+  return summary.completed ? `이번 세트 ${summary.made}골 · ${next}` : next;
 }
 export function SoloGames({ go, claw, freethrow, santa, stock }: { go: Go; claw: ClawSummary; freethrow: FreeThrowSummary; santa: SantaSummary; stock: StockHomeSummary | null }) {
   const nextGrant = formatTime(new Date(claw.nextGrantAt).toISOString());
