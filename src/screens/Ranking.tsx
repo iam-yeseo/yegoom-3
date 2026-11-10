@@ -185,6 +185,7 @@ function RankingRewards({ period, mine }: { period: RankingPeriod; mine: { rank:
       <li>주간 점수는 월요일부터 일요일(한국 시간)까지 모아 순위를 정하고, 다음 주에 0점부터 새로 시작해요. 골드 잔액은 그대로 남아요.</li>
       <li><strong>주간 보상은 그 주 점수 × 순위 배수({rateLine("week")})</strong>를 월요일 0시에 골드로 받아요. 점수가 적어도 {floorLine("week")}는 받아요.</li>
       <li><strong>월간 보상은 그 달 점수 × 순위 배수({rateLine("month")})</strong>를 매월 1일 0시에 받아요. 최소 {floorLine("month")}예요.</li>
+      <li>모든 게임은 매일 밤 11시 50분에 마감해요. 그 뒤에 나온 결과는 볼 수 있지만 점수와 순위에는 들어가지 않아요.</li>
       <li>점수가 같으면 공동 순위예요. 공동 1위 두 명은 둘 다 {multiplierLabel("week", 1)}를 받고, 그다음 사람은 3위가 돼요.</li>
       <li>골드는 출석·게임 참여·1등 보상과 상점·주식에서 오고 가며, 점수와 따로 쌓여요. 주식 수익은 골드만 늘려요.</li>
     </ul>

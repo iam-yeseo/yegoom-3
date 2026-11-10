@@ -51,6 +51,8 @@ import { CatchmindProvider } from "./catchmind";
 import { Catchmind } from "./screens/Catchmind";
 import { CatchmindGallery } from "./screens/CatchmindGallery";
 import { LaunchGiftProvider, StockNotice } from "./launch-gift";
+import { RankResultDialog } from "./rank-result";
+import type { RankResult } from "../shared/ranking-rewards";
 import { createPreviewStockClient, previewStockHome, resetPreviewStock, type StockClient } from "./stock-preview";
 import { Achievements, type AchievementClient } from "./screens/Achievements";
 import { createPreviewAchievements } from "./achievements-preview";
@@ -101,7 +103,7 @@ const previewUser: User = {
   tag: null,
 };
 const gameIds: GameId[] = ["wake", "offwork", "luck"];
-const emptyCatchmind: CatchmindSummary = { roundId: null, status: "idle", drawer: null, turn: null, wrongCount: 0, winner: null, answer: null };
+const emptyCatchmind: CatchmindSummary = { roundId: null, status: "idle", drawer: null, turn: null, wrongCount: 0, winner: null, winnerScored: false, answer: null };
 function previewHome(): HomeData {
   return {
     userId: previewUser.id,
@@ -600,6 +602,12 @@ export default function App() {
     }, applyBootstrap);
     return result;
   };
+  // Hidden at once; if the request fails the next bootstrap simply shows it again.
+  const closeRankResults = (results: RankResult[]) => {
+    const owner = data?.user.id;
+    setData(current => current && current.user.id === owner ? { ...current, rankResults: [] } : current);
+    void api.rankResultsSeen(results).catch(() => undefined);
+  };
   const claimLaunchGift = async () => {
     const owner = data?.user.id;
     let receipt!: LaunchGiftResponse;
@@ -1087,6 +1095,8 @@ export default function App() {
             re-inserts (and visibly shifts) the bar; sub-pages only hide it. */}
         {!!view && !!me && <TabBar active={tab ?? "/"} onNavigate={go} admin={me?.role === "admin"} hidden={!showTabs} />}
         {stockNoticeOpen && <StockNotice onClose={() => setStockNoticeOpen(false)} />}
+        {!demo && path === "/" && !stockNoticeOpen && me?.role === "player" && !!data?.rankResults?.length && <RankResultDialog results={data.rankResults}
+          onClose={() => closeRankResults(data.rankResults)} onRanking={() => { closeRankResults(data.rankResults); go("/ranking"); }} />}
       </main>
     </LaunchGiftProvider>
     </ShopProvider>

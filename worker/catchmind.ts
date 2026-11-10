@@ -1,4 +1,4 @@
-import { CATCHMIND_RULES } from '../shared/balance';
+import { CATCHMIND_RULES, PLAY_RULES, playClosed, scoreCounts } from '../shared/balance';
 import { CATCHMIND_WORDS } from '../shared/catchmind-words';
 import { defaultCharacter, type ArtKey } from '../shared/characters';
 import type { CatchmindAction, CatchmindGalleryResponse, CatchmindPlayer, CatchmindPollResponse, CatchmindResponse, CatchmindState, CatchmindSummary } from '../shared/types';
@@ -179,13 +179,16 @@ export async function readCatchmindImage(db: D1Database, user: Actor, roundId: s
     'X-Content-Type-Options': 'nosniff',
   } });
 }
+/** The winner's guess (the round's end) came before its publication day closed. */
+const winnerScored = (round: Pick<RoundRow, 'winner_id' | 'round_date' | 'ended_at'>) =>
+  Boolean(round.winner_id && round.round_date && round.ended_at && scoreCounts(round.round_date, Date.parse(round.ended_at)));
 export async function readCatchmindSummary(db: D1Database): Promise<CatchmindSummary> {
-  const row = await db.prepare(`SELECT r.id, r.status, r.drawer_id, r.wrong_count, r.winner_id, r.word, t.drawer_id AS next_drawer_id
+  const row = await db.prepare(`SELECT r.id, r.status, r.drawer_id, r.wrong_count, r.winner_id, r.word, r.round_date, r.ended_at, t.drawer_id AS next_drawer_id
     FROM catchmind_turn t LEFT JOIN catchmind_rounds r ON r.id = t.round_id WHERE t.id = 1`)
-    .first<Pick<RoundRow, 'id' | 'status' | 'drawer_id' | 'wrong_count' | 'winner_id' | 'word'> & { next_drawer_id: string | null }>();
+    .first<Pick<RoundRow, 'id' | 'status' | 'drawer_id' | 'wrong_count' | 'winner_id' | 'word' | 'round_date' | 'ended_at'> & { next_drawer_id: string | null }>();
   const [drawer, turn, winner] = await Promise.all([player(db, row?.drawer_id ?? null), player(db, row?.next_drawer_id ?? null), player(db, row?.winner_id ?? null)]);
   return { roundId: row?.id ?? null, status: row?.status ?? 'idle', drawer, turn, wrongCount: row?.wrong_count ?? 0, winner,
-    answer: row?.status === 'ended' ? row.word : null };
+    winnerScored: row ? winnerScored(row) : false, answer: row?.status === 'ended' ? row.word : null };
 }
 async function readState(db: D1Database, user: Actor, now: Date): Promise<{ catchmind: CatchmindState; version: number }> {
   const { turn, round } = await board(db);
@@ -202,6 +205,7 @@ async function readState(db: D1Database, user: Actor, now: Date): Promise<{ catc
   const skipTime = round?.status === 'ended' && round.ended_at ? Date.parse(round.ended_at) + CATCHMIND_RULES.skipAfterMs : NaN;
   const skipAvailableAt = Number.isFinite(skipTime) ? new Date(skipTime).toISOString() : null;
   const playing = user.role === 'player'; const author = playing && round?.drawer_id === user.id;
+  const closed = playClosed(now.getTime());
   const guesses = round ? (await db.prepare(`SELECT g.id, g.answer, g.correct, g.created_at, u.id AS player_id, u.username, u.display_name, u.character, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photo_version
     FROM catchmind_guesses g JOIN users u ON u.id = g.player_id WHERE g.round_id = ? ORDER BY g.sequence`)
     .bind(round.id).all<{ id: string; answer: string; correct: number; created_at: string; player_id: string; username: string; display_name: string; character: ArtKey | null; photo_version: number | null }>()).results : [];
@@ -216,12 +220,12 @@ async function readState(db: D1Database, user: Actor, now: Date): Promise<{ catc
       image: round.has_image && (round.status !== 'draft' || author) ? `/api/catchmind/rounds/${encodeURIComponent(round.id)}/image` : null,
       wrongCount: round.wrong_count,
       hint: round.wrong_count >= CATCHMIND_RULES.hintAfter ? { firstCharacter: letters[0]!, length: letters.length } : null,
-      winner, endReason: round.end_reason, publishedAt: round.published_at, endedAt: round.ended_at,
+      winner, winnerScored: winnerScored(round), endReason: round.end_reason, publishedAt: round.published_at, endedAt: round.ended_at,
       guesses: guesses.map(guess => ({ id: guess.id, answer: guess.answer, correct: Boolean(guess.correct), createdAt: guess.created_at,
         player: { id: guess.player_id, username: guess.username, displayName: guess.display_name, photoVersion: guess.photo_version, character: guess.character ?? defaultCharacter(guess.username) } })) } : null,
     canClaim: playing && !turn.drawer_id && !round,
     canReroll: Boolean(author && round?.status === 'draft' && round.rerolls < CATCHMIND_RULES.rerolls),
-    canPublish: Boolean(author && round?.status === 'draft'), canGuess: Boolean(playing && !author && round?.status === 'open'),
+    canPublish: Boolean(author && round?.status === 'draft' && !closed), canGuess: Boolean(playing && !author && round?.status === 'open' && !closed),
     canEnd: Boolean(author && round?.status === 'open'),
     canNext: Boolean(playing && turn.drawer_id === user.id && (round?.status === 'ended' || (round?.status === 'draft' && !round.drawer_active))),
   } };
@@ -273,6 +277,8 @@ async function mutateOnce(db: D1Database, user: Actor, action: CatchmindAction, 
     ...(action === 'skip' ? { expectedTurnId: input.expectedTurnId } : {}) };
   const hash = await hashToken(JSON.stringify(payload));
   if (await priorRequest(db, user, input.requestId, action, hash)) return;
+  // Drawing can wait, but publishing and guessing close with every game at 23:50.
+  if ((action === 'publish' || action === 'guess') && playClosed(now.getTime())) throw new CatchmindError(409, 'PLAY_CLOSED', PLAY_RULES.closedMessage);
   const { turn, round } = await board(db);
   if (action !== 'claim' && (!round || round.id !== input.roundId)) throw new CatchmindError(409, 'ROUND_CHANGED', '새 판이 시작됐어요. 화면을 새로고침해 주세요.');
   if ((action === 'reroll' || action === 'publish' || action === 'end') && round?.drawer_id !== user.id) throw new CatchmindError(403, 'NOT_DRAWER', '출제자만 할 수 있어요.');
@@ -367,7 +373,10 @@ async function mutateOnce(db: D1Database, user: Actor, action: CatchmindAction, 
       wrong_count = wrong_count + CASE WHEN (SELECT correct FROM catchmind_guesses WHERE id = ?) = 1 THEN 0 ELSE 1 END
       WHERE id = ? AND EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)`)
       .bind(attempt, CATCHMIND_RULES.endAfter, attempt, CATCHMIND_RULES.endAfter, attempt, CATCHMIND_RULES.endAfter, now.toISOString(), attempt, user.id, attempt, round!.id, attempt));
-    for (const [currency, amount] of [['gold', CATCHMIND_RULES.gold], ['score', CATCHMIND_RULES.score]] as const) {
+    // A round published on an earlier day can still be solved, and the winner
+    // still takes the gold, but its score only counts before its day closed.
+    const counted = scoreCounts(round!.round_date!, now.getTime());
+    for (const [currency, amount] of [['gold', CATCHMIND_RULES.gold], ...(counted ? [['score', CATCHMIND_RULES.score]] as const : [])] as const) {
       writes.push(db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
         SELECT ?, g.player_id, ?, ?, '캐치마인드 정답', ?, g.created_at, ? FROM catchmind_guesses g
         WHERE g.id = ? AND g.correct = 1`)

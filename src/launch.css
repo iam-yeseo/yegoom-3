@@ -30,3 +30,15 @@
   .launch-dialog h2 { font-size: 20px; }
   .launch-gift-tickets { gap: 8px; }
 }
+
+/* Ranking result dialog: shown once after a weekly or monthly settlement. */
+.rank-result-cards { display: grid; gap: 12px; margin: 0 0 20px; }
+.rank-result-card { display: grid; gap: 4px; padding: 16px 14px; border-radius: 18px; background: #fff; }
+.rank-result-card.paid { background: #fff4cc; }
+.rank-result-card small { font-size: 12px; font-weight: 700; color: var(--muted); }
+.launch-dialog .rank-result-line { margin: 2px 0 0; font-size: 17px; font-weight: 800; color: var(--text); }
+.rank-result-place { display: inline-block; font-size: 30px; color: var(--coral); }
+.rank-result-meta { font-size: 13px; color: var(--muted); }
+.launch-dialog .rank-result-reward { margin: 6px 0 0; font-size: 14px; color: var(--text); }
+.rank-result-reward strong { color: #94700a; }
+.launch-dialog .rank-result-ranking { margin-top: 10px; width: 100%; }

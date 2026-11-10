@@ -53,3 +53,11 @@ export function rankScores(totals: readonly { userId: string; score: number }[])
     return { ...entry, rank };
   });
 }
+
+export interface RankResultKey { period: RewardPeriod; key: string }
+/** One player's settled place in a finished period (the result dialog). */
+export interface RankResult extends RankResultKey {
+  /** Inclusive KST dates of the period. */
+  start: string; end: string;
+  place: number; score: number; gold: number; players: number;
+}
