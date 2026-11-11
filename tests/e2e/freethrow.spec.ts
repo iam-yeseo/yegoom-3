@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
+import { expectPageScrolls } from './page-scroll';
 
 const court = (page: Page) => page.locator('.freethrow-court');
 const canvas = (page: Page) => page.locator('.freethrow-court canvas');
@@ -141,6 +142,9 @@ test('an official preview set records all ten balls at the end and shows the res
   await result.getByRole('button', { name: '확인' }).click();
   await expect(page.locator('.play-shell')).toHaveCount(0);
   await expect(page.locator('.freethrow-official')).toContainText(`${goals}골 성공!`);
+  // The shell and the result dialog close together; the page must scroll again.
+  await page.locator('.freethrow-guide summary').click();
+  await expectPageScrolls(page);
   expect(await gold()).toBe(before + goals * 5);
   await expect(page.locator('.freethrow-today li.is-me')).toContainText(`${goals}골`);
   await page.getByRole('button', { name: '뒤로 가기' }).click();

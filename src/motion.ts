@@ -114,6 +114,21 @@ export const fadeIn = (el: Element | null | undefined, o: Opts = {}) =>
 
 const openSheets = new Map<HTMLDialogElement, () => void>();
 let unlockPageScroll: (() => void) | null = null;
+let pageScrollHolds = 0;
+
+/** Freeze the page behind an overlay (a sheet, a full-screen game). Every
+ * overlay takes its own hold and the page is frozen once, while any hold is
+ * open: overlays that open and close in a different order, or unmount in the
+ * same commit, must never restore each other's saved styles. */
+export function holdPageScroll(): () => void {
+  if (pageScrollHolds++ === 0) unlockPageScroll = lockPageScroll();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--pageScrollHolds === 0) { unlockPageScroll?.(); unlockPageScroll = null; }
+  };
+}
 
 function lockPageScroll() {
   const root = document.documentElement;
@@ -147,11 +162,11 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
   const existing = openSheets.get(dialog);
   if (existing) return existing;
   const previousFocus = document.activeElement;
-  if (openSheets.size === 0) unlockPageScroll = lockPageScroll();
+  const releasePageScroll = holdPageScroll();
   try {
     dialog.showModal();
   } catch (error) {
-    if (openSheets.size === 0) { unlockPageScroll?.(); unlockPageScroll = null; }
+    releasePageScroll();
     throw error;
   }
   const entrance = anim(dialog, [{ translate: "0 30px", opacity: 0 }, { translate: "0 0", opacity: 1 }], {
@@ -194,7 +209,7 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
     entrance?.cancel();
     openSheets.delete(dialog);
     if (dialog.open) dialog.close();
-    if (openSheets.size === 0) { unlockPageScroll?.(); unlockPageScroll = null; }
+    releasePageScroll();
     const topDialog = Array.from(openSheets.keys()).at(-1);
     if (previousFocus instanceof HTMLElement && previousFocus.isConnected && (!topDialog || topDialog.contains(previousFocus))) {
       previousFocus.focus({ preventScroll: true });

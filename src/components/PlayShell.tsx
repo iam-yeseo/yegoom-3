@@ -1,6 +1,7 @@
 import { useEffect, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { LaunchDialog } from "../launch-gift";
+import { holdPageScroll } from "../motion";
 import "../play-shell.css";
 
 /** A full-screen play view, like a small app of its own: a top bar (close,
@@ -18,11 +19,10 @@ export function PlayShell({ label, theme, stage, top, right, bottom, onClose, ch
   onClose: () => void;
   children?: ReactNode;
 }) {
-  useEffect(() => {
-    const { overflow } = document.body.style;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = overflow; };
-  }, []);
+  // Shares the sheets' page lock: the result dialog opens over this shell and
+  // both close in one commit, so separate save/restore pairs would leave the
+  // page frozen (body overflow hidden) once the game is gone.
+  useEffect(() => holdPageScroll(), []);
   return createPortal(<section className="play-shell" role="region" aria-label={label} data-tone={theme.tone ?? "dark"}
     style={{ "--play-bg": theme.background, "--play-text": theme.text ?? "#fff", "--stage-ratio": `${stage.width} / ${stage.height}`,
       "--stage-w": stage.width, "--stage-h": stage.height } as CSSProperties}>

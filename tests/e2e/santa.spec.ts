@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
+import { expectPageScrolls } from './page-scroll';
 
 test.use({ serviceWorkers: 'block' });
 const shell = (page: Page) => page.getByRole('region', { name: '산타 선물 배달' });
@@ -32,6 +33,22 @@ test('santa runs full screen: the sky and the throw button fit without scrolling
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'docs/screenshots/santa-play-390.png' });
+});
+
+test('a finished santa run leaves the page scrollable once the result is closed', async ({ page }) => {
+  // Ten houses fly by one after another; let every one pass without a throw.
+  test.setTimeout(120_000);
+  await page.route('**/api/**', route => route.abort());
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#/preview/play/santa');
+  await page.getByRole('button', { name: /산타 출발/ }).click();
+  await expect(shell(page)).toBeVisible();
+  const result = page.locator('.play-result-dialog');
+  await expect(result).toContainText('0곳 배달 성공!', { timeout: 100_000 });
+  await result.getByRole('button', { name: '확인' }).click();
+  await expect(shell(page)).toHaveCount(0);
+  await page.locator('.santa-guide summary').click();
+  await expectPageScrolls(page);
 });
 
 test('leaving a santa run midway asks first, ends it unfinished and does not offer a second start', async ({ page }) => {
