@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { expectPageScrolls } from './page-scroll';
+import { PLAY_RULES } from '../../shared/balance';
 
 test.use({ serviceWorkers: 'block' });
 const shell = (page: Page) => page.getByRole('region', { name: '산타 선물 배달' });
@@ -33,6 +34,15 @@ test('santa runs full screen: the sky and the throw button fit without scrolling
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'docs/screenshots/santa-play-390.png' });
+});
+
+test('from 23:50 the start button is off and says the day is closed', async ({ page }) => {
+  await page.route('**/api/**', route => route.abort());
+  await page.clock.setFixedTime(new Date('2026-12-20T23:55:00+09:00'));
+  await page.goto('/#/preview/play/santa');
+  const start = page.getByRole('button', { name: /산타 출발/ });
+  await expect(start).toBeDisabled();
+  await expect(page.locator('.santa-warn')).toHaveText(PLAY_RULES.closedMessage);
 });
 
 test('a finished santa run leaves the page scrollable once the result is closed', async ({ page }) => {

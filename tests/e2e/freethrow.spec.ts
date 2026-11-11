@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { expectPageScrolls } from './page-scroll';
+import { PLAY_RULES } from '../../shared/balance';
 
 const court = (page: Page) => page.locator('.freethrow-court');
 const canvas = (page: Page) => page.locator('.freethrow-court canvas');
@@ -120,6 +121,14 @@ test('free-throw sound preference survives a reload and the court fits short and
   await flick(page, 2.45);
   await expect(page.locator('.freethrow-callout')).toHaveClass(/is-made/, { timeout: 4000 });
   await page.screenshot({ path: 'docs/screenshots/freethrow-practice-made-560.png' });
+});
+
+test('from 23:50 the official start is off and says the day is closed', async ({ page }) => {
+  await page.route('**/api/**', route => route.abort());
+  await page.clock.setFixedTime(new Date('2026-11-11T23:55:00+09:00'));
+  await page.goto('/#/preview/play/freethrow');
+  await expect(page.getByRole('button', { name: '세트 시작하기' })).toBeDisabled();
+  await expect(page.locator('.freethrow-official-warn')).toHaveText(PLAY_RULES.closedMessage);
 });
 
 test('an official preview set records all ten balls at the end and shows the result', async ({ page }) => {

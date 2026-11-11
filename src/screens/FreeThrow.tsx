@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FREETHROW_RULES } from "../../shared/balance";
+import { FREETHROW_RULES, PLAY_RULES } from "../../shared/balance";
 import type { ShotInput, ShotResult } from "../../shared/freethrow-physics";
 import type { FreeThrowFinishInput, FreeThrowFinishResponse, FreeThrowSet, FreeThrowSetInput, FreeThrowState, FreeThrowSummary, LedgerEntry, User } from "../../shared/types";
-import { api, ApiFailure } from "../api";
+import { api } from "../api";
 import { PlayProgress, PlayShell, QuitDialog, ResultDialog, type RecordStatus } from "../components/PlayShell";
 import { Avatar, Toolbar, useDisplayNameLookup } from "../components/UI";
 import { previewEngine } from "../freethrow/preview";
 import { anim, reduced } from "../motion";
+import { usePlayClosed } from "../play-window";
+import { pendingStore, useRecordedPlay } from "../recorded-play";
 import { FreeThrowController, type ThrowMode } from "../freethrow/controller";
 import { STAGE } from "../freethrow/render";
 import { createFreeThrowSound, type FreeThrowSound } from "../freethrow/sound";
@@ -41,18 +43,9 @@ interface Source {
   start(input: FreeThrowSetInput): Promise<FreeThrowState>;
   finish(input: FreeThrowFinishInput): Promise<FreeThrowFinishResponse>;
 }
-/** A finished set is kept on the device until the server has it, so a reload or
- * lost response re-sends it. Only a whole set is ever kept: leaving mid-set
- * keeps nothing, and that set ends unfinished. */
-const pendingKey = (userId: string) => `yegoom3:freethrow:finish:${userId}`;
-function readPending(userId: string): FreeThrowFinishInput | null {
-  try { const value = JSON.parse(localStorage.getItem(pendingKey(userId)) ?? "null"); return typeof value?.setId === "string" && Array.isArray(value.shots) ? value : null; } catch { return null; }
-}
-function writePending(userId: string, value: FreeThrowFinishInput | null) {
-  try { if (value) localStorage.setItem(pendingKey(userId), JSON.stringify(value)); else localStorage.removeItem(pendingKey(userId)); } catch { /* Memory still holds it. */ }
-}
-/** Answers that mean the set can never be recorded as sent; anything else is retried. */
-const finalRefusal = (error: unknown) => error instanceof ApiFailure && (error.status === 400 || error.status === 403 || error.status === 404 || error.status === 409);
+const pendingSets = pendingStore("freethrow", (value): value is FreeThrowFinishInput =>
+  typeof (value as FreeThrowFinishInput | null)?.setId === "string" && Array.isArray((value as FreeThrowFinishInput).shots));
+const setIdOf = (input: FreeThrowFinishInput) => input.setId;
 type Playing = { mode: "practice" } | { mode: "official"; set: FreeThrowSet };
 interface Result { setId: string; made: number; points: number; gold: number; status: RecordStatus; message: string }
 
@@ -71,10 +64,7 @@ export function FreeThrow({ user, onBack, demo = false, transact, onSummary, onP
   /** The set (or practice) being played right now, held only in memory. */
   const [playing, setPlaying] = useState<Playing | null>(null);
   const [result, setResult] = useState<Result | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncError, setSyncError] = useState("");
   const [visible, setVisible] = useState(!document.hidden);
-  const pending = useRef<FreeThrowFinishInput | null>(null);
   const admin = user.role === "admin";
   const name = useDisplayNameLookup();
 
@@ -96,40 +86,16 @@ export function FreeThrow({ user, onBack, demo = false, transact, onSummary, onP
   const sourceRef = useRef(source); sourceRef.current = source;
   const apply = useCallback((state: FreeThrowState) => { setOfficial(state); notify(state); }, [notify]);
 
-  const send = useCallback(async (input: FreeThrowFinishInput) => {
-    pending.current = input; writePending(user.id, input);
-    setSyncing(true); setSyncError("");
-    setResult(current => current && current.setId === input.setId ? { ...current, status: "saving" } : current);
-    try {
-      const response = await sourceRef.current.finish(input);
-      pending.current = null; writePending(user.id, null);
-      apply(response);
+  const { pending, syncing, syncError, setSyncError, send, load } = useRecordedPlay({
+    userId: user.id, store: pendingSets, idOf: setIdOf, source: sourceRef, apply,
+    mark: (setId, patch) => setResult(current => current && current.setId === setId ? { ...current, ...patch } : current),
+    onSaved: (response, input) => {
       setResult(current => current && current.setId === input.setId ? { ...current, points: response.set.points, gold: response.set.gold, status: "saved" } : current);
       if (!demo && response.set.made) props.current.onRevealed?.();
-    } catch (failure) {
-      const message = failure instanceof Error ? failure.message : "기록을 보내지 못했어요.";
-      if (finalRefusal(failure)) {
-        pending.current = null; writePending(user.id, null);
-        setResult(current => current && current.setId === input.setId ? { ...current, status: "refused", message } : current);
-        setSyncError(message);
-        void sourceRef.current.load().then(apply).catch(() => {});
-      } else {
-        setResult(current => current && current.setId === input.setId ? { ...current, status: "retry" } : current);
-        setSyncError("세트 기록을 보내지 못했어요. 다시 보내기를 눌러 주세요.");
-      }
-    } finally { setSyncing(false); }
-  }, [user.id, apply, demo]);
-  const load = useCallback(async () => {
-    if (pending.current) return;
-    try {
-      const state = await sourceRef.current.load();
-      apply(state); setLoadError("");
-      // A set finished just before a reload is sent before anything else.
-      const saved = readPending(user.id);
-      if (saved && state.current && saved.setId === state.current.id && !state.current.completed && !state.current.finished) void send(saved);
-      else if (saved) writePending(user.id, null);
-    } catch (failure) { setLoadError(failure instanceof Error ? failure.message : "공식 도전 기록을 불러오지 못했어요."); }
-  }, [apply, send, user.id]);
+    },
+    retryMessage: "세트 기록을 보내지 못했어요. 다시 보내기를 눌러 주세요.",
+    onLoadError: failure => setLoadError(failure === null ? "" : failure instanceof Error ? failure.message : "공식 도전 기록을 불러오지 못했어요."),
+  });
 
   useEffect(() => {
     const visibility = () => setVisible(!document.hidden);
@@ -297,14 +263,16 @@ function OfficialPanel({ official, admin, unfinished, starting, error, onStart, 
   official: FreeThrowState | null; admin: boolean; unfinished: boolean; starting: boolean; error: string; onStart(): void; myBest: number;
 }) {
   const set = official?.current ?? null;
+  // 23:50~24:00 the Worker refuses an official start (practice stays open).
+  const closed = usePlayClosed();
   const next = official && <div className="freethrow-official-next"><span>다음 세트 {kstHour(official.nextSlotAt)}</span></div>;
   let body;
   if (!official) body = <p className="freethrow-official-note">{error || "공식 도전 기록을 불러오는 중…"}</p>;
   else if (admin) body = <p className="freethrow-official-note">운영자는 공식 도전에 참여하지 않아요. 친구들의 오늘 기록만 볼 수 있어요.</p>;
   else if (official.available) body = <>
     <div className="freethrow-official-head"><strong>{kstHour(official.slotStart)} 세트</strong><small>{shotsPerSet}구 · 1골마다 {goalScore}점 + {goalGold}G</small></div>
-    <button type="button" className="primary-button freethrow-start" onClick={onStart} disabled={starting}>{starting ? "준비 중…" : "세트 시작하기"}</button>
-    <small className="freethrow-official-warn">시작하면 이번 시간의 기회를 써요. {shotsPerSet}구를 끝까지 던져야 기록돼요!</small>
+    <button type="button" className="primary-button freethrow-start" onClick={onStart} disabled={starting || closed}>{starting ? "준비 중…" : "세트 시작하기"}</button>
+    <small className="freethrow-official-warn" role={closed ? "status" : undefined}>{closed ? PLAY_RULES.closedMessage : `시작하면 이번 시간의 기회를 써요. ${shotsPerSet}구를 끝까지 던져야 기록돼요!`}</small>
   </>;
   else if (set && set.completed) body = <>
     <div className="freethrow-official-head is-done"><strong>{set.made}골 성공!</strong><small>{set.made ? `${set.points ? `+${set.points}점 · ` : ""}+${set.gold}G 받았어요${set.points < set.made * goalScore ? " (밤 11시 50분 이후 기록은 점수에 들어가지 않아요)" : ""}` : "이번엔 골이 없었어요. 다음 세트에서 만회해요!"}</small></div>

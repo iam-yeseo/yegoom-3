@@ -1,5 +1,5 @@
 /** 예굼방 주식 — the listed companies (from the "[YEGOOM] Text Database" sheet's
- * 주식 리스트 tab; listing prices ×10) and the market rules shared by the Worker,
+ * 주식 리스트 tab, listing prices as written there) and the market rules shared by the Worker,
  * the screens and the preview. Volatility follows the listing price: 1,500 stable,
  * 1,000–750 normal, 500 wild. */
 export type Volatility = 'stable' | 'normal' | 'wild';

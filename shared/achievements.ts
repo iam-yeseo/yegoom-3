@@ -57,6 +57,8 @@ export const ACHIEVEMENTS: readonly AchievementDefinition[] = [
   daily('wake_near', 'games', '진짜 지금 일어난다고?', '기상시간 게임 정답(10분 이내)', 100),
   daily('wake_close', 'games', '진짜 지금 일어났다고?', '기상시간 게임 정답(3분 이내)', 500),
   daily('wake_exact', 'games', '어제 도대체 언제 잔 거야?', '기상시간 게임 정답(정확히 일치)', 1000),
+  // 오답 = 공개된 판에서 예측 점수를 0점 받은 것(배점표 밖의 차이).
+  once('wake_miss', 'games', '혹시 밤 샜어?', '기상시간 게임 오답 시', 50),
   once('offwork_join', 'games', '이 시간만을 기다리고 있었어', '퇴근시간 게임 참여', 50),
   daily('offwork_near', 'games', '일찍 온 거 아니지?', '퇴근시간 게임 정답(3분 이내)', 50),
   daily('offwork_close', 'games', '나 사실 너 봤어', '퇴근시간 게임 정답(1분 이내)', 50),

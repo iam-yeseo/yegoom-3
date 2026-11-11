@@ -1,5 +1,5 @@
 import { ACHIEVEMENT_BY_KEY, ACHIEVEMENT_RULES, ACHIEVEMENTS, isAchievementKey, type AchievementClientEvent, type AchievementProgress, type AchievementsResponse } from '../shared/achievements';
-import { CATCHMIND_RULES, FREETHROW_RULES } from '../shared/balance';
+import { CATCHMIND_RULES, FREETHROW_RULES, GAME_RULES } from '../shared/balance';
 import { STOCK_RULES } from '../shared/stocks';
 import type { GameId } from '../shared/types';
 import { readBalances } from './balances';
@@ -16,7 +16,7 @@ interface Unlock { key: string; periodKey: string }
  * Repeatable facts come back as JSON arrays of the last few days. */
 interface Facts {
   nickname: number; photo: number; character: number; notifications: number;
-  wake_join: number; offwork_join: number; luck_join: number;
+  wake_join: number; wake_miss: number; offwork_join: number; luck_join: number;
   catchmind_guess: number; catchmind_draw: number; catchmind_misses: number;
   attend_total: number; attend_streak: number | null;
   kuji_first: number; kuji_a: number; kuji_last: number;
@@ -51,6 +51,12 @@ const FACTS_SQL = `SELECT
     u.character IS NOT NULL AS character,
     u.notifications_seen_at IS NOT NULL AS notifications,
     EXISTS (SELECT 1 FROM predictions WHERE player_id = u.id AND game_id = 'wake') AS wake_join,
+    -- 오답: a settled wake round paid this player no prediction score (0점). The
+    -- settlement writes a score row for every non-zero result, so its absence is the 0.
+    -- The author's own rows (never accepted by the API) are not settled, so they never count.
+    EXISTS (SELECT 1 FROM predictions p JOIN game_rounds r ON r.game_id = p.game_id AND r.round_date = p.round_date
+      WHERE p.player_id = u.id AND p.game_id = 'wake' AND r.settled_at IS NOT NULL AND u.username != '${GAME_RULES.wake.author}'
+        AND NOT EXISTS (SELECT 1 FROM ledger WHERE reference = 'score:wake:' || p.round_date || ':' || u.id)) AS wake_miss,
     EXISTS (SELECT 1 FROM predictions WHERE player_id = u.id AND game_id = 'offwork') AS offwork_join,
     EXISTS (SELECT 1 FROM predictions WHERE player_id = u.id AND game_id = 'luck') AS luck_join,
     EXISTS (SELECT 1 FROM catchmind_guesses WHERE player_id = u.id) AS catchmind_guess,
@@ -59,7 +65,8 @@ const FACTS_SQL = `SELECT
     (SELECT COUNT(*) FROM attendance WHERE user_id = u.id) AS attend_total,
     (SELECT MAX(streak) FROM attendance WHERE user_id = u.id) AS attend_streak,
     EXISTS (SELECT 1 FROM shop_purchases WHERE user_id = u.id AND kind = 'kuji') AS kuji_first,
-    EXISTS (SELECT 1 FROM shop_purchases WHERE user_id = u.id AND kind = 'kuji' AND outcome LIKE '%"grade":"A"%') AS kuji_a,
+    EXISTS (SELECT 1 FROM shop_purchases p, json_each(p.outcome, '$.cells') c
+      WHERE p.user_id = u.id AND p.kind = 'kuji' AND json_extract(c.value, '$.grade') = 'A') AS kuji_a,
     EXISTS (SELECT 1 FROM shop_purchases WHERE user_id = u.id AND kind = 'kuji' AND last_one = 1) AS kuji_last,
     EXISTS (SELECT 1 FROM shop_purchases WHERE user_id = u.id AND kind = 'lotto') AS lotto_first,
     EXISTS (SELECT 1 FROM shop_purchases p JOIN lotto_tickets t ON t.id = p.id WHERE p.user_id = u.id AND p.kind = 'lotto' AND t.rank = 1) AS lotto_win,
@@ -110,7 +117,7 @@ export function unlockedAchievements(facts: Facts, events: ReadonlySet<string>):
     ...once('nickname', facts.nickname), ...once('photo', facts.photo), ...once('character', facts.character),
     ...once('password', events.has('password')), ...once('notifications', facts.notifications),
     ...once('font_size', events.has('font_size')),
-    ...once('wake_join', facts.wake_join), ...once('offwork_join', facts.offwork_join), ...once('luck_join', facts.luck_join),
+    ...once('wake_join', facts.wake_join), ...once('wake_miss', facts.wake_miss), ...once('offwork_join', facts.offwork_join), ...once('luck_join', facts.luck_join),
     ...once('catchmind_guess', facts.catchmind_guess), ...once('catchmind_draw', facts.catchmind_draw), ...once('catchmind_misses', facts.catchmind_misses),
     ...once('attend_first', facts.attend_total >= 1),
     ...once('attend_streak', (facts.attend_streak ?? 0) >= ACHIEVEMENT_RULES.attendance.streak),

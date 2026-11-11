@@ -2416,6 +2416,8 @@ describe('Worker and D1 integration', () => {
       await seedRound({ game: 'wake', date: '2026-10-29', answer: '08:00:00', revealedAt: Date.parse('2026-10-29T00:00:00Z'), predictions: [['min', '08:00:00']] });
       await seedRound({ game: 'wake', date: '2026-10-28', answer: '08:00:00', revealedAt: Date.parse('2026-10-28T00:00:00Z'), predictions: [['min', '08:02:00']] });
       await seedRound({ game: 'luck', date: '2026-10-29', answer: '50', revealedAt: Date.parse('2026-10-29T00:00:00Z'), predictions: [['min', '53']] });
+      // Over two hours off scores 0: that is the wake 오답 (siwon). yeseo still scored.
+      await seedRound({ game: 'wake', date: '2026-10-27', answer: '08:00:00', revealedAt: Date.parse('2026-10-27T00:00:00Z'), predictions: [['yeseo', '09:59:00'], ['siwon', '10:00:01']] });
       await db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
         VALUES ('rank', 'user', 'min', 'min', '{"kind":"rank","period":"week","place":1,"gold":500}', ?, 'notification:rank:week:2026-10-19:min')`)
         .bind(`${TODAY}T00:00:00.000Z`).run();
@@ -2429,6 +2431,10 @@ describe('Worker and D1 integration', () => {
       expect(status(view, 'luck_near', '2026-10-29')).toBe('unlocked');
       expect(status(view, 'luck_exact', '2026-10-29')).toBe('locked');
       expect(status(view, 'wake_join')).toBe('unlocked');
+      // min authors the wake game: those seeded rows are never settled and never count.
+      expect(status(view, 'wake_miss')).toBe('locked');
+      expect(status(await achievements((await login('siwon')).cookie), 'wake_miss')).toBe('unlocked');
+      expect(status(await achievements((await login('yeseo')).cookie), 'wake_miss')).toBe('locked');
       expect(status(view, 'rank_week', '2026-10-19')).toBe('unlocked');
       expect(status(view, 'rank_month')).toBe('locked');
       const claimed = await (await request('/api/achievements/claim', { method: 'POST', cookie, body: { key: 'wake_near', periodKey: '2026-10-28' } })).json() as Achievements;

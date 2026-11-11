@@ -60,6 +60,7 @@ import { Achievements, type AchievementClient } from "./screens/Achievements";
 import { createPreviewAchievements } from "./achievements-preview";
 import { ACHIEVEMENTS_PATH } from "../shared/achievements";
 import { Gold, Segmented } from "./components/UI";
+import { syncServerClock } from "./play-window";
 
 /** The real stock client: plain API calls (polling is paced by the screens). */
 const serverStock: StockClient = {
@@ -436,6 +437,7 @@ export default function App() {
       if (!current()) return null;
       lastBootstrapSuccessAt.current = Date.now();
       serverClockOffset.current = Date.parse(next.serverTime) - Date.now();
+      syncServerClock(next.serverTime);
       activeUserId.current = next.user.id;
       clearLegacyAttendance(next.user.username);
       completeCatchmindReauth();
@@ -576,6 +578,7 @@ export default function App() {
   const applyBootstrap = (next: BootstrapResponse) => {
     lastBootstrapSuccessAt.current = Date.now();
     serverClockOffset.current = Date.parse(next.serverTime) - Date.now();
+    syncServerClock(next.serverTime);
     activeUserId.current = next.user.id;
     clearLegacyAttendance(next.user.username);
     completeCatchmindReauth();
@@ -619,6 +622,7 @@ export default function App() {
     let receipt!: LaunchGiftResponse;
     await mutate(async () => { receipt = await api.launchGift(); return receipt; }, result => {
       serverClockOffset.current = Date.parse(result.serverTime) - Date.now();
+      syncServerClock(result.serverTime);
       setData(current => current && current.user.id === owner ? { ...current, launchGift: result.launchGift, inventory: result.inventory, serverTime: result.serverTime } : current);
     });
     // The receipt already carries the grant; a later read failure cannot undo it.

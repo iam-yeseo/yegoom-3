@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SANTA_RULES, santaHalf } from "../../shared/balance";
+import { PLAY_RULES, SANTA_RULES, santaHalf } from "../../shared/balance";
 import { santaCourse, type DropResult, type SantaHouse } from "../../shared/santa-engine";
 import type { LedgerEntry, SantaFinishInput, SantaFinishResponse, SantaRun, SantaRunInput, SantaState, SantaSummary, User } from "../../shared/types";
-import { api, ApiFailure } from "../api";
+import { api } from "../api";
 import { PlayProgress, PlayShell, QuitDialog, ResultDialog, type RecordStatus } from "../components/PlayShell";
 import { Avatar, Toolbar, useDisplayNameLookup } from "../components/UI";
 import { anim, reduced } from "../motion";
+import { usePlayClosed } from "../play-window";
+import { pendingStore, useRecordedPlay } from "../recorded-play";
 import { SantaController, type SantaMode } from "../santa/controller";
 import { previewSantaEngine } from "../santa/preview";
 import { STAGE } from "../santa/render";
@@ -36,18 +38,9 @@ interface Source {
   start(input: SantaRunInput): Promise<SantaState>;
   finish(input: SantaFinishInput): Promise<SantaFinishResponse>;
 }
-/** A finished run is kept on the device until the server has it, so a reload or
- * lost response re-sends it. Only a whole run is ever kept: leaving mid-run
- * keeps nothing, and that run ends unfinished. */
-const pendingKey = (userId: string) => `yegoom3:santa:finish:${userId}`;
-function readPending(userId: string): SantaFinishInput | null {
-  try { const value = JSON.parse(localStorage.getItem(pendingKey(userId)) ?? "null"); return typeof value?.runId === "string" && Array.isArray(value.releases) ? value : null; } catch { return null; }
-}
-function writePending(userId: string, value: SantaFinishInput | null) {
-  try { if (value) localStorage.setItem(pendingKey(userId), JSON.stringify(value)); else localStorage.removeItem(pendingKey(userId)); } catch { /* Memory still holds it. */ }
-}
-/** Answers that mean the run can never be recorded as sent; anything else is retried. */
-const finalRefusal = (error: unknown) => error instanceof ApiFailure && (error.status === 400 || error.status === 403 || error.status === 404 || error.status === 409);
+const pendingRuns = pendingStore("santa", (value): value is SantaFinishInput =>
+  typeof (value as SantaFinishInput | null)?.runId === "string" && Array.isArray((value as SantaFinishInput).releases));
+const runIdOf = (input: SantaFinishInput) => input.runId;
 /** Points as the server will count them (hits before 23:50 of the run's day). */
 const pointsOf = (hits: number) => hits * hitScore + (hits === houses ? perfectBonus : 0);
 interface Result { runId: string; hits: number; points: number; status: RecordStatus; message: string }
@@ -67,10 +60,7 @@ export function Santa({ user, onBack, demo = false, transact, onSummary, onPrevi
   /** The run being played right now, held only in memory. */
   const [playing, setPlaying] = useState<{ run: SantaRun; course: SantaHouse[] } | null>(null);
   const [result, setResult] = useState<Result | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncError, setSyncError] = useState("");
   const [visible, setVisible] = useState(!document.hidden);
-  const pending = useRef<SantaFinishInput | null>(null);
   const admin = user.role === "admin";
   const name = useDisplayNameLookup();
 
@@ -93,40 +83,16 @@ export function Santa({ user, onBack, demo = false, transact, onSummary, onPrevi
   const sourceRef = useRef(source); sourceRef.current = source;
   const apply = useCallback((next: SantaState) => { setState(next); notify(next); }, [notify]);
 
-  const send = useCallback(async (input: SantaFinishInput) => {
-    pending.current = input; writePending(user.id, input);
-    setSyncing(true); setSyncError("");
-    setResult(current => current && current.runId === input.runId ? { ...current, status: "saving" } : current);
-    try {
-      const response = await sourceRef.current.finish(input);
-      pending.current = null; writePending(user.id, null);
-      apply(response);
+  const { pending, syncing, syncError, setSyncError, send, load } = useRecordedPlay({
+    userId: user.id, store: pendingRuns, idOf: runIdOf, source: sourceRef, apply,
+    mark: (runId, patch) => setResult(current => current && current.runId === runId ? { ...current, ...patch } : current),
+    onSaved: (response, input) => {
       setResult(current => current && current.runId === input.runId ? { ...current, points: response.run.points, status: "saved" } : current);
       if (!demo) props.current.onRevealed?.();
-    } catch (failure) {
-      const message = failure instanceof Error ? failure.message : "기록을 보내지 못했어요.";
-      if (finalRefusal(failure)) {
-        pending.current = null; writePending(user.id, null);
-        setResult(current => current && current.runId === input.runId ? { ...current, status: "refused", message } : current);
-        setSyncError(message);
-        void sourceRef.current.load().then(apply).catch(() => {});
-      } else {
-        setResult(current => current && current.runId === input.runId ? { ...current, status: "retry" } : current);
-        setSyncError("배달 기록을 보내지 못했어요. 다시 보내기를 눌러 주세요.");
-      }
-    } finally { setSyncing(false); }
-  }, [user.id, apply, demo]);
-  const load = useCallback(async () => {
-    if (pending.current) return;
-    try {
-      const next = await sourceRef.current.load();
-      apply(next); setLoadError("");
-      // A run finished just before a reload is sent before anything else.
-      const saved = readPending(user.id);
-      if (saved && next.current && saved.runId === next.current.id && !next.current.completed && !next.current.finished) void send(saved);
-      else if (saved) writePending(user.id, null);
-    } catch (failure) { setLoadError(failure instanceof Error ? failure.message : "배달 기록을 불러오지 못했어요."); }
-  }, [apply, send, user.id]);
+    },
+    retryMessage: "배달 기록을 보내지 못했어요. 다시 보내기를 눌러 주세요.",
+    onLoadError: failure => setLoadError(failure === null ? "" : failure instanceof Error ? failure.message : "배달 기록을 불러오지 못했어요."),
+  });
 
   useEffect(() => {
     const visibility = () => setVisible(!document.hidden);
@@ -290,14 +256,16 @@ function RunPanel({ state, admin, unfinished, starting, error, onStart }: {
   state: SantaState | null; admin: boolean; unfinished: boolean; starting: boolean; error: string; onStart(): void;
 }) {
   const run = state?.current ?? null;
+  // 23:50~24:00 the Worker refuses a start; say so before the tap.
+  const closed = usePlayClosed();
   let body;
   if (!state) body = <p className="santa-note">{error || "배달 기록을 불러오는 중…"}</p>;
   else if (admin) body = <p className="santa-note">운영자는 배달에 참여하지 않아요. 친구들의 오늘 기록만 볼 수 있어요.</p>;
   else if (state.available) body = <>
     <div className="santa-head"><strong>{santaHalf(state.slot)} 배달</strong><small>굴뚝 1곳 {hitScore}점 · 모두 성공 +{perfectBonus}점 · 완료 {clearGold}G</small></div>
     <img className="santa-hero" src="/santa/tile.webp" alt="" />
-    <button type="button" className="primary-button santa-start" onClick={onStart} disabled={starting}>{starting ? "썰매 준비 중…" : "🛷 산타 출발!"}</button>
-    <small className="santa-warn">출발하면 이번 시간의 기회를 써요. 끝까지 배달해야 기록돼요!</small>
+    <button type="button" className="primary-button santa-start" onClick={onStart} disabled={starting || closed}>{starting ? "썰매 준비 중…" : "🛷 산타 출발!"}</button>
+    <small className="santa-warn" role={closed ? "status" : undefined}>{closed ? PLAY_RULES.closedMessage : "출발하면 이번 시간의 기회를 써요. 끝까지 배달해야 기록돼요!"}</small>
   </>;
   else if (run && run.completed) {
     const perfect = run.hits === houses;
