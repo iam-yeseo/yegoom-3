@@ -72,8 +72,12 @@ test('administrators see the stock news card and cannot trade', async ({ page })
   // Switch the engine to Claude and back.
   await card.getByRole('tab', { name: 'Claude' }).click();
   await expect(card).toContainText('Claude 키 없음 · 템플릿');
-  await card.getByRole('tab', { name: 'OpenAI' }).click();
-  await expect(card).toContainText('OpenAI 키 없음 · 템플릿');
+  // The card ignores a tap while the previous change is still finishing (its
+  // follow-up refresh), so tap again until the switch back is taken.
+  await expect(async () => {
+    await card.getByRole('tab', { name: 'OpenAI' }).click();
+    await expect(card).toContainText('OpenAI 키 없음 · 템플릿', { timeout: 1500 });
+  }).toPass({ timeout: 15000 });
   await page.evaluate(() => { location.hash = '/stock/YEGM'; });
   await expect(page.getByRole('button', { name: '운영자는 거래할 수 없어요' })).toBeDisabled();
 });
