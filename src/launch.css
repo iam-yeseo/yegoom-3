@@ -42,3 +42,6 @@
 .launch-dialog .rank-result-reward { margin: 6px 0 0; font-size: 14px; color: var(--text); }
 .rank-result-reward strong { color: #94700a; }
 .launch-dialog .rank-result-ranking { margin-top: 10px; width: 100%; }
+
+/* A wider touch area than the drawn button (44px), without moving anything. */
+.launch-dialog-close::after { content: ''; position: absolute; inset: -6px; }

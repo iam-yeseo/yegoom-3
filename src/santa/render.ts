@@ -20,13 +20,27 @@ export const SANTA_IMAGES = ["sky", "sleigh", "chimney", "house-1", "house-2", "
 /** How far each level's chimney mouth rises above the roof under it. A taller
  * chimney top mostly stands on a bigger house, so the chimney itself grows a little. */
 export const LEVEL_RISE = [34, 42, 50, 58, 66] as const;
+/** A house's drawn size depends only on its style and chimney height, so it is
+ * worked out once (this runs for every house and falling gift, every frame). */
+const sizes = new Map<string, { height: number; scale: number }>();
+function houseSize(house: Pick<SantaHouse, "style" | "level" | "top">) {
+  const key = `${house.style}:${house.level}:${house.top}`;
+  let size = sizes.get(key);
+  if (!size) {
+    const art = SANTA_ART.houses[house.style % SANTA_ART.houses.length]!;
+    const under = art.roof[Math.round(art.chimneyX / art.roofStep)]! / art.height;
+    const height = (HOUSE_BOTTOM - house.top - (LEVEL_RISE[house.level] ?? LEVEL_RISE[0])) / (1 - under);
+    size = { height, scale: height / art.height };
+    sizes.set(key, size);
+  }
+  return size;
+}
 /** Where a house is drawn when its chimney's centre is at screen x. The chimney
  * stands in the middle of every house; the house is sized so the roof there
  * sits LEVEL_RISE below the chimney mouth. */
 export function housePlacement(house: Pick<SantaHouse, "style" | "level" | "top">, chimney: number) {
   const art = SANTA_ART.houses[house.style % SANTA_ART.houses.length]!;
-  const under = art.roof[Math.round(art.chimneyX / art.roofStep)]! / art.height;
-  const height = (HOUSE_BOTTOM - house.top - (LEVEL_RISE[house.level] ?? LEVEL_RISE[0])) / (1 - under), scale = height / art.height;
+  const { height, scale } = houseSize(house);
   const left = chimney - art.chimneyX * scale, top = HOUSE_BOTTOM - height;
   const index = (x: number) => Math.round((x - left) / (art.roofStep * scale));
   /** Roof top (snow surface) y at screen x, or null beside the house. */
@@ -66,20 +80,29 @@ const seeded = (n: number) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.54
 const STARS = Array.from({ length: 22 }, (_, i) => ({ x: seeded(i) * W, y: seeded(i + 99) * 260, r: 0.7 + seeded(i + 7) * 1.1, phase: seeded(i + 3) * 6.28 }));
 const FLAKES = Array.from({ length: 42 }, (_, i) => ({ x: seeded(i + 500) * W, y: seeded(i + 900) * H, r: 1 + seeded(i + 40) * 2.2, speed: 0.018 + seeded(i + 70) * 0.03, sway: seeded(i + 11) * 6.28 }));
 
+/** A picture already scaled to the canvas's pixels; `x`/`y` place it in logical units. */
+interface Sprite { canvas: HTMLCanvasElement; width: number; height: number }
+
 export class SantaRenderer {
   private ctx: CanvasRenderingContext2D;
   private ratio = 1;
   private images = new Map<string, HTMLImageElement>();
+  /** Pictures resampled once to the buffer's scale. Drawing the big originals
+   * through a high-quality downscale every frame is what made phones stutter;
+   * a same-size copy is a plain blit. Emptied when the scale changes or a
+   * picture arrives. */
+  private sprites = new Map<string, Sprite>();
+  private backdrop: HTMLCanvasElement | null = null;
   /** onReady repaints whenever another picture has loaded. */
   constructor(private canvas: HTMLCanvasElement, onReady?: () => void) {
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("이 브라우저에서는 하늘을 그릴 수 없어요.");
     this.ctx = ctx;
     if (typeof Image === "undefined") return;
     for (const src of SANTA_IMAGES) {
       const image = new Image();
       image.decoding = "async";
-      image.onload = () => { this.images.set(src, image); onReady?.(); };
+      image.onload = () => { this.images.set(src, image); this.sprites.clear(); this.backdrop = null; onReady?.(); };
       image.src = src;
     }
   }
@@ -87,42 +110,80 @@ export class SantaRenderer {
   /** Matches the buffer to the displayed size × DPR (max 2). Returns whether it changed. */
   resize(): boolean {
     const rect = this.canvas.getBoundingClientRect();
-    const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-    const width = Math.round((rect.width || W) * ratio), height = Math.round((rect.height || H) * ratio);
+    const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    const width = Math.round((rect.width || W) * dpr), height = Math.round((rect.height || H) * dpr);
     // Another renderer (a remounted screen) may already have sized this canvas: the scale still has to match it.
-    this.ratio = width / W;
+    const ratio = width / W;
+    if (ratio !== this.ratio) { this.ratio = ratio; this.sprites.clear(); this.backdrop = null; }
     if (this.canvas.width === width && this.canvas.height === height) return false;
     this.canvas.width = width; this.canvas.height = height;
     return true;
   }
+  /** A picture drawn once at `width` × `height` logical units (plus optional
+   * painting on top), kept at the buffer's resolution. */
+  private sprite(key: string, width: number, height: number, paint: (ctx: CanvasRenderingContext2D) => void): Sprite {
+    let sprite = this.sprites.get(key);
+    if (!sprite) {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.ceil(width * this.ratio)); canvas.height = Math.max(1, Math.ceil(height * this.ratio));
+      const ctx = canvas.getContext("2d")!;
+      ctx.scale(this.ratio, this.ratio);
+      ctx.imageSmoothingQuality = "high";
+      paint(ctx);
+      sprite = { canvas, width: canvas.width / this.ratio, height: canvas.height / this.ratio };
+      this.sprites.set(key, sprite);
+    }
+    return sprite;
+  }
+  /** Builds every house of a course ahead of its turn (during the countdown),
+   * so no frame of the flight has to stop and resample a picture. */
+  warm(course: readonly SantaHouse[]) {
+    for (const house of course) this.drawHouse(house, W / 2, null);
+    for (let color = 0; color < GIFT_NAMES.length; color++) this.drawGift({ x: -100, y: -100, angle: 0, color, alpha: 0, clipBelow: null });
+  }
+  private blit(sprite: Sprite, x: number, y: number) { this.ctx.drawImage(sprite.canvas, x, y, sprite.width, sprite.height); }
   draw(scene: SantaScene) {
     const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (!this.backdrop) this.backdrop = this.paintSky();
+    ctx.drawImage(this.backdrop, 0, 0);
     ctx.setTransform(this.ratio, 0, 0, this.ratio, 0, 0);
-    ctx.imageSmoothingQuality = "high";
-    this.drawSky(scene);
+    if (!scene.calm) this.drawStars(scene);
     this.drawHills(scene.distance * 0.18, 446, "#7a69a8", 30, 0.011);
     this.drawFarHouses(scene.distance * 0.34);
     this.drawHills(scene.distance * 0.42, 478, "#9584bf", 20, 0.017);
-    for (const entry of [scene.leaving, scene.house]) if (entry) this.drawHouse(entry.house, entry.x, scene.glow);
+    if (scene.leaving) this.drawHouse(scene.leaving.house, scene.leaving.x, scene.glow);
+    if (scene.house) this.drawHouse(scene.house.house, scene.house.x, scene.glow);
     this.drawGround(scene.distance);
     for (const gift of scene.gifts) this.drawGift(gift);
     this.drawSleigh(scene);
     this.drawSnow(scene);
   }
 
-  private drawSky(scene: SantaScene) {
-    const ctx = this.ctx, sky = this.image("sky");
+  /** The sky never moves: it is painted once at the buffer's size. */
+  private paintSky(): HTMLCanvasElement {
+    const layer = document.createElement("canvas");
+    layer.width = this.canvas.width; layer.height = this.canvas.height;
+    const ctx = layer.getContext("2d", { alpha: false })!;
+    ctx.scale(this.ratio, this.ratio);
+    ctx.imageSmoothingQuality = "high";
+    const sky = this.image("sky");
     if (sky) ctx.drawImage(sky, 0, 0, W, H);
     else {
       const gradient = ctx.createLinearGradient(0, 0, 0, H);
       gradient.addColorStop(0, "#1c2150"); gradient.addColorStop(0.55, "#3c3772"); gradient.addColorStop(1, "#8a78b4");
       ctx.fillStyle = gradient; ctx.fillRect(0, 0, W, H);
     }
-    if (scene.calm) return;
+    return layer;
+  }
+  private drawStars(scene: SantaScene) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#fffae6";
     for (const star of STARS) {
-      ctx.fillStyle = `rgba(255, 250, 230, ${0.25 + 0.6 * Math.max(0, Math.sin(scene.time / 700 + star.phase))})`;
+      ctx.globalAlpha = 0.25 + 0.6 * Math.max(0, Math.sin(scene.time / 700 + star.phase));
       ctx.beginPath(); ctx.arc(star.x, star.y, star.r, 0, Math.PI * 2); ctx.fill();
     }
+    ctx.globalAlpha = 1;
   }
   private drawHills(shift: number, base: number, color: string, height: number, frequency: number) {
     const ctx = this.ctx;
@@ -160,8 +221,9 @@ export class SantaRenderer {
   private drawHouse(house: SantaHouse, chimney: number, glow: SantaScene["glow"]) {
     const ctx = this.ctx, place = housePlacement(house, chimney);
     if (place.right < -CHIMNEY.cap || place.left > W + CHIMNEY.cap) return;
-    const image = this.image(`house-${(house.style % SANTA_ART.houses.length) + 1}`);
-    if (image) ctx.drawImage(image, place.left, place.top, place.width, place.height);
+    const style = house.style % SANTA_ART.houses.length, key = `${style}:${house.level}`;
+    const image = this.image(`house-${style + 1}`);
+    if (image) this.blit(this.sprite(`house:${key}`, place.width, place.height, layer => layer.drawImage(image, 0, 0, place.width, place.height)), place.left, place.top);
     else {
       ctx.fillStyle = "#fff3e0";
       ctx.beginPath(); ctx.moveTo(place.left, HOUSE_BOTTOM);
@@ -170,25 +232,33 @@ export class SantaRenderer {
     }
     const amount = glow && glow.index === house.index ? glow.amount : 0;
     if (amount > 0) {
-      const light = ctx.createRadialGradient(chimney, house.top, 4, chimney, house.top, 80);
-      light.addColorStop(0, `rgba(255, 228, 140, ${0.8 * amount})`); light.addColorStop(1, "rgba(255, 228, 140, 0)");
-      ctx.fillStyle = light; ctx.fillRect(chimney - 80, house.top - 80, 160, 160);
+      const light = this.sprite("glow", 160, 160, layer => {
+        const gradient = layer.createRadialGradient(80, 80, 4, 80, 80, 80);
+        gradient.addColorStop(0, "rgba(255, 228, 140, 0.8)"); gradient.addColorStop(1, "rgba(255, 228, 140, 0)");
+        layer.fillStyle = gradient; layer.fillRect(0, 0, 160, 160);
+      });
+      ctx.globalAlpha = amount; this.blit(light, chimney - 80, house.top - 80); ctx.globalAlpha = 1;
     }
     // The chimney stands on the roof in front of it: its foot is cut along the
-    // roof's snow line, so it rises out of the snow on the ridge.
-    const from = chimney - CHIMNEY.cap / 2 - 2, to = chimney + CHIMNEY.cap / 2 + 2;
-    ctx.save();
-    ctx.beginPath(); ctx.moveTo(from, 0); ctx.lineTo(to, 0);
-    for (let x = to; x >= from; x -= 2) ctx.lineTo(x, place.roofLine(x) + 4);
-    ctx.closePath(); ctx.clip();
-    const chimneyImage = this.image("chimney");
-    if (chimneyImage) ctx.drawImage(chimneyImage, chimney - CHIMNEY.mouthX, house.top - CHIMNEY.mouthY, CHIMNEY.width, CHIMNEY.height);
-    else {
-      ctx.fillStyle = "#e0604f"; ctx.fillRect(chimney - CHIMNEY.body / 2, house.top, CHIMNEY.body, GROUND - house.top);
-      ctx.fillStyle = "#f07a66"; ctx.fillRect(chimney - CHIMNEY.cap / 2, house.top - 10, CHIMNEY.cap, 22);
-      ctx.fillStyle = "#3a2430"; ctx.beginPath(); ctx.ellipse(chimney, house.top, SANTA_WORLD.mouthHalf, 5, 0, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.restore();
+    // roof's snow line, so it rises out of the snow on the ridge. The cut
+    // depends only on the house, so the cut chimney is kept as one picture.
+    const half = CHIMNEY.cap / 2 + 2, top = house.top - CHIMNEY.mouthY;
+    const cut = this.sprite(`chimney:${key}:${this.image("chimney") ? 1 : 0}`, half * 2, HOUSE_BOTTOM + 4 - top, layer => {
+      // Inside the sprite the chimney's centre is at x = half and y = 0 is `top`.
+      const origin = chimney - half;
+      layer.beginPath(); layer.moveTo(0, 0); layer.lineTo(half * 2, 0);
+      for (let x = half * 2; x >= 0; x -= 2) layer.lineTo(x, place.roofLine(origin + x) + 4 - top);
+      layer.closePath(); layer.clip();
+      const chimneyImage = this.image("chimney");
+      if (chimneyImage) layer.drawImage(chimneyImage, half - CHIMNEY.mouthX, 0, CHIMNEY.width, CHIMNEY.height);
+      else {
+        const mouth = CHIMNEY.mouthY;
+        layer.fillStyle = "#e0604f"; layer.fillRect(half - CHIMNEY.body / 2, mouth, CHIMNEY.body, GROUND - house.top);
+        layer.fillStyle = "#f07a66"; layer.fillRect(half - CHIMNEY.cap / 2, mouth - 10, CHIMNEY.cap, 22);
+        layer.fillStyle = "#3a2430"; layer.beginPath(); layer.ellipse(half, mouth, SANTA_WORLD.mouthHalf, 5, 0, 0, Math.PI * 2); layer.fill();
+      }
+    });
+    this.blit(cut, chimney - half, top);
   }
   private drawGift(gift: GiftSprite) {
     const ctx = this.ctx, image = this.image(`gift-${GIFT_NAMES[gift.color % GIFT_NAMES.length]}`);
@@ -197,7 +267,7 @@ export class SantaRenderer {
     if (gift.clipBelow !== null) { ctx.beginPath(); ctx.rect(0, 0, W, gift.clipBelow); ctx.clip(); }
     ctx.translate(gift.x, gift.y); ctx.rotate(gift.angle);
     // The picture's box fills the engine's gift; the bow sits above it.
-    if (image) ctx.drawImage(image, -GIFT_SIZE / 2, SANTA_WORLD.giftHalf - GIFT_SIZE, GIFT_SIZE, GIFT_SIZE);
+    if (image) this.blit(this.sprite(`gift:${gift.color % GIFT_NAMES.length}`, GIFT_SIZE, GIFT_SIZE, layer => layer.drawImage(image, 0, 0, GIFT_SIZE, GIFT_SIZE)), -GIFT_SIZE / 2, SANTA_WORLD.giftHalf - GIFT_SIZE);
     else {
       const size = SANTA_WORLD.giftHalf * 2;
       ctx.fillStyle = GIFT_COLORS[gift.color % GIFT_COLORS.length]!; ctx.fillRect(-size / 2, -size / 2, size, size);
@@ -214,7 +284,7 @@ export class SantaRenderer {
     // A gentle tilt with the bob, as if riding the wind.
     ctx.translate(SANTA_WORLD.sleighX, bottom + bob);
     if (!scene.calm) ctx.rotate(Math.sin(scene.time / 520) * 0.025);
-    if (image) ctx.drawImage(image, -SLEIGH.dropX, -SLEIGH.height, SLEIGH.width, SLEIGH.height);
+    if (image) this.blit(this.sprite("sleigh", SLEIGH.width, SLEIGH.height, layer => layer.drawImage(image, 0, 0, SLEIGH.width, SLEIGH.height)), -SLEIGH.dropX, -SLEIGH.height);
     else {
       ctx.fillStyle = "#e8524a"; ctx.fillRect(left - SANTA_WORLD.sleighX, -40, 90, 34);
       ctx.fillStyle = "#a9714f"; ctx.fillRect(left - SANTA_WORLD.sleighX + 120, -50, 50, 26);
@@ -225,11 +295,14 @@ export class SantaRenderer {
   private drawSnow(scene: SantaScene) {
     if (scene.calm) return;
     const ctx = this.ctx;
+    // Every flake in one path: one fill instead of forty-two.
     ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+    ctx.beginPath();
     for (const flake of FLAKES) {
       const y = (flake.y + scene.time * flake.speed) % (H + 10) - 5;
       const x = ((flake.x - scene.distance * 0.6 + Math.sin(scene.time / 900 + flake.sway) * 8) % (W + 10) + W + 10) % (W + 10) - 5;
-      ctx.beginPath(); ctx.arc(x, y, flake.r, 0, Math.PI * 2); ctx.fill();
+      ctx.moveTo(x + flake.r, y); ctx.arc(x, y, flake.r, 0, Math.PI * 2);
     }
+    ctx.fill();
   }
 }

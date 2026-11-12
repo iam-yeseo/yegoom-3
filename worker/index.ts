@@ -679,7 +679,9 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
       if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
       const input = await body(request);
       if (typeof input.hidden !== 'boolean') throw new HttpError(400, 'INVALID_SETTING', '숨김 설정을 확인해 주세요.');
-      await setStockNewsHidden(env.DB, decodeURIComponent(newsMatch[1]!), input.hidden, Date.now());
+      let newsId: string;
+      try { newsId = decodeURIComponent(newsMatch[1]!); } catch { throw new HttpError(400, 'INVALID_SETTING', '뉴스를 확인해 주세요.'); }
+      await setStockNewsHidden(env.DB, newsId, input.hidden, Date.now());
       return json(await adminState(env, new Date()));
     }
     const holidayMatch = /^\/api\/admin\/market-holidays(?:\/(\d{4}-\d{2}-\d{2}))?$/.exec(url.pathname);
@@ -805,7 +807,7 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
   }
   if (url.pathname === '/api/achievements/claim' || url.pathname === '/api/achievements/events') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
-    const input = await body(request);
+    const input = await body(request, 8192);
     return json(await (url.pathname.endsWith('/claim') ? claimAchievement(env.DB, user, input, new Date()) : recordAchievementEvent(env.DB, user, input, new Date())));
   }
   if (url.pathname === '/api/ranking/results/seen') {

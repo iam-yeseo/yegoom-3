@@ -245,9 +245,10 @@ function FreeThrowPlay({ mode, onFinish, onQuit }: { mode: "practice" | "officia
       });
     } catch (failure) { setError(failure instanceof Error ? failure.message : "코트를 표시하지 못했어요."); return; }
     controller.current = runtime;
+    const warmUp = window.setTimeout(() => effects.prepare(), 120);
     const visibility = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", visibility);
-    return () => { runtime.destroy(); effects.dispose(); controller.current = null; document.removeEventListener("visibilitychange", visibility); };
+    return () => { clearTimeout(warmUp); runtime.destroy(); effects.dispose(); controller.current = null; document.removeEventListener("visibilitychange", visibility); };
   }, [official]);
   const done = official && thrown >= shotsPerSet;
   const throwable = visible && !confirming && !done;

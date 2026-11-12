@@ -481,7 +481,8 @@ export default function App() {
     // The claw screen owns event-driven reads; it must never poll.
     if (!data || demo || route.endsWith("/play/claw")) return;
     const poll = () => {
-      if (document.visibilityState === "visible" && navigator.onLine
+      // A poll re-renders the whole app: never in the middle of a full-screen run.
+      if (document.visibilityState === "visible" && navigator.onLine && !document.documentElement.dataset.playOpen
         && pendingBootstrap.current !== requestGeneration.current && Date.now() - lastBootstrapSuccessAt.current >= 10000)
         void refresh();
     };
@@ -637,7 +638,7 @@ export default function App() {
     // The saved profile is applied even when a later refresh is unavailable.
     await refresh();
   }
-  const loadAttendanceMonth = async (month: string) => (await api.attendance(month)).attendance;
+  const loadAttendanceMonth = useCallback(async (month: string) => (await api.attendance(month)).attendance, []);
   const characterMap: Record<string, ArtKey | null> = {};
   if (data) {
     for (const player of data.players) characterMap[player.username] = player.character;
@@ -781,9 +782,9 @@ export default function App() {
   /** Claims go through mutate so a concurrent poll cannot overwrite the new balance. */
   const serverAchievements: AchievementClient = {
     load: () => api.achievements(),
-    claim: async (key, periodKey) => {
+    claim: async claims => {
       let receipt!: AchievementsResponse;
-      await mutate(async () => { receipt = await api.claimAchievement({ key, periodKey }); return receipt; }, result => {
+      await mutate(async () => { receipt = await api.claimAchievement(claims.length === 1 ? claims[0]! : { claims }); return receipt; }, result => {
         setData(current => current ? { ...current, user: { ...current.user, gold: result.gold } } : current);
       });
       void refresh();

@@ -1,3 +1,4 @@
+import { useServerOffset } from "../clock";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { DAILY_FREE, LOTTO_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES } from "../../shared/balance";
 import type { LottoPurchaseInput, LottoTicket, ShopKind, ShopPayment, SpeettoPurchaseInput, SpeettoTicket } from "../../shared/types";
@@ -75,12 +76,12 @@ function clock(seconds: number) {
 }
 function useServerNow(serverTime: string) {
   const [now, setNow] = useState(() => Date.parse(serverTime));
+  const offset = useServerOffset(serverTime);
   useEffect(() => {
-    const offset = Date.parse(serverTime) - Date.now();
     setNow(Date.now() + offset);
     const timer = window.setInterval(() => setNow(Date.now() + offset), 1000);
     return () => window.clearInterval(timer);
-  }, [serverTime]);
+  }, [offset]);
   return now;
 }
 /** The winning balls retain the original roll-in animation. */

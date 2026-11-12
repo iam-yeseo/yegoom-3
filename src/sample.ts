@@ -20,18 +20,12 @@ export const BALANCE = {
 export const rankOf = (results: GameResult[], result: GameResult) =>
   results.findIndex((r) => r.difference === result.difference) + 1;
 export const KST = "Asia/Seoul";
+const kstFormat = new Intl.DateTimeFormat("en-US", {
+  timeZone: KST, year: "numeric", month: "numeric", day: "numeric", weekday: "short", hour: "numeric", minute: "numeric", hourCycle: "h23",
+});
 export function kstParts(date = new Date()) {
   const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: KST,
-      year: "numeric",
-      month: "numeric",
-      day: "numeric",
-      weekday: "short",
-      hour: "numeric",
-      minute: "numeric",
-      hourCycle: "h23",
-    })
+    kstFormat
       .formatToParts(date)
       .map((part) => [part.type, part.value]),
   );

@@ -71,7 +71,9 @@ em.warning {
   flex-direction: column;
   gap: 4px;
 }
+.stock-summary > div { min-width: 0; }
 .stock-summary span {
+  word-break: keep-all;
   font-size: 12px;
   font-weight: 600;
   color: #ada4b3;

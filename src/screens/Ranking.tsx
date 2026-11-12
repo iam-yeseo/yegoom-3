@@ -1,3 +1,4 @@
+import { useServerOffset } from "../clock";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { plainName, Avatar, PersonName, CharacterSprite, Segmented, Toolbar, preloadSprites, useCharacter, useDisplayNameLookup } from "../components/UI";
 import { HistoryRow } from "../components/HistoryRow";
@@ -120,10 +121,13 @@ function useRankingData(period: RankingPeriod, demo: boolean, viewerId: string) 
   const [error, setError] = useState("");
   const [moreLoading, setMoreLoading] = useState(false);
   const generation = useRef(0);
+  // Only the preview reads names, and the lookup changes with every balance
+  // refresh: as a dependency it refetched the ranking and collapsed 더 보기.
+  const nameOf = useRef(displayNameOf); nameOf.current = displayNameOf;
   useEffect(() => {
     const current = ++generation.current;
     setError("");
-    if (demo) { setData(previewRanking(period, viewerId, username => displayNameOf(username))); return; }
+    if (demo) { setData(previewRanking(period, viewerId, username => nameOf.current(username))); return; }
     const cached = responseCache.get(period);
     if (cached && Date.now() - cached.at < RANKING_RULES.clientCacheMs) { setData(cached.data); return; }
     setData(previous => previous?.period === period ? previous : null);
@@ -133,7 +137,7 @@ function useRankingData(period: RankingPeriod, demo: boolean, viewerId: string) 
     }, (cause: unknown) => {
       if (current === generation.current) setError(cause instanceof Error ? cause.message : "랭킹을 불러오지 못했어요.");
     });
-  }, [period, demo, viewerId, displayNameOf]);
+  }, [period, demo, viewerId]);
   const loadMore = useCallback(async () => {
     if (!data?.nextBefore || moreLoading) return;
     const current = generation.current;
@@ -221,12 +225,12 @@ export function Ranking({
   };
   const ranking = useRankingData(period, demo, viewerId);
   const [now, setNow] = useState(() => serverTime ? Date.parse(serverTime) : Date.now());
+  const offset = useServerOffset(serverTime);
   useEffect(() => {
-    const offset = serverTime ? Date.parse(serverTime) - Date.now() : 0;
     setNow(Date.now() + offset);
     const timer = window.setInterval(() => setNow(Date.now() + offset), 30_000);
     return () => clearInterval(timer);
-  }, [serverTime]);
+  }, [offset]);
   const loaded = ranking.data?.period === period ? ranking.data : null;
   const table = useMemo(() => standings(loaded
     ? loaded.standings.map(row => ({ id: row.userId, username: row.username, displayName: displayNameOf(row.username, row.displayName), weeklyScore: row.score, photoVersion: row.photoVersion }))

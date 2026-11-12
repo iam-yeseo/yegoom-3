@@ -42,7 +42,7 @@
 .freethrow-dot { width: 7px; height: 7px; border-radius: 50%; background: #f47c66; }
 .freethrow-official { display: grid; gap: 12px; padding: 16px; }
 .freethrow-official-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.freethrow-official-head strong { font-size: 18px; font-weight: 800; }
+.freethrow-official-head strong { flex-shrink: 0; font-size: 18px; font-weight: 800; white-space: nowrap; }
 .freethrow-official-head small { color: var(--muted); font-size: 12px; text-align: right; word-break: keep-all; }
 .freethrow-official-head.is-done strong { color: #e0644e; font-size: 22px; }
 .freethrow-official-note { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; word-break: keep-all; }

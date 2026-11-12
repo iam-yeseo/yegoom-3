@@ -108,11 +108,13 @@ export function validateDrawing(value: unknown): string {
   return value;
 }
 
-async function player(db: D1Database, id: string | null): Promise<CatchmindPlayer | null> {
-  if (!id) return null;
-  const row = await db.prepare('SELECT id, username, display_name, character, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = users.id) THEN photo_version ELSE NULL END AS photo_version FROM users WHERE id = ?').bind(id)
-    .first<{ id: string; username: string; display_name: string; character: ArtKey | null; photo_version: number | null }>();
-  return row ? { id: row.id, username: row.username, displayName: row.display_name, photoVersion: row.photo_version, character: row.character ?? defaultCharacter(row.username) } : null;
+/** Everyone named by `ids`, in one query however many there are. */
+async function players(db: D1Database, ids: Iterable<string | null | undefined>): Promise<Map<string, CatchmindPlayer>> {
+  const unique = [...new Set([...ids].filter((id): id is string => Boolean(id)))];
+  if (!unique.length) return new Map();
+  const { results } = await db.prepare(`SELECT id, username, display_name, character, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = users.id) THEN photo_version ELSE NULL END AS photo_version FROM users WHERE id IN (${unique.map(() => '?').join(',')})`).bind(...unique)
+    .all<{ id: string; username: string; display_name: string; character: ArtKey | null; photo_version: number | null }>();
+  return new Map(results.map(row => [row.id, { id: row.id, username: row.username, displayName: row.display_name, photoVersion: row.photo_version, character: row.character ?? defaultCharacter(row.username) }]));
 }
 async function repairTurn(db: D1Database): Promise<void> {
   // Read paths only write for a stopped/missing current drawer. The condition
@@ -148,8 +150,7 @@ export async function readCatchmindGallery(db: D1Database, before = Number.MAX_S
     FROM catchmind_rounds WHERE status = 'ended' AND number < ? ORDER BY number DESC LIMIT ?`)
     .bind(before, limit + 1).all<Pick<RoundRow, 'id' | 'number' | 'drawer_id' | 'word' | 'winner_id' | 'end_reason' | 'ended_at'>>();
   const page = results.slice(0, limit);
-  const people = new Map(await Promise.all([...new Set(page.flatMap(row => [row.drawer_id, row.winner_id]).filter((id): id is string => Boolean(id)))]
-    .map(async id => [id, (await player(db, id))!] as const)));
+  const people = await players(db, page.flatMap(row => [row.drawer_id, row.winner_id]));
   return {
     rounds: page.map(row => ({ id: row.id, number: row.number, drawer: people.get(row.drawer_id)!, answer: row.word,
       winner: row.winner_id ? people.get(row.winner_id)! : null, endReason: row.end_reason!, endedAt: row.ended_at!,
@@ -186,7 +187,9 @@ export async function readCatchmindSummary(db: D1Database): Promise<CatchmindSum
   const row = await db.prepare(`SELECT r.id, r.status, r.drawer_id, r.wrong_count, r.winner_id, r.word, r.round_date, r.ended_at, t.drawer_id AS next_drawer_id
     FROM catchmind_turn t LEFT JOIN catchmind_rounds r ON r.id = t.round_id WHERE t.id = 1`)
     .first<Pick<RoundRow, 'id' | 'status' | 'drawer_id' | 'wrong_count' | 'winner_id' | 'word' | 'round_date' | 'ended_at'> & { next_drawer_id: string | null }>();
-  const [drawer, turn, winner] = await Promise.all([player(db, row?.drawer_id ?? null), player(db, row?.next_drawer_id ?? null), player(db, row?.winner_id ?? null)]);
+  const people = await players(db, [row?.drawer_id, row?.next_drawer_id, row?.winner_id]);
+  const who = (id: string | null | undefined) => (id ? people.get(id) ?? null : null);
+  const drawer = who(row?.drawer_id), turn = who(row?.next_drawer_id), winner = who(row?.winner_id);
   return { roundId: row?.id ?? null, status: row?.status ?? 'idle', drawer, turn, wrongCount: row?.wrong_count ?? 0, winner,
     winnerScored: row ? winnerScored(row) : false, answer: row?.status === 'ended' ? row.word : null };
 }

@@ -899,11 +899,7 @@ button svg {
   font-weight: 600;
   color: #ada4b3;
 }
-.author-note {
-  align-self: flex-start;
-  background: #eee8fc;
-  color: #7556c4;
-}
+
 .result-list {
   padding-top: 18px;
   padding-bottom: 28px;

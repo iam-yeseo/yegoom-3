@@ -52,10 +52,10 @@ export class SantaController {
   private destroyed = false;
 
   constructor(private canvas: HTMLCanvasElement, private sound: SantaSound, private callbacks: SantaCallbacks) {
-    this.renderer = new SantaRenderer(canvas, () => { if (!this.destroyed) this.paint(); });
+    this.renderer = new SantaRenderer(canvas, () => { if (!this.destroyed) { this.warmed = false; this.paint(); } });
     canvas.addEventListener("pointerdown", this.tap);
     if (typeof ResizeObserver !== "undefined") {
-      this.observer = new ResizeObserver(() => { if (this.renderer.resize()) this.paint(); });
+      this.observer = new ResizeObserver(() => { if (this.renderer.resize()) { this.warmed = false; this.paint(); } });
       this.observer.observe(canvas);
     }
     this.renderer.resize();
@@ -225,5 +225,11 @@ export class SantaController {
     this.scene.gifts = this.flights.map((flight): GiftSprite => ({ x: flight.x, y: flight.y, angle: flight.angle, color: flight.house.gift, alpha: flight.alpha,
       clipBelow: flight.phase === "in" ? flight.house.top + 3 : null }));
   }
-  private paint() { this.renderer.draw(this.scene); }
+  private warmed = false;
+  private paint() {
+    // Before the first house appears (and again after a resize or a late
+    // picture, which empty the renderer's cache at no cost here).
+    if (!this.warmed && this.mode === "countdown") { this.warmed = true; this.renderer.warm(this.course); }
+    this.renderer.draw(this.scene);
+  }
 }

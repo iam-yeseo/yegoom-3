@@ -202,18 +202,16 @@ export async function syncAchievements(db: D1Database, userId: string, now: Date
 /** The same sync for several players at once (after a settlement), each
  * independently so one failure cannot hold back the others' unlocks. */
 export async function syncAchievementsFor(db: D1Database, userIds: Iterable<string>, now: Date): Promise<void> {
-  for (const userId of new Set(userIds)) {
-    await syncAchievements(db, userId, now).catch(error => {
-      console.error('Achievement sync failed', error instanceof Error ? error.name : 'UnknownError');
-    });
-  }
+  await Promise.all([...new Set(userIds)].map(userId => syncAchievements(db, userId, now).catch(error => {
+    console.error('Achievement sync failed', error instanceof Error ? error.name : 'UnknownError');
+  })));
 }
 
 interface ProgressRow { key: string; period_key: string; unlocked_at: string; claimed_at: string | null }
 /** The screen's view: current-period rows plus every unclaimed one, the
  * collected counts, and the wallet so the toolbar can show gold. */
-export async function readAchievements(db: D1Database, user: Actor, now: Date): Promise<AchievementsResponse> {
-  if (user.role === 'player') await syncAchievements(db, user.id, now);
+export async function readAchievements(db: D1Database, user: Actor, now: Date, sync = true): Promise<AchievementsResponse> {
+  if (sync && user.role === 'player') await syncAchievements(db, user.id, now);
   const [rows, counts] = await db.batch<ProgressRow & { n: number }>([
     db.prepare(`SELECT key, period_key, unlocked_at, claimed_at FROM achievements
       WHERE user_id = ? AND (claimed_at IS NULL OR period_key IN ('', ?, ?)) ORDER BY unlocked_at`)
@@ -226,30 +224,46 @@ export async function readAchievements(db: D1Database, user: Actor, now: Date): 
     gold: (await readBalances(db, user.id)).gold, serverTime: now.toISOString() };
 }
 
-/** `POST /api/achievements/claim`: marks the row collected and pays its gold in
- * one batch. The ledger reference is UNIQUE, so a retried claim pays once. */
+/** Most rows one request may collect (every achievement, with room for older periods). */
+const CLAIM_LIMIT = 80;
+/** `POST /api/achievements/claim`: marks rows collected and pays their gold in
+ * one batch. It takes one `{ key, periodKey }` or `{ claims: [...] }` for
+ * 모두 받기. The ledger reference is UNIQUE, so a retried claim pays once. In a
+ * list, rows already collected elsewhere are skipped; only when nothing at
+ * all could be collected is it an error. */
 export async function claimAchievement(db: D1Database, user: Actor, input: Record<string, unknown>, now: Date): Promise<AchievementsResponse> {
   if (user.role !== 'player') throw new AchievementError(403, 'CANNOT_CLAIM', '플레이어만 도전과제 보상을 받을 수 있어요.');
-  if (!isAchievementKey(input.key) || typeof input.periodKey !== 'string' || input.periodKey.length > 10) {
+  const list: unknown[] = Array.isArray(input.claims) ? input.claims : [input];
+  const seen = new Set<string>();
+  const claims = list.map(item => {
+    const claim = item as { key?: unknown; periodKey?: unknown } | null;
+    if (!claim || !isAchievementKey(claim.key) || typeof claim.periodKey !== 'string' || claim.periodKey.length > 10) return null;
+    const id = `${claim.key}:${claim.periodKey}`;
+    if (seen.has(id)) return null;
+    seen.add(id);
+    return { definition: ACHIEVEMENT_BY_KEY.get(claim.key)!, periodKey: claim.periodKey };
+  });
+  if (!claims.length || claims.length > CLAIM_LIMIT || claims.includes(null)) {
     throw new AchievementError(400, 'INVALID_ACHIEVEMENT', '받을 도전과제를 확인해 주세요.');
   }
-  const definition = ACHIEVEMENT_BY_KEY.get(input.key)!;
   const claimedAt = now.toISOString();
-  const writes = await db.batch([
+  // changes() is read by the statement right after its UPDATE, so pairs can share one batch.
+  const writes = await db.batch(claims.flatMap(claim => [
     db.prepare('UPDATE achievements SET claimed_at = ? WHERE user_id = ? AND key = ? AND period_key = ? AND claimed_at IS NULL')
-      .bind(claimedAt, user.id, definition.key, input.periodKey),
+      .bind(claimedAt, user.id, claim!.definition.key, claim!.periodKey),
     db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
       SELECT ?, ?, 'gold', ?, ?, ?, ? WHERE changes() = 1`)
-      .bind(crypto.randomUUID(), user.id, definition.reward, `도전과제 · ${definition.title}`,
-        `achievement:${definition.key}:${input.periodKey}:${user.id}`, claimedAt),
-  ]);
-  if (writes[0]!.meta.changes !== 1) {
+      .bind(crypto.randomUUID(), user.id, claim!.definition.reward, `도전과제 · ${claim!.definition.title}`,
+        `achievement:${claim!.definition.key}:${claim!.periodKey}:${user.id}`, claimedAt),
+  ]));
+  if (!claims.some((_, i) => writes[i * 2]!.meta.changes === 1)) {
+    const { definition, periodKey } = claims[0]!;
     const row = await db.prepare('SELECT claimed_at FROM achievements WHERE user_id = ? AND key = ? AND period_key = ?')
-      .bind(user.id, definition.key, input.periodKey).first<{ claimed_at: string | null }>();
+      .bind(user.id, definition.key, periodKey).first<{ claimed_at: string | null }>();
     if (row) throw new AchievementError(409, 'ALREADY_CLAIMED', '이미 받은 도전과제 보상이에요.');
     throw new AchievementError(409, 'NOT_UNLOCKED', '아직 달성하지 않은 도전과제예요.');
   }
-  return readAchievements(db, user, now);
+  return readAchievements(db, user, now, false);
 }
 
 /** `POST /api/achievements/events`: a client-side change the Worker cannot see
@@ -260,7 +274,6 @@ export async function recordAchievementEvent(db: D1Database, user: Actor, input:
     throw new AchievementError(400, 'INVALID_EVENT', '기록할 수 없는 도전과제예요.');
   }
   await syncAchievements(db, user.id, now, [input.event as AchievementClientEvent]);
-  return readAchievements(db, user, now);
+  return readAchievements(db, user, now, false);
 }
 
-export const ACHIEVEMENT_COUNT = ACHIEVEMENTS.length;

@@ -1,3 +1,4 @@
+import { useServerOffset } from "./clock";
 import { useEffect, useRef, useState } from 'react';
 import { ANNOUNCEMENT_RULES } from '../shared/balance';
 import { isToastWorthy, notificationText, type AppNotification } from '../shared/notifications';
@@ -34,8 +35,9 @@ function ToastQueue({ notifications, userId, serverTime, go }: Omit<Props, 'prev
   const clock = useRef({ server: Date.parse(serverTime), received: performance.now() });
   const current = queue[0];
 
+  const offset = useServerOffset(serverTime);
   useEffect(() => {
-    clock.current = { server: Date.parse(serverTime), received: performance.now() };
+    clock.current = { server: Date.now() + offset, received: performance.now() };
     const fresh = notifications.filter(item => isToastWorthy(item, userId, clock.current.server) && !seen.has(item.id));
     setQueue(previous => {
       const kept = previous.filter(item => isToastWorthy(item, userId, clock.current.server));
@@ -47,7 +49,7 @@ function ToastQueue({ notifications, userId, serverTime, go }: Omit<Props, 'prev
       if (!added.length && kept.length === previous.length) return previous;
       return [...kept, ...added];
     });
-  }, [notifications, serverTime, userId, seen]);
+  }, [notifications, offset, userId, seen]);
 
   useEffect(() => {
     if (!current) return;

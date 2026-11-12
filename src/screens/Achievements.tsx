@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ACHIEVEMENT_GROUPS, ACHIEVEMENT_REPEAT_LABEL, ACHIEVEMENTS, achievementViews, type AchievementGroup, type AchievementView, type AchievementsResponse } from "../../shared/achievements";
+import { ACHIEVEMENT_GROUPS, ACHIEVEMENT_REPEAT_LABEL, ACHIEVEMENTS, achievementViews, type AchievementClaim, type AchievementGroup, type AchievementView, type AchievementsResponse } from "../../shared/achievements";
 import { Coin, SectionTitle } from "../components/UI";
 import { anim, coinFly, pop, toast } from "../motion";
 
 /** Where the list comes from: the Worker, or the serverless preview's sample. */
 export interface AchievementClient {
   load: () => Promise<AchievementsResponse>;
-  claim: (key: string, periodKey: string) => Promise<AchievementsResponse>;
+  /** Collects every listed row in one request. */
+  claim: (claims: AchievementClaim[]) => Promise<AchievementsResponse>;
 }
 const GROUP_ORDER: readonly AchievementGroup[] = ["welcome", "games", "attendance", "shop", "stock", "claw", "ranking", "misc"];
 const gold = (value: number) => `${value.toLocaleString("ko-KR")}G`;
@@ -40,14 +41,18 @@ export function Achievements({ client, viewerId }: { client: AchievementClient; 
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
   const summary = useRef<HTMLElement>(null);
+  // The client object is rebuilt on every app render (each balance refresh);
+  // reading it through a ref keeps the list from reloading and blinking.
+  const clientRef = useRef(client); clientRef.current = client;
+  const generation = useRef(0);
   useEffect(() => {
-    let active = true;
+    const current = ++generation.current;
     setData(null); setError("");
-    client.load().then(next => { if (active) setData(next); }, (cause: unknown) => {
-      if (active) setError(cause instanceof Error ? cause.message : "도전과제를 불러오지 못했어요.");
+    clientRef.current.load().then(next => { if (generation.current === current) setData(next); }, (cause: unknown) => {
+      if (generation.current === current) setError(cause instanceof Error ? cause.message : "도전과제를 불러오지 못했어요.");
     });
-    return () => { active = false; };
-  }, [client, viewerId]);
+    return () => { generation.current++; };
+  }, [viewerId]);
   const views = useMemo(() => data ? achievementViews(data.progress, data.claimedCounts) : [], [data]);
   const unlocked = views.filter(item => item.status === "unlocked");
   const claimedOnce = views.filter(item => item.repeat === "once" && item.status === "claimed").length + views.filter(item => item.repeat !== "once" && item.claimedCount > 0).length;
@@ -55,21 +60,23 @@ export function Achievements({ client, viewerId }: { client: AchievementClient; 
   async function claim(items: AchievementView[], from: HTMLElement | null) {
     if (pending.current || !items.length) return;
     pending.current = true; setBusy(true); setError("");
-    let earned = 0;
+    const before = data?.gold ?? 0;
+    const current = ++generation.current;
+    const earned = items.reduce((sum, item) => sum + item.reward, 0);
     try {
-      let next: AchievementsResponse | null = null;
-      for (const item of items) {
-        next = await client.claim(item.key, item.periodKey);
-        earned += item.reward;
-      }
-      if (next) setData(next);
-      await new Promise<void>(resolve => coinFly(from, summary.current?.querySelector(".achievement-gold"), resolve, Math.min(10, 4 + items.length)));
+      const next = await clientRef.current.claim(items.map(item => ({ key: item.key, periodKey: item.periodKey })));
+      if (generation.current !== current) return;
+      // Coins leave the button first; the list changes once, as they land.
+      await new Promise<void>(resolve => coinFly(from?.isConnected ? from : summary.current, summary.current?.querySelector(".achievement-gold"), resolve, Math.min(10, 4 + items.length)));
+      if (generation.current !== current) return;
+      setData(next);
       pop(summary.current?.querySelector(".achievement-gold"), 1.15);
-      toast(`+${gold(earned)} 받았어요`);
+      toast(`+${gold(Math.max(0, next.gold - before) || earned)} 받았어요`);
     } catch (cause) {
+      if (generation.current !== current) return;
       setError(cause instanceof Error ? cause.message : "보상을 받지 못했어요. 다시 시도해 주세요.");
       // The list may have moved on (another device claimed it); show the truth.
-      client.load().then(setData, () => undefined);
+      clientRef.current.load().then(fresh => { if (generation.current === current) setData(fresh); }, () => undefined);
     } finally { pending.current = false; setBusy(false); }
   }
   useEffect(() => {

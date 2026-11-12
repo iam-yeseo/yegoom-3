@@ -2402,6 +2402,22 @@ describe('Worker and D1 integration', () => {
         expect((await (await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'welcome', periodKey: '' } })).json() as { error: { code: string } }).error.code).toBe('ALREADY_CLAIMED');
         expect((await (await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'claw_clear', periodKey: '' } })).json() as { error: { code: string } }).error.code).toBe('NOT_UNLOCKED');
         expect((await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'nope', periodKey: '' } })).status).toBe(400);
+        // 모두 받기 sends one list: rows collected elsewhere or still locked are skipped, the rest are paid once.
+        const list = { claims: [{ key: 'welcome', periodKey: '' }, { key: 'speetto_win', periodKey: '' }, { key: 'claw_clear', periodKey: '' }] };
+        const many = await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: list });
+        expect(many.status).toBe(200);
+        const all = await many.json() as Achievements;
+        expect(status(all, 'speetto_win')).toBe('claimed');
+        expect(all.unclaimed).toBe(0);
+        const rewards = (await ledgerRows(database)).filter(row => row.reference.startsWith('achievement:'));
+        expect(rewards.map(row => row.reference).sort()).toEqual(['achievement:speetto_win::min', 'achievement:welcome::min']);
+        expect(all.gold).toBe(paid.gold + rewards.find(row => row.reference === 'achievement:speetto_win::min')!.amount);
+        const again = await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: list });
+        expect(again.status).toBe(409);
+        expect((await again.json() as { error: { code: string } }).error.code).toBe('ALREADY_CLAIMED');
+        for (const claims of [[], [{ key: 'welcome', periodKey: '' }, { key: 'welcome', periodKey: '' }], [{ key: 'welcome', periodKey: '' }, { key: 'nope', periodKey: '' }], [null]]) {
+          expect((await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { claims } })).status).toBe(400);
+        }
         // Administrators have no achievements and cannot claim any.
         expect((await achievements(admin.cookie, instance)).progress).toEqual([]);
         expect((await request('/api/achievements/claim', { method: 'POST', cookie: admin.cookie, instance, body: { key: 'welcome', periodKey: '' } })).status).toBe(403);

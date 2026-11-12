@@ -9,7 +9,10 @@ export function createFreeThrowSound() {
   let disposed = false;
   try { muted = localStorage.getItem(STORAGE_KEY) === "1"; } catch { /* Storage is optional. */ }
 
-  function audio() {
+  /** Builds the audio graph without starting it. Opening the audio device
+   * takes a moment on phones; done at the first touch it made the ball stick
+   * to the finger, so the court does it as it opens instead. */
+  function prepare() {
     if (muted || disposed) return null;
     try {
       if (!ctx) {
@@ -18,9 +21,13 @@ export function createFreeThrowSound() {
         ctx = new Context();
         master = ctx.createGain(); master.gain.value = .7; master.connect(ctx.destination);
       }
-      if (ctx.state === "suspended") void ctx.resume().catch(() => {});
       return ctx;
     } catch { return null; }
+  }
+  function audio() {
+    const ac = prepare();
+    if (ac?.state === "suspended") void ac.resume().catch(() => {});
+    return ac;
   }
   function tone(freq: number, { at = 0, duration = .12, type = "triangle" as OscillatorType, gain = .05, to = 0 } = {}) {
     const ac = audio();
@@ -48,6 +55,7 @@ export function createFreeThrowSound() {
   const vibrate = (pattern: VibratePattern) => { if (!muted && !disposed) try { navigator.vibrate?.(pattern); } catch { /* Unsupported. */ } };
   return {
     get muted() { return muted; },
+    prepare,
     activate: audio,
     setMuted(value: boolean) {
       muted = value;

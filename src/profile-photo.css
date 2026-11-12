@@ -28,3 +28,6 @@
 .photo-crop-actions > button:first-child { flex: 1; }
 .photo-crop-actions > button:last-child { flex: 2; font-size: 14px; padding-inline: 12px; }
 @media (max-width: 359px) { .photo-crop-dialog { padding-inline: 18px; } .profile-nickname-row button { padding-inline: 10px; } }
+
+/* A wider touch area than the drawn button (44px), without moving anything. */
+.photo-crop-close::after { content: ''; position: absolute; inset: -6px; }
