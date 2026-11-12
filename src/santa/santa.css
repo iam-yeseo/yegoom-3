@@ -5,7 +5,7 @@
 .santa-event small { color: var(--muted); font-size: 12px; text-align: right; word-break: keep-all; }
 .santa-run { display: grid; gap: 12px; padding: 16px; }
 .santa-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.santa-head strong { font-size: 18px; font-weight: 800; }
+.santa-head strong { flex-shrink: 0; font-size: 18px; font-weight: 800; white-space: nowrap; }
 .santa-head small { color: var(--muted); font-size: 12px; text-align: right; word-break: keep-all; }
 .santa-head.is-done strong { color: #d9534a; font-size: 22px; }
 .santa-done { display: flex; align-items: center; gap: 12px; }

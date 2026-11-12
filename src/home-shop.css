@@ -85,3 +85,6 @@
 .purchase-confirm-cost { margin: 0; padding: 8px 16px; border-radius: 999px; background: #fff4cc; color: #7a5a00; font-size: 15px; font-weight: 800; }
 .purchase-confirm-detail { margin: 0; font-size: 13px; line-height: 1.5; color: #7c7383; word-break: keep-all; }
 .purchase-confirm .sheet-actions { width: 100%; margin-top: 6px; }
+
+/* A wider touch area than the drawn button (44px), without moving anything. */
+.lotto-notice-close::after { content: ''; position: absolute; inset: -6px; }

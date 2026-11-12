@@ -1,3 +1,4 @@
+import { settleDeferred } from './settle-deferred';
 import { spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -70,7 +71,7 @@ describe('launch reset in an isolated local D1', () => {
       define: { Date: 'TestDate' },
       banner: { js: `class TestDate extends Date { constructor(...args) { super(...(args.length ? args : [${now}])); } static now() { return ${now}; } }` },
     });
-    script = result.outputFiles[0]!.text.replaceAll("unixepoch('now') * 1000", String(now));
+    script = settleDeferred(result.outputFiles[0]!.text.replaceAll("unixepoch('now') * 1000", String(now)));
   });
 
   beforeEach(async () => {

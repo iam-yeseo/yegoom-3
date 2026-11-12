@@ -1,3 +1,4 @@
+import { useServerOffset } from "./clock";
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { LAUNCH_GIFT } from "../shared/balance";
 import type { LaunchGiftResponse, LaunchGiftState, Role } from "../shared/types";
@@ -94,8 +95,9 @@ export function LaunchGiftProvider({ children, state, preview, role, serverTime,
   const shownHome = useRef(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const measured = useServerOffset(serverTime);
+  const offset = preview ? 0 : measured;
   useEffect(() => {
-    const offset = preview ? 0 : Date.parse(serverTime) - Date.now();
     const update = () => setNow(Date.now() + offset);
     update();
     const current = Date.now() + offset;
@@ -103,7 +105,7 @@ export function LaunchGiftProvider({ children, state, preview, role, serverTime,
     const timer = boundary === null ? undefined : window.setTimeout(update, Math.min(2_147_483_647, Math.max(1, boundary - current + 1)));
     document.addEventListener("visibilitychange", update);
     return () => { window.clearTimeout(timer); document.removeEventListener("visibilitychange", update); };
-  }, [serverTime, preview]);
+  }, [offset]);
   const onDate = now >= startsAt && now < endsAt;
   const claimed = preview ? previewClaimed : state.claimed;
   const available = role === "player" && onDate && !claimed && (preview ? attendance.claimed && attendance.today === LAUNCH_GIFT.date : state.available);

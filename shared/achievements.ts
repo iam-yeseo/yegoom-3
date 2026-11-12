@@ -136,7 +136,9 @@ export interface AchievementsResponse {
   gold: number;
   serverTime: string;
 }
-export interface AchievementClaimInput { key: string; periodKey: string }
+export interface AchievementClaim { key: string; periodKey: string }
+/** One row, or several at once (모두 받기). */
+export type AchievementClaimInput = AchievementClaim | { claims: AchievementClaim[] }
 export interface AchievementEventInput { event: AchievementClientEvent }
 
 /** What the screen shows for one definition: the current period's row (or the

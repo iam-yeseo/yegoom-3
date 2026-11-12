@@ -371,7 +371,7 @@ function NoticeCard({ disabled, onSend }: { disabled: boolean; onSend: (notice: 
     </label>
     <p className="admin-claw-explanation">보낸 공지는 되돌릴 수 없어요. 접속 중인 사람에게는 바로 뜨고, 나머지는 알림센터에서 봐요.</p>
     {error && <p className="admin-form-error" role="alert">{error}</p>}
-    {sent && <p className="admin-form-ok" role="status">공지를 보냈어요.</p>}
+    {sent && <p className="admin-form-success" role="status">공지를 보냈어요.</p>}
     <button className="primary-button" type="button" disabled={disabled || sending || !title.trim()} onClick={() => void send()}>
       {sending ? "보내는 중…" : "전체에게 보내기"}
     </button>

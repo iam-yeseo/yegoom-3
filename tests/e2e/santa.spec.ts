@@ -56,6 +56,8 @@ test('leaving a santa run midway asks first, ends it unfinished and does not off
   await page.getByRole('button', { name: '그만두기' }).click();
   await expect(shell(page)).toHaveCount(0);
   await expect(page.locator('.santa-run')).toContainText('미완료로 끝났어요');
+  // The page behind scrolls again: nothing of the play view's lock is left.
+  expect(await page.evaluate(() => [document.body.style.overflow, document.body.style.position, document.documentElement.style.overflowY, document.documentElement.dataset.playOpen ?? ''])).toEqual(['', '', '', '']);
   await expect(page.getByRole('button', { name: /산타 출발/ })).toHaveCount(0);
   // Nothing was sent for the abandoned run, and the server keeps it unrecorded.
   expect(finishes).toEqual([]);

@@ -1,7 +1,9 @@
 /* Full-screen play view (src/components/PlayShell.tsx). */
 .play-shell {
-  /* 100vw also covers the page's reserved scrollbar gutter. */
-  position: fixed; inset: 0; z-index: 70; width: 100vw;
+  /* Sized by inset alone: on a desktop with a classic scrollbar, 100vw reached
+     under the page's reserved gutter and the right edge (the sound button, the
+     stage's corner) was cut off by it. */
+  position: fixed; inset: 0; z-index: 70;
   display: flex; flex-direction: column;
   height: 100vh; height: 100dvh;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
@@ -48,3 +50,10 @@
 .launch-dialog .play-result-status { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0 0 14px; font-size: 13px; }
 .launch-dialog .play-result-status.is-saved { color: #2e8c6e; font-weight: 700; }
 .launch-dialog .play-result-status.is-retry, .launch-dialog .play-result-status.is-refused { color: #d9604c; }
+
+/* While a play view covers the screen the app behind it is not drawn at all:
+   its looping animations (shining tags, the blurred tab bar) would otherwise
+   keep repainting under the game and cost it frames. Dialogs opened from the
+   page (the result of a run) sit in the top layer and stay visible. */
+:root[data-play-open] #root { visibility: hidden; }
+:root[data-play-open] #root dialog[open] { visibility: visible; }

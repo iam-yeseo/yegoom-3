@@ -1,3 +1,4 @@
+import { useServerOffset } from "../clock";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameHistoryRound, GameId, GameResult, GameState, PhotoMetadata, User } from "../../shared/types";
 import type { PredictionRules } from "../../shared/admin";
@@ -373,12 +374,12 @@ function ActivePredictionGame({ game, user, serverTime, demo, onBack, onSave, on
   useEffect(() => {
     if (confirmationOpen && confirmation.current) return openSheet(confirmation.current);
   }, [confirmationOpen]);
+  const offset = useServerOffset(serverTime);
   useEffect(() => {
-    const offset = Date.parse(serverTime) - Date.now();
     setNow(Date.now() + offset);
     const timer = window.setInterval(() => setNow(Date.now() + offset), 1000);
     return () => clearInterval(timer);
-  }, [serverTime]);
+  }, [offset]);
   useEffect(() => { setValue(initial ?? defaultValue); }, [game.id, initial, defaultValue]);
   useEffect(() => { setHint(game.hint); }, [game.hint]);
   const deadline = `${game.roundDate}T${rules.deadline}+09:00`;

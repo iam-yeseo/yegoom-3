@@ -48,7 +48,7 @@ export class FreeThrowController {
     canvas.addEventListener("lostpointercapture", this.cancel);
     canvas.addEventListener("contextmenu", this.prevent);
     if (typeof ResizeObserver !== "undefined") {
-      this.observer = new ResizeObserver(() => { if (this.renderer.resize()) this.paint(); });
+      this.observer = new ResizeObserver(() => { this.rect = null; if (this.renderer.resize()) this.paint(); });
       this.observer.observe(canvas);
     }
     this.renderer.resize();
@@ -77,17 +77,22 @@ export class FreeThrowController {
   private setMode(mode: ThrowMode) { if (this.mode !== mode) { this.mode = mode; this.callbacks.onMode?.(mode); } }
   private prevent = (event: Event) => event.preventDefault();
   /** Client coordinates → stage units (stage heights) and logical pixels. */
+  /** The canvas's place on screen, measured when a touch starts (and when it
+   * resizes) instead of for every pointer sample of a swipe. */
+  private rect: DOMRect | null = null;
+  private bounds() { return this.rect ??= this.canvas.getBoundingClientRect(); }
   private stagePoint(event: PointerEvent): GesturePoint {
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this.bounds();
     const height = rect.height || STAGE.height;
     return { x: (event.clientX - rect.left) / height, y: (event.clientY - rect.top) / height, t: event.timeStamp };
   }
   private toPixels(point: { x: number; y: number }) {
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this.bounds();
     return { x: point.x * (rect.height || STAGE.height) * STAGE.width / (rect.width || STAGE.width), y: point.y * STAGE.height };
   }
   private down = (event: PointerEvent) => {
     if (!event.isPrimary || event.button > 0 || this.mode !== "idle" || !this.enabled) return;
+    this.rect = null;
     const point = this.stagePoint(event), pixel = this.toPixels(point);
     // Only a touch on (or just around) the ball picks it up.
     if (Math.hypot(pixel.x - REST.x, pixel.y - REST.y) > BALL_REST_RADIUS * 1.8) return;

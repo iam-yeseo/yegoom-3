@@ -9,23 +9,26 @@
 }
 .nick-tag--a { color: #7a5a00; background: linear-gradient(180deg, #fff3c4, #ffdd7a); box-shadow: none; }
 .nick-tag--b { color: #5c5162; background: linear-gradient(180deg, #f7f5f9, #e2dee8); box-shadow: none; }
-.nick-tag--s {
-  color: #6a4fb8; box-shadow: none;
-  background: linear-gradient(110deg, #ffd3e6, #fff0b8, #cdf3e2, #cfe0ff, #e6d6ff, #ffd3e6) 0 0 / 200% 100%;
-  animation: nick-holo 4s linear infinite;
+/* The holo and the sheen move with transform only, so they run on the
+   compositor: many tagged names in a list cost no repaint while they shine. */
+.nick-tag--s { color: #6a4fb8; box-shadow: none; background: #ffd3e6; isolation: isolate; }
+.nick-tag--s::before {
+  content: ''; position: absolute; inset: 0 auto 0 0; z-index: -1; width: 400%; pointer-events: none;
+  background: linear-gradient(110deg, #ffd3e6, #fff0b8, #cdf3e2, #cfe0ff, #e6d6ff, #ffd3e6) 0 0 / 50% 100%;
+  animation: nick-holo 4s linear infinite; will-change: transform;
 }
 .nick-tag--s::after, .nick-tag--a::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
+  content: ''; position: absolute; inset: 0 auto 0 0; width: 250%; pointer-events: none;
   background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .8) 50%, transparent 65%);
-  background-size: 250% 100%; background-repeat: no-repeat; animation: nick-sheen 2.6s ease-in-out infinite;
+  animation: nick-sheen 2.6s ease-in-out infinite; will-change: transform;
 }
 .nick-tag--a::after { animation-duration: 3.8s; opacity: .7; }
 .tagged-name { display: inline-flex; align-items: center; gap: .32em; max-width: 100%; min-width: 0; vertical-align: middle; }
 .tagged-name .nick-tag { flex: 0 1 auto; min-width: 2.6em; margin: 0; vertical-align: 0; }
 .tagged-name__text { flex: 0 0 auto; }
-@keyframes nick-holo { to { background-position: 200% 0; } }
-@keyframes nick-sheen { 0% { background-position: 120% 0; } 60%, 100% { background-position: -20% 0; } }
-@media (prefers-reduced-motion: reduce) { .nick-tag--s, .nick-tag::after { animation: none; } }
+@keyframes nick-holo { to { transform: translateX(-50%); } }
+@keyframes nick-sheen { 0% { transform: translateX(-72%); } 60%, 100% { transform: translateX(12%); } }
+@media (prefers-reduced-motion: reduce) { .nick-tag::before, .nick-tag::after { animation: none; } }
 
 /* 내 정보 — collected tags; pressing one wears it (Claude Design "Ranking and Me" 4c). */
 .tag-collection-card { padding: 16px; display: flex; flex-direction: column; gap: 12px; }

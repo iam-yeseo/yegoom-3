@@ -920,25 +920,7 @@
   font-weight: 600;
   color: #e0644e;
 }
-.tries {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.tries i {
-  width: 20px;
-  height: 8px;
-  border-radius: 4px;
-  background: #f1ece6;
-}
-.tries i.on {
-  background: #ffd866;
-}
-.tries b {
-  margin-left: 4px;
-  font-size: 15px;
-  font-weight: 800;
-}
+
 .market-state {
   display: flex;
   align-items: center;
@@ -1257,18 +1239,7 @@
   letter-spacing: -0.6px;
   line-height: 1.1;
 }
-.podium-reward {
-  margin-top: 6px;
-  height: 26px;
-  padding: 0 9px 0 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.85);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  font-weight: 800;
-}
+
 .ranking .stack {
   padding-top: 16px;
 }
@@ -1791,29 +1762,7 @@
 .stock-row.delisted {
   opacity: 0.55;
 }
-.stock-icon {
-  width: 44px;
-  height: 44px;
-  flex: none;
-  border-radius: 15px;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.stock-icon img {
-  width: 54px;
-  height: 54px;
-}
-.stock-icon img.dim {
-  filter: saturate(0.4);
-  opacity: 0.8;
-}
-.closed .stock-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 14px;
-}
+
 .stock-name {
   flex: 1;
   min-width: 0;
@@ -1915,25 +1864,7 @@ em.delisted {
   font-weight: 600;
   color: #7c7383;
 }
-.profit-rank {
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.profit-rank .list-row {
-  padding: 0;
-  border: 0;
-}
-.plain-rank {
-  width: 22px;
-  font-size: 14px;
-  font-weight: 800;
-  color: #ada4b3;
-}
-.profit-rank .list-row > b {
-  font-size: 16px;
-}
+
 .detail-head {
   padding: 2px 20px 0;
   display: flex;
@@ -1984,27 +1915,7 @@ em.delisted {
   padding: 0 8px;
   font-size: 12px;
 }
-.detail-icon {
-  width: 72px;
-  height: 72px;
-  flex: none;
-  border-radius: 24px;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.detail-icon img {
-  width: 88px;
-  height: 88px;
-}
-.detail-icon.gray {
-  background: #eee9e4;
-}
-.detail-icon.gray img {
-  filter: grayscale(1);
-  opacity: 0.55;
-}
+
 .stock .detail-head + .stack {
   padding-top: 16px;
   padding-bottom: 0;
@@ -2189,23 +2100,11 @@ em.delisted {
   color: #fff;
   box-shadow: 0 4px 10px rgba(59, 127, 179, 0.3);
 }
-.my-tickets {
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.my-tickets > span {
-  font-size: 13px;
-  font-weight: 700;
-  color: #ada4b3;
-}
-.my-tickets > div,
+
 .ticket-balls {
   display: flex;
   gap: 6px;
 }
-.my-tickets i,
 .ticket-balls i {
   width: 34px;
   height: 34px;
@@ -2262,21 +2161,7 @@ em.delisted {
 .ticket .card-head {
   align-items: center;
 }
-.ticket-tag {
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: #f3eee8;
-  color: #ada4b3;
-  font-size: 13px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-}
-.ticket-tag.won {
-  background: #ffe6df;
-  color: #c9533e;
-}
+
 .ticket .card-head b {
   font-size: 17px;
   font-weight: 800;
@@ -2422,8 +2307,7 @@ em.delisted {
   .balls {
     gap: 7px;
   }
-  .ticket-balls i,
-  .my-tickets i {
+  .ticket-balls i {
     width: 32px;
     height: 32px;
   }
@@ -2517,6 +2401,8 @@ em.delisted {
   overflow-wrap: anywhere;
   pointer-events: none;
 }
+/* In the top layer (see toast()): undo the popover defaults, keep the same place. */
+.fx-toast[popover] { inset: auto auto calc(104px + env(safe-area-inset-bottom)) 50%; margin: 0; border: 0; overflow: visible; }
 .fx-toast-wrap {
   width: max-content;
   max-width: calc(100vw - 32px);
@@ -2706,15 +2592,7 @@ em.delisted {
 }
 
 /* Sheets (쿠지 결과, 주식 거래 확인) */
-.kuji-scrim {
-  position: fixed;
-  z-index: 40;
-  inset: 0;
-  background: rgba(58, 51, 64, 0.28);
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-}
+
 .kuji-sheet {
   width: 100%;
   padding: 24px 16px calc(24px + env(safe-area-inset-bottom));

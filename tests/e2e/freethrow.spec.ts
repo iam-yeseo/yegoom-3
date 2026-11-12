@@ -141,6 +141,8 @@ test('an official preview set records all ten balls at the end and shows the res
   await result.getByRole('button', { name: '확인' }).click();
   await expect(page.locator('.play-shell')).toHaveCount(0);
   await expect(page.locator('.freethrow-official')).toContainText(`${goals}골 성공!`);
+  // The page behind scrolls again: nothing of the play view's lock is left.
+  expect(await page.evaluate(() => [document.body.style.overflow, document.body.style.position, document.documentElement.style.overflowY, document.documentElement.dataset.playOpen ?? ''])).toEqual(['', '', '', '']);
   expect(await gold()).toBe(before + goals * 5);
   await expect(page.locator('.freethrow-today li.is-me')).toContainText(`${goals}골`);
   await page.getByRole('button', { name: '뒤로 가기' }).click();

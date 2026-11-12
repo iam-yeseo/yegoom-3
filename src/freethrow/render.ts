@@ -43,15 +43,30 @@ const ring = (y: number, radius: number, count: number, shiftX = 0, shiftZ = 0) 
     return project(COURT.rim.x + shiftX + Math.cos(angle) * radius, y, COURT.rim.z + shiftZ + Math.sin(angle) * radius);
   });
 
+// The rim and a resting net never change: their screen points are worked out once.
+const NET_STRANDS = 12, RIM_STEPS = 20;
+/** The far half of the rim spans angles 0–π (positive z), the near half π–2π. */
+const rimHalf = (from: number) => Array.from({ length: RIM_STEPS + 1 }, (_, i) => {
+  const angle = from + (i / RIM_STEPS) * Math.PI;
+  return project(COURT.rim.x + Math.cos(angle) * COURT.rim.radius, COURT.rim.y, COURT.rim.z + Math.sin(angle) * COURT.rim.radius);
+});
+const RIM_BACK = rimHalf(0), RIM_FRONT = rimHalf(Math.PI);
+const NET_TOP = ring(COURT.rim.y, COURT.rim.radius, NET_STRANDS);
+const NET_MID = ring(COURT.rim.y - COURT.net.depth * 0.55, COURT.rim.radius * 0.8, NET_STRANDS);
+const NET_BOTTOM = ring(COURT.rim.y - COURT.net.depth, COURT.rim.radius * COURT.net.bottomScale, NET_STRANDS);
+
 export class FreeThrowRenderer {
   private ctx: CanvasRenderingContext2D;
   private backdrop: HTMLCanvasElement | null = null;
   private ratio = 1;
   private sprite: HTMLImageElement | null = null;
+  /** The ball picture resampled once to the size it has in the hand; in the
+   * air it only gets smaller, so each frame scales a small copy, not the original. */
+  private ballCopy: HTMLCanvasElement | null = null;
   /** onReady repaints once the ball sprite has loaded; until then (or if it
    * fails) the ball is drawn with gradients and seam lines. */
   constructor(private canvas: HTMLCanvasElement, onReady?: () => void) {
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("이 브라우저에서는 코트를 그릴 수 없어요.");
     this.ctx = ctx;
     if (typeof Image !== "undefined") {
@@ -67,8 +82,8 @@ export class FreeThrowRenderer {
     const ratio = Math.min(2, window.devicePixelRatio || 1) * (rect.width ? rect.width / STAGE.width : 1);
     const width = Math.round(STAGE.width * ratio), height = Math.round(STAGE.height * ratio);
     // Another renderer (a remounted screen) may already have sized this canvas: the scale still has to match it.
-    if (width === this.canvas.width && height === this.canvas.height) { if (this.ratio !== ratio) { this.ratio = ratio; this.backdrop = null; } return false; }
-    this.canvas.width = width; this.canvas.height = height; this.ratio = ratio; this.backdrop = null;
+    if (width === this.canvas.width && height === this.canvas.height) { if (this.ratio !== ratio) { this.ratio = ratio; this.backdrop = null; this.ballCopy = null; } return false; }
+    this.canvas.width = width; this.canvas.height = height; this.ratio = ratio; this.backdrop = null; this.ballCopy = null;
     return true;
   }
   draw(scene: Scene) {
@@ -143,25 +158,22 @@ export class FreeThrowRenderer {
     ctx.fillRect(rimBack.x - 6, rimBack.y - 2, 12, Math.max(4, plate.y - rimBack.y + 4));
   }
   private rim(back: boolean, shake: number) {
-    const { ctx } = this, { rim } = COURT, steps = 20;
+    const { ctx } = this, points = back ? RIM_BACK : RIM_FRONT;
     ctx.strokeStyle = back ? "#d9604c" : "#f47c66"; ctx.lineWidth = back ? 3.4 : 4.2; ctx.lineCap = "round";
     ctx.beginPath();
-    // The far half spans angles 0–π (positive z), the near half π–2π.
-    for (let i = 0; i <= steps; i++) {
-      const angle = (back ? 0 : Math.PI) + (i / steps) * Math.PI;
-      const point = project(rim.x + Math.cos(angle) * rim.radius, rim.y, rim.z + Math.sin(angle) * rim.radius);
-      if (i) ctx.lineTo(point.x, point.y + shake); else ctx.moveTo(point.x, point.y + shake);
-    }
+    ctx.moveTo(points[0]!.x, points[0]!.y + shake);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i]!.x, points[i]!.y + shake);
     ctx.stroke();
   }
   private net(age: number | null, shake: number) {
-    const { ctx } = this, { rim, net } = COURT, count = 12;
-    // A made shot stretches the net down and lets it swing back.
-    const swing = age === null || age > 1.2 ? 0 : Math.exp(-age * 4) * Math.sin(age * 18);
-    const stretch = age === null || age > 1.2 ? 0 : Math.exp(-age * 5) * 0.12;
-    const top = ring(rim.y, rim.radius, count);
-    const mid = ring(rim.y - net.depth * 0.55 - stretch * 0.6, rim.radius * 0.8, count, swing * 0.03);
-    const bottom = ring(rim.y - net.depth - stretch, rim.radius * net.bottomScale, count, swing * 0.06);
+    const { ctx } = this, { rim, net } = COURT, count = NET_STRANDS;
+    // A made shot stretches the net down and lets it swing back; otherwise it hangs still.
+    const moving = age !== null && age <= 1.2;
+    const swing = moving ? Math.exp(-age * 4) * Math.sin(age * 18) : 0;
+    const stretch = moving ? Math.exp(-age * 5) * 0.12 : 0;
+    const top = NET_TOP;
+    const mid = moving ? ring(rim.y - net.depth * 0.55 - stretch * 0.6, rim.radius * 0.8, count, swing * 0.03) : NET_MID;
+    const bottom = moving ? ring(rim.y - net.depth - stretch, rim.radius * net.bottomScale, count, swing * 0.06) : NET_BOTTOM;
     ctx.strokeStyle = "rgba(58,51,64,.38)"; ctx.lineWidth = 1.2; ctx.lineCap = "round";
     ctx.beginPath();
     for (let i = 0; i < count; i++) {
@@ -188,8 +200,17 @@ export class FreeThrowRenderer {
     ctx.save();
     ctx.globalAlpha = scene.alpha;
     if (this.sprite) {
+      if (!this.ballCopy) {
+        const size = Math.max(1, Math.ceil(BALL_REST_RADIUS * 2 * this.ratio));
+        const copy = document.createElement("canvas");
+        copy.width = copy.height = size;
+        const layer = copy.getContext("2d")!;
+        layer.imageSmoothingQuality = "high";
+        layer.drawImage(this.sprite, 0, 0, size, size);
+        this.ballCopy = copy;
+      }
       ctx.translate(x, y); ctx.rotate(scene.spin);
-      ctx.drawImage(this.sprite, -r, -r, r * 2, r * 2);
+      ctx.drawImage(this.ballCopy, -r, -r, r * 2, r * 2);
       ctx.restore();
       return;
     }

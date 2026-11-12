@@ -26,14 +26,10 @@ import { HistoryRow, reasonIcon } from "../components/HistoryRow";
 import { TagCollection } from "../components/TagCollection";
 import { FONT_SIZES, readFontSize, saveFontSize, type FontSize } from "../font-size";
 
+const dateFormat = new Intl.DateTimeFormat("en-US", { timeZone: KST, month: "numeric", day: "numeric", weekday: "short" });
 function dateLabel(iso: string) {
   const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: KST,
-      month: "numeric",
-      day: "numeric",
-      weekday: "short",
-    })
+    dateFormat
       .formatToParts(new Date(iso))
       .map((p) => [p.type, p.value]),
   );

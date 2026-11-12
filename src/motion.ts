@@ -114,6 +114,21 @@ export const fadeIn = (el: Element | null | undefined, o: Opts = {}) =>
 
 const openSheets = new Map<HTMLDialogElement, () => void>();
 let unlockPageScroll: (() => void) | null = null;
+let scrollHolds = 0;
+
+/** Freezes the page behind an overlay until the returned function is called.
+ * Holds are counted: sheets and full-screen play views can open and close in
+ * any order (a result dialog over a game closes together with it), and the
+ * page scrolls again only when the last one lets go. */
+export function holdPageScroll(): () => void {
+  if (scrollHolds++ === 0) unlockPageScroll = lockPageScroll();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--scrollHolds === 0) { unlockPageScroll?.(); unlockPageScroll = null; }
+  };
+}
 
 function lockPageScroll() {
   const root = document.documentElement;
@@ -147,11 +162,11 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
   const existing = openSheets.get(dialog);
   if (existing) return existing;
   const previousFocus = document.activeElement;
-  if (openSheets.size === 0) unlockPageScroll = lockPageScroll();
+  const releaseScroll = holdPageScroll();
   try {
     dialog.showModal();
   } catch (error) {
-    if (openSheets.size === 0) { unlockPageScroll?.(); unlockPageScroll = null; }
+    releaseScroll();
     throw error;
   }
   const entrance = anim(dialog, [{ translate: "0 30px", opacity: 0 }, { translate: "0 0", opacity: 1 }], {
@@ -194,7 +209,7 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
     entrance?.cancel();
     openSheets.delete(dialog);
     if (dialog.open) dialog.close();
-    if (openSheets.size === 0) { unlockPageScroll?.(); unlockPageScroll = null; }
+    releaseScroll();
     const topDialog = Array.from(openSheets.keys()).at(-1);
     if (previousFocus instanceof HTMLElement && previousFocus.isConnected && (!topDialog || topDialog.contains(previousFocus))) {
       previousFocus.focus({ preventScroll: true });
@@ -367,9 +382,10 @@ export function sparkle(from: Element | null | undefined, o: { n?: number; r?: n
 /** Lilac scratch dust at a client point. */
 export function crumbs(clientX: number, clientY: number) {
   if (reduced()) return;
-  const layer = fxLayer().getBoundingClientRect();
-  const x = clientX - layer.left;
-  const y = clientY - layer.top;
+  // The layer is fixed at the viewport's corner: client coordinates are its own,
+  // and measuring it after every appended crumb forced a layout per pointer move.
+  const x = clientX;
+  const y = clientY;
   for (let i = 0; i < 2; i++) {
     const d = dot(x + (Math.random() - 0.5) * 20, y + (Math.random() - 0.5) * 20, 4 + Math.random() * 4, ["#D8CCF7", "#C4DFF5", "#E9E2FB"][i % 3]);
     d.animate(
@@ -378,7 +394,7 @@ export function crumbs(clientX: number, clientY: number) {
         { translate: `${(Math.random() - 0.5) * 30}px ${30 + Math.random() * 30}px`, opacity: 0 },
       ],
       { duration: 600, easing: "cubic-bezier(.3,.6,.5,1)", fill: "both" },
-    );
+    ).onfinish = () => d.remove();
     setTimeout(() => d.remove(), 1600);
   }
 }
@@ -427,6 +443,12 @@ export function toast(text: string, o: { hold?: number; wrap?: boolean } = {}) {
   t.appendChild(document.createTextNode(text));
   // Toasts are announced, so they live outside the aria-hidden layer.
   document.body.appendChild(t);
+  // A modal dialog sits in the top layer, above any z-index: a toast raised
+  // while one is open joins that layer, or it would be hidden behind it.
+  if ("showPopover" in t && document.querySelector("dialog:modal")) {
+    t.setAttribute("popover", "manual");
+    try { t.showPopover(); } catch { t.removeAttribute("popover"); }
+  }
   anim(t, [{ translate: "-50% 24px", opacity: 0, scale: ".9" }, { translate: "-50% 0", opacity: 1, scale: "1" }], {
     dur: dur.spring,
     ease: "spring",

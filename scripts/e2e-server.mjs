@@ -33,7 +33,21 @@ const artifact = await build({
   define: { Date: 'TestDate' },
   banner: { js: `class TestDate extends Date { constructor(...args) { super(...(args.length ? args : [${timestamp}])); } static now() { return ${timestamp}; } }` },
 });
-writeFileSync(`${state}/worker.js`, artifact.outputFiles[0].text.replaceAll("unixepoch('now') * 1000", String(timestamp)));
+// The Worker checks achievements after it has answered (context.waitUntil).
+// Browser tests read state right after a response, so this test artifact waits
+// for that deferred work first (the same wrapper as tests/settle-deferred.ts).
+const exported = /export\s*\{\s*(\w+)\s+as\s+default\s*\};?\s*$/;
+const compiled = artifact.outputFiles[0].text.replaceAll("unixepoch('now') * 1000", String(timestamp));
+const entry = compiled.match(exported)?.[1];
+if (!entry) throw new Error('Worker default export was not found');
+writeFileSync(`${state}/worker.js`, `${compiled.replace(exported, '')}
+const settled_default = { ...${entry}, async fetch(request, env, context) {
+  const pending = [];
+  const response = await ${entry}.fetch(request, env, { waitUntil: promise => { pending.push(promise); }, passThroughOnException: () => context?.passThroughOnException?.() });
+  await Promise.all(pending);
+  return response;
+} };
+export { settled_default as default };`);
 const run = (args) => {
   const result = spawnSync(process.execPath, [wrangler, ...args, '--config', configPath], { env, stdio: 'inherit' });
   if (result.status !== 0) { cleanup(); process.exit(result.status || 1); }

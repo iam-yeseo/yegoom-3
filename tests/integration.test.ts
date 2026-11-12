@@ -1,3 +1,4 @@
+import { settleDeferred } from './settle-deferred';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -107,7 +108,7 @@ async function workerAt(instant: string, sqlInstant: string = instant, speettoRo
     if (!daily.test(artifact)) throw new Error('Compiled DAILY_FREE constant was not found');
     artifact = artifact.replace(daily, 'var DAILY_FREE = { lotto: 0, speetto: 0, slot: 0, tag: 0 };');
   }
-  return artifact;
+  return settleDeferred(artifact);
 }
 
 /** Test-bundle-only instrumentation includes authentication in real HTTP request totals. */
@@ -1312,6 +1313,25 @@ describe('Worker and D1 integration', () => {
         expect(rows).toEqual([`first:luck:${TODAY}:min`, `first:offwork:${TODAY}:min`, `score:luck:${TODAY}:min`]);
       } finally { await instance.dispose(); }
     });
+
+    it('adds no score when an early answer is first entered after 23:50', async () => {
+      const instance = runtime(await workerAt(`${TODAY}T14:55:00Z`)); // 23:55 KST
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await seedRound({ game: 'offwork', date: TODAY, predictions: [['min', '18:00:00']], database });
+        const siwon = await login('siwon', instance);
+        // Left work at 18:00 but only says so at 23:55: the answer is public from 23:55, not from 18:00.
+        expect((await request('/api/games/offwork/answer', { method: 'PUT', cookie: siwon.cookie, instance, body: { value: '18:00:00' } })).status).toBe(200);
+        expect(await database.prepare("SELECT reveal_at, revealed_at FROM game_rounds WHERE game_id = 'offwork' AND round_date = ?").bind(TODAY).first())
+          .toEqual({ reveal_at: Date.parse(`${TODAY}T18:00:00+09:00`), revealed_at: Date.parse(`${TODAY}T14:55:00Z`) });
+        const { cookie } = await login('min', instance);
+        const response = await request('/api/bootstrap', { cookie, instance });
+        expect(response.status).toBe(200);
+        const rows = (await database.prepare("SELECT reference FROM ledger WHERE reference LIKE 'score:%' OR reference LIKE 'first:%' ORDER BY reference").all<{ reference: string }>()).results.map(row => row.reference);
+        expect(rows).toEqual([`first:offwork:${TODAY}:min`]);
+      } finally { await instance.dispose(); }
+    });
   });
 
   describe('nickname tags', () => {
@@ -2402,6 +2422,22 @@ describe('Worker and D1 integration', () => {
         expect((await (await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'welcome', periodKey: '' } })).json() as { error: { code: string } }).error.code).toBe('ALREADY_CLAIMED');
         expect((await (await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'claw_clear', periodKey: '' } })).json() as { error: { code: string } }).error.code).toBe('NOT_UNLOCKED');
         expect((await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { key: 'nope', periodKey: '' } })).status).toBe(400);
+        // 모두 받기 sends one list: rows collected elsewhere or still locked are skipped, the rest are paid once.
+        const list = { claims: [{ key: 'welcome', periodKey: '' }, { key: 'speetto_win', periodKey: '' }, { key: 'claw_clear', periodKey: '' }] };
+        const many = await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: list });
+        expect(many.status).toBe(200);
+        const all = await many.json() as Achievements;
+        expect(status(all, 'speetto_win')).toBe('claimed');
+        expect(all.unclaimed).toBe(0);
+        const rewards = (await ledgerRows(database)).filter(row => row.reference.startsWith('achievement:'));
+        expect(rewards.map(row => row.reference).sort()).toEqual(['achievement:speetto_win::min', 'achievement:welcome::min']);
+        expect(all.gold).toBe(paid.gold + rewards.find(row => row.reference === 'achievement:speetto_win::min')!.amount);
+        const again = await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: list });
+        expect(again.status).toBe(409);
+        expect((await again.json() as { error: { code: string } }).error.code).toBe('ALREADY_CLAIMED');
+        for (const claims of [[], [{ key: 'welcome', periodKey: '' }, { key: 'welcome', periodKey: '' }], [{ key: 'welcome', periodKey: '' }, { key: 'nope', periodKey: '' }], [null]]) {
+          expect((await request('/api/achievements/claim', { method: 'POST', cookie: min.cookie, instance, body: { claims } })).status).toBe(400);
+        }
         // Administrators have no achievements and cannot claim any.
         expect((await achievements(admin.cookie, instance)).progress).toEqual([]);
         expect((await request('/api/achievements/claim', { method: 'POST', cookie: admin.cookie, instance, body: { key: 'welcome', periodKey: '' } })).status).toBe(403);

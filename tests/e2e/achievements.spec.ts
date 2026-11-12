@@ -32,6 +32,17 @@ test('the preview games tab toggles to the achievement list and pays a sample re
   await welcome.getByRole('button', { name: /받기/ }).click();
   await expect(welcome).toHaveClass(/claimed/);
   await expect(page.locator('.achievement-claim.all')).toContainText('2개 모두 받기');
+  // 모두 받기 collects the rest in one go: the list never drops back to its loading line.
+  await page.evaluate(() => {
+    const seen = (window as unknown as { loadingSeen: number }).loadingSeen = 0;
+    new MutationObserver(() => { if (document.querySelector('.achievements [role="status"]')) (window as unknown as { loadingSeen: number }).loadingSeen = seen + 1; })
+      .observe(document.querySelector('.achievements')!, { childList: true, subtree: true });
+  });
+  await page.locator('.achievement-claim.all').click();
+  await expect(page.locator('.achievements')).toContainText('받을 보상이 없어요');
+  await expect(page.locator('.achievement-row.unlocked')).toHaveCount(0);
+  await expect(page.locator('.fx-toast').last()).toContainText('받았어요');
+  expect(await page.evaluate(() => (window as unknown as { loadingSeen: number }).loadingSeen)).toBe(0);
   await page.getByRole('tab', { name: '게임' }).click();
   await expect(page).toHaveURL(/#\/preview\/games$/);
   await expect(page.locator('.game-row').first()).toBeVisible();
