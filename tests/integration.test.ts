@@ -1,3 +1,4 @@
+import { settleDeferred } from './settle-deferred';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -107,7 +108,7 @@ async function workerAt(instant: string, sqlInstant: string = instant, speettoRo
     if (!daily.test(artifact)) throw new Error('Compiled DAILY_FREE constant was not found');
     artifact = artifact.replace(daily, 'var DAILY_FREE = { lotto: 0, speetto: 0, slot: 0, tag: 0 };');
   }
-  return artifact;
+  return settleDeferred(artifact);
 }
 
 /** Test-bundle-only instrumentation includes authentication in real HTTP request totals. */
@@ -1310,6 +1311,25 @@ describe('Worker and D1 integration', () => {
         const rows = (await database.prepare("SELECT reference FROM ledger WHERE reference LIKE 'score:%' OR reference LIKE 'first:%' ORDER BY reference").all<{ reference: string }>()).results.map(row => row.reference);
         // The 23:40 luck answer still counts; the 23:55 offwork answer pays only the first-place gold.
         expect(rows).toEqual([`first:luck:${TODAY}:min`, `first:offwork:${TODAY}:min`, `score:luck:${TODAY}:min`]);
+      } finally { await instance.dispose(); }
+    });
+
+    it('adds no score when an early answer is first entered after 23:50', async () => {
+      const instance = runtime(await workerAt(`${TODAY}T14:55:00Z`)); // 23:55 KST
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await seedRound({ game: 'offwork', date: TODAY, predictions: [['min', '18:00:00']], database });
+        const siwon = await login('siwon', instance);
+        // Left work at 18:00 but only says so at 23:55: the answer is public from 23:55, not from 18:00.
+        expect((await request('/api/games/offwork/answer', { method: 'PUT', cookie: siwon.cookie, instance, body: { value: '18:00:00' } })).status).toBe(200);
+        expect(await database.prepare("SELECT reveal_at, revealed_at FROM game_rounds WHERE game_id = 'offwork' AND round_date = ?").bind(TODAY).first())
+          .toEqual({ reveal_at: Date.parse(`${TODAY}T18:00:00+09:00`), revealed_at: Date.parse(`${TODAY}T14:55:00Z`) });
+        const { cookie } = await login('min', instance);
+        const response = await request('/api/bootstrap', { cookie, instance });
+        expect(response.status).toBe(200);
+        const rows = (await database.prepare("SELECT reference FROM ledger WHERE reference LIKE 'score:%' OR reference LIKE 'first:%' ORDER BY reference").all<{ reference: string }>()).results.map(row => row.reference);
+        expect(rows).toEqual([`first:offwork:${TODAY}:min`]);
       } finally { await instance.dispose(); }
     });
   });

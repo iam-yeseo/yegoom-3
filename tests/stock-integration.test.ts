@@ -1,3 +1,4 @@
+import { settleDeferred } from './settle-deferred';
 import { readFile, readdir, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -32,7 +33,7 @@ async function workerAt(timestamp: number): Promise<string> {
     define: { Date: 'TestDate' },
     banner: { js: `class TestDate extends Date { constructor(...args) { super(...(args.length ? args : [${timestamp}])); } static now() { return ${timestamp}; } }` },
   });
-  const script = result.outputFiles[0]!.text.replaceAll("unixepoch('now') * 1000", String(timestamp));
+  const script = settleDeferred(result.outputFiles[0]!.text.replaceAll("unixepoch('now') * 1000", String(timestamp)));
   scripts.set(timestamp, script);
   return script;
 }

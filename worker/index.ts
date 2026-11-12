@@ -558,14 +558,18 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
     // ADMIN_RULES_WRITE_BOUNDARY: answer time and rules are resolved inside SQL.
     const writes = await env.DB.batch([
       ...roundSnapshotWrites(env.DB, id, date, now),
+      // An answer first entered after its reveal time is public at once: record
+      // when it really went public, so one entered after the day closed (23:50)
+      // cannot score as if it had been revealed on time.
       env.DB.prepare(`UPDATE game_rounds SET answer = ?, hint = ?,
           reveal_at = unixepoch(? || 'T' || CASE WHEN game_id = 'luck' THEN json_extract(settings_json, '$.revealTime') ELSE ? END || '+09:00') * 1000,
+          revealed_at = CASE WHEN unixepoch(? || 'T' || CASE WHEN game_id = 'luck' THEN json_extract(settings_json, '$.revealTime') ELSE ? END || '+09:00') * 1000 <= unixepoch('now') * 1000 THEN ? END,
           updated_at = ?
         WHERE game_id = ? AND round_date = ? AND json_extract(settings_json, '$.enabled') = 1
           AND (? != 'luck' OR EXISTS (SELECT 1 FROM luck_photos WHERE round_date = ?))
           AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?
           AND revealed_at IS NULL AND (reveal_at IS NULL OR reveal_at > unixepoch('now') * 1000)`)
-        .bind(input.value, id === 'luck' ? (input.hint ?? '') : '', date, input.value, now.getTime(), id, date, id, date, start, start + 86_400_000),
+        .bind(input.value, id === 'luck' ? (input.hint ?? '') : '', date, input.value, date, input.value, now.getTime(), now.getTime(), id, date, id, date, start, start + 86_400_000),
     ]);
     if (writes[2]!.meta.changes === 0) await rejectGameWrite(env.DB, id, date, 'ALREADY_REVEALED', '공개된 정답은 수정할 수 없어요.');
   } else if (action === 'reveal') {
@@ -618,7 +622,7 @@ async function adminState(env: Env, now: Date): Promise<AdminState> {
   return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, catchmindWordsRemaining, marketHolidays,
     stock: { ai, news: stockNews }, serverTime: now.toISOString() };
 }
-async function api(request: Request, env: Env): Promise<Response> {
+async function api(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const now = new Date();
   if (!['GET', 'HEAD'].includes(request.method)) requireSameOrigin(request);
@@ -632,11 +636,13 @@ async function api(request: Request, env: Env): Promise<Response> {
   const user = await requireUser(request, env, now.getTime());
   const response = await authenticatedApi(request, env, url, user, now);
   // Any successful player write may have completed an achievement. The check
-  // runs after the write's own response is ready and never fails the request.
+  // runs after the response has gone out, so the write itself is not slowed by
+  // it; the unlock notice reaches the player with their next refresh. It never
+  // fails the request.
   if (!['GET', 'HEAD'].includes(request.method) && user.role === 'player' && response.ok && !url.pathname.startsWith('/api/achievements')) {
-    await syncAchievements(env.DB, user.id, new Date(), url.pathname === '/api/me/password' ? ['password'] : []).catch(error => {
+    context.waitUntil(syncAchievements(env.DB, user.id, new Date(), url.pathname === '/api/me/password' ? ['password'] : []).catch(error => {
       console.error('Achievement sync failed', error instanceof Error ? error.name : 'UnknownError');
-    });
+    }));
   }
   return response;
 }
@@ -919,10 +925,10 @@ export default {
       }));
     }
   },
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
-    try { return await api(request, env); }
+    try { return await api(request, env, context); }
     catch (error) {
       if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof FreeThrowError || error instanceof SantaError || error instanceof LaunchGiftError || error instanceof RankResultError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
