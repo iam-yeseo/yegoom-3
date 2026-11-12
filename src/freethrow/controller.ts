@@ -153,7 +153,7 @@ export class FreeThrowController {
   private tick = (now: number) => {
     let moving = this.mode === "holding";
     if (this.returning) {
-      const share = Math.min(1, (now - this.returning.start) / RETURN_MS), ease = 1 - (1 - share) ** 3;
+      const share = Math.max(0, Math.min(1, (now - this.returning.start) / RETURN_MS)), ease = 1 - (1 - share) ** 3;
       this.scene.offset = { x: this.returning.from.x * (1 - ease), y: this.returning.from.y * (1 - ease) };
       if (share >= 1) this.returning = null; else moving = true;
     }
@@ -173,7 +173,11 @@ export class FreeThrowController {
   /** Advances the recorded flight; returns whether it is still playing. */
   private fly(now: number): boolean {
     const flight = this.flight!, { result } = flight;
-    const t = (now - flight.start) / 1000;
+    // A frame's timestamp is when the frame began, which can be a few ms before
+    // the release that started this flight. Unclamped, that first frame asked
+    // for a position before the flight (frames[-1]), threw, and stopped the
+    // loop for good: the ball hung in the air and no more throws were possible.
+    const t = Math.max(0, (now - flight.start) / 1000);
     const index = t / FRAME_DT, frames = result.frames;
     const base = Math.min(frames.length - 1, Math.floor(index)), next = Math.min(frames.length - 1, base + 1), share = Math.min(1, index - base);
     const a = frames[base]!, b = frames[next]!;
