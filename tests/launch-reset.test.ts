@@ -105,6 +105,8 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO lotto_draws (date, numbers, created_at) VALUES ('2026-11-01', '[1,2,3,4,5]', '2026-11-01T08:00:00Z')"),
       db.prepare("INSERT INTO lotto_tickets (id, draw_date, numbers) VALUES ('old-lotto-purchase', '2026-11-01', '[1,2,3,4,5]')"),
       db.prepare("INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, image, round_date, published_at, created_at) VALUES ('old-round', 12, 'min', '사과', '사과', '[\"사과\"]', 'open', 'data:image/png;base64,Zml4dHVyZQ==', '2026-11-01', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')"),
+      // Prompts used before drawers wrote their own answers (migration 0029).
+      db.prepare("INSERT INTO catchmind_used_words (word, round_id, used_at) VALUES ('사과', 'old-round', '2026-11-01T00:00:00Z')"),
       db.prepare("UPDATE catchmind_turn SET drawer_id = 'min', round_id = 'old-round' WHERE id = 1"),
       db.prepare("INSERT INTO catchmind_requests (id, user_id, request_id, action, round_id, result_round_id, payload_hash, created_at) VALUES ('old-request', 'min', 'old-catchmind-request', 'guess', 'old-round', 'old-round', 'fixture', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO catchmind_guesses (id, round_id, player_id, answer, normalized_answer, correct, created_at) VALUES ('old-request', 'old-round', 'min', '배', '배', 0, '2026-11-01T00:00:00Z')"),
