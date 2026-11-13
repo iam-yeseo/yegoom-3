@@ -154,9 +154,13 @@ for (const mode of ['authenticated', 'preview'] as const) for (const width of [3
       }
       const active = current!.catchmind.round;
       // A full run rotates the new draft to siwon; a focused run retains min's
-      // seeded round. The authenticated drawer may see its own prompt, while
-      // every other viewer must receive null and have no private prompt UI.
-      if (active && active.status !== 'ended') {
+      // seeded round. The authenticated drawer may see its own published answer
+      // (a draft has none yet), while every other viewer must receive null and
+      // have no private prompt UI.
+      if (active && active.status === 'draft' && current!.viewerId === active.drawer.id) {
+        expect(active.word).toBeNull();
+        await expect(page.getByRole('textbox', { name: '정답', exact: true })).toBeVisible();
+      } else if (active && active.status !== 'ended') {
         if (current!.viewerId === active.drawer.id) {
           expect(active.word).toEqual(expect.any(String));
           expect(active.word!.length).toBeGreaterThan(0);

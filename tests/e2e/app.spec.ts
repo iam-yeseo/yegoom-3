@@ -945,6 +945,8 @@ async function guessCatchmind(page: Page, answer: string) {
   await page.getByRole('textbox', { name: '캐치마인드 정답', exact: true }).fill(answer);
   await page.getByRole('button', { name: '정답', exact: true }).click();
 }
+/** The drawer's answer box above the canvas. */
+const answerBox = (page: Page) => page.getByRole('textbox', { name: '정답', exact: true });
 async function previewDrawing(page: Page) {
   await page.goto('/#/preview/play/catchmind');
   await guessCatchmind(page, '선 인 장');
@@ -1108,6 +1110,9 @@ test('catchmind preview keeps hints, rewards, drawing tools and color selection 
   await expect(page.getByRole('button', { name: '그림 올리기', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '한 획 되돌리기', exact: true }).click();
   expect(await canvas.evaluate(element => (element as HTMLCanvasElement).toDataURL())).toBe(beforeClear);
+  // A drawing needs an answer before it can go up.
+  await expect(page.getByRole('button', { name: '그림 올리기', exact: true })).toBeDisabled();
+  await answerBox(page).fill('눈사람');
   await expect(page.getByRole('button', { name: '그림 올리기', exact: true })).toBeEnabled();
   await captureWidths(page, 'preview-drawing', info, 4);
   picker = await openPicker(page);
@@ -1127,30 +1132,37 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
   await login(page, 'min');
   await page.goto('/#/play/catchmind');
   await page.getByRole('button', { name: '그리기 맡기', exact: true }).click();
-  await expect(page.locator('.pg-prompt strong')).not.toHaveText('불러오는 중');
+  await expect(answerBox(page)).toBeVisible();
+  await expect(answerBox(page)).toHaveValue('');
   let state = await catchmindState(page);
-  expect(state.round).toMatchObject({ status: 'draft', drawer: { username: 'min' }, rerollsLeft: 3 });
+  expect(state.round).toMatchObject({ status: 'draft', drawer: { username: 'min' }, word: null });
   const other = await browser.newContext({ reducedMotion: 'reduce' });
   try {
     const guesser = await other.newPage();
     await login(guesser, 'yeseo');
     await guesser.goto('/#/play/catchmind');
     await expect(guesser.getByRole('heading', { name: 'min님이 그림을 그리고 있어요', exact: true })).toBeVisible();
-    for (const remaining of [3, 2, 1]) {
-      const changed = catchmindResponse(page, 'reroll');
-      await page.getByRole('button', { name: `제시어 바꾸기 (${remaining}회 남음)`, exact: true }).click();
-      expect((await changed).status()).toBe(200);
-      await expect(page.getByRole('button', { name: `제시어 바꾸기 (${remaining - 1}회 남음)`, exact: true })).toBeVisible();
-    }
-    await expect(page.getByRole('button', { name: '제시어 바꾸기 (0회 남음)', exact: true })).toBeDisabled();
-    state = await catchmindState(page);
-    const word = state.round!.word!;
-    expect(word.length).toBeGreaterThan(0);
-    await expect(page.locator('.pg-prompt strong')).toHaveText(word);
+    // Suggestions come from the prompt list and change without a request.
+    const suggestion = page.locator('.cm-suggestion-word');
+    const requests: string[] = [];
+    const record = (request: { url: () => string }) => { if (request.url().includes('/api/catchmind/')) requests.push(request.url()); };
+    page.on('request', record);
+    const firstSuggestion = (await suggestion.textContent())!;
+    expect(firstSuggestion.length).toBeGreaterThan(0);
+    await page.getByRole('button', { name: '다른 제시어', exact: true }).click();
+    await expect(suggestion).not.toHaveText(firstSuggestion);
+    const secondSuggestion = (await suggestion.textContent())!;
+    await suggestion.click();
+    await expect(answerBox(page)).toHaveValue(secondSuggestion);
+    page.off('request', record);
+    expect(requests).toEqual([]);
+    // The drawer can write any answer instead.
+    const word = '피사의 사탑';
+    await answerBox(page).fill(`  피사의   사탑 `);
     const secret = await catchmindState(guesser);
     expect(secret.round).toMatchObject({ status: 'draft', word: null });
-    expect(JSON.stringify(secret)).not.toContain(JSON.stringify(word));
     await expect(guesser.locator('.pg-prompt')).toHaveCount(0);
+    await expect(answerBox(guesser)).toHaveCount(0);
     await expect(guesser.getByLabel('그림 그리는 캔버스', { exact: true })).toHaveCount(0);
 
     await page.getByRole('button', { name: '펜 두께 3', exact: true }).click();
@@ -1163,14 +1175,23 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
     const picker = await openPicker(page);
     await captureWidths(page, 'authenticated-picker', info, 4);
     await picker.getByRole('button', { name: '색상 선택 닫기', exact: true }).click();
+    // Without an answer the drawing stays, but it cannot be published.
+    await answerBox(page).fill('   ');
+    await expect(page.getByRole('button', { name: '그림 올리기', exact: true })).toBeDisabled();
+    await expect(page.locator('.drawing-blocked')).toHaveText('정답을 적어 주세요.');
+    await answerBox(page).fill(`  피사의   사탑 `);
     const published = catchmindResponse(page, 'publish');
     await page.getByRole('button', { name: '그림 올리기', exact: true }).click();
     const publishResponse = await published;
     expect(publishResponse.status()).toBe(200);
-    const payload = publishResponse.request().postDataJSON() as { image: string; wordVersion: number };
+    const payload = publishResponse.request().postDataJSON() as { image: string; word: string };
     expect(payload.image).toMatch(/^data:image\/(png|webp);base64,/);
     expect(Buffer.from(payload.image.split(',')[1], 'base64').byteLength).toBeLessThanOrEqual(300 * 1024);
-    expect(payload.wordVersion).toBe(state.round!.wordVersion);
+    expect(payload.word).toBe(word);
+    state = await catchmindState(page);
+    expect(state.round).toMatchObject({ status: 'open', word });
+    await expect(page.locator('.pg-prompt strong')).toHaveText(word);
+    expect(JSON.stringify(await catchmindState(guesser))).not.toContain(word);
     await expect(page.getByLabel('그림 그리는 캔버스', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('textbox', { name: '캐치마인드 정답', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '그림 올리기', exact: true })).toHaveCount(0);
@@ -1258,8 +1279,8 @@ test('real catchmind keeps prompts private, publishes a square drawing and pays 
     await login(page, 'siwon');
     await page.goto('/#/play/catchmind');
     await page.getByRole('button', { name: '다음 그림 그리기', exact: true }).click();
-    await expect(page.locator('.pg-prompt strong')).toBeVisible();
-    expect((await catchmindState(page)).round).toMatchObject({ status: 'draft', drawer: { username: 'siwon' }, rerollsLeft: 3 });
+    await expect(answerBox(page)).toHaveValue('');
+    expect((await catchmindState(page)).round).toMatchObject({ status: 'draft', drawer: { username: 'siwon' }, word: null });
   } finally { await other.close(); }
 });
 
@@ -1270,6 +1291,7 @@ test('ten misses and a manual end rotate the drawer in username order without aw
   await page.goto('/#/play/catchmind');
   await expect(page.getByLabel('그림 그리는 캔버스', { exact: true })).toBeVisible();
   await drawStroke(page, [[.25, .25], [.75, .75]]);
+  await answerBox(page).fill('아무도 모를 정답');
   await page.getByRole('button', { name: '그림 올리기', exact: true }).click();
   await expect(page.getByRole('img', { name: 'siwon님이 그린 그림', exact: true })).toBeVisible();
   const other = await browser.newContext({ reducedMotion: 'reduce' });
@@ -1305,8 +1327,9 @@ test('ten misses and a manual end rotate the drawer in username order without aw
     await page.goto('/#/play/catchmind');
     const manualBefore = await snapshot(page);
     await page.getByRole('button', { name: '다음 그림 그리기', exact: true }).click();
-    await expect(page.locator('.pg-prompt strong')).toBeVisible();
+    await expect(answerBox(page)).toBeVisible();
     await drawStroke(page, [[.25, .75], [.75, .25]]);
+    await page.locator('.cm-suggestion-word').click();
     await page.getByRole('button', { name: '그림 올리기', exact: true }).click();
     await expect(page.getByRole('img', { name: 'yeseo님이 그린 그림', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '이번 판 끝내기', exact: true }).click();
@@ -1346,10 +1369,11 @@ test('color picker releases active drags across closing and canvas rerenders, in
   picker = await openPicker(page);
   await expect(picker.getByRole('textbox', { name: 'HEX 색상', exact: true })).toHaveValue(chosen);
   await picker.getByRole('button', { name: '색상 선택 닫기', exact: true }).click();
-  await page.getByRole('button', { name: '제시어 바꾸기 (3회 남음)', exact: true }).click();
-  await expect(page.getByRole('button', { name: '제시어 바꾸기 (2회 남음)', exact: true })).toBeVisible();
+  // Writing the answer re-renders the canvas without remounting it.
+  await answerBox(page).fill('선인장');
+  await page.getByRole('button', { name: '다른 제시어', exact: true }).click();
   picker = await openPicker(page);
-  await expect(picker.getByRole('textbox', { name: 'HEX 색상', exact: true })).toHaveValue('#5E6A8A');
+  await expect(picker.getByRole('textbox', { name: 'HEX 색상', exact: true })).toHaveValue(chosen);
   selection = picker.getByRole('slider', { name: '채도와 명도', exact: true });
   box = await selection.boundingBox();
   const session = await page.context().newCDPSession(page);
@@ -1690,7 +1714,7 @@ test('catchmind image URLs decode once, stay out of polls and reuse private HTTP
       return canvas.toDataURL('image/png');
     });
     const published = await page.request.post('/api/catchmind/publish', {
-      data: { requestId: crypto.randomUUID(), roundId: state.round!.id, wordVersion: state.round!.wordVersion, image }, headers,
+      data: { requestId: crypto.randomUUID(), roundId: state.round!.id, word: '선인장', image }, headers,
     });
     expect(published.status()).toBe(200);
     state = (await published.json() as CatchmindResponse).catchmind;

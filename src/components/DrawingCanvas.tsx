@@ -15,6 +15,8 @@ interface Stroke {
 interface DrawingCanvasProps {
   disabled?: boolean;
   publishing?: boolean;
+  /** Keeps drawing open but holds the publish button, explaining why. */
+  blockedReason?: string;
   onPublish: (image: string) => Promise<void>;
 }
 
@@ -49,7 +51,7 @@ function exportImage(canvas: HTMLCanvasElement): string {
   throw new Error("그림 용량이 커서 올리지 못했어요. 조금 지운 뒤 다시 시도해 주세요.");
 }
 
-export const DrawingCanvas = memo(function DrawingCanvas({ disabled = false, publishing = false, onPublish }: DrawingCanvasProps) {
+export const DrawingCanvas = memo(function DrawingCanvas({ disabled = false, publishing = false, blockedReason, onPublish }: DrawingCanvasProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const overlay = useRef<HTMLCanvasElement>(null);
   const fillSurface = useRef<HTMLCanvasElement | null>(null);
@@ -247,7 +249,7 @@ export const DrawingCanvas = memo(function DrawingCanvas({ disabled = false, pub
     drawingChanged(false);
   }
   async function publish() {
-    if (busy || !hasDrawing || inFlight.current) return;
+    if (busy || blockedReason || !hasDrawing || inFlight.current) return;
     inFlight.current = true;
     setSending(true);
     setError("");
@@ -282,7 +284,8 @@ export const DrawingCanvas = memo(function DrawingCanvas({ disabled = false, pub
       </div>
     </div>
     {error && <p className="error-text" role="alert">{error}</p>}
-    <button type="button" className="primary-button pg-full" disabled={busy || !hasDrawing} onClick={() => void publish()}>{publishing || sending ? "그림 올리는 중…" : "그림 올리기"}</button>
+    {blockedReason && hasDrawing && !busy && <p className="subtle-note drawing-blocked" role="status">{blockedReason}</p>}
+    <button type="button" className="primary-button pg-full" disabled={busy || Boolean(blockedReason) || !hasDrawing} onClick={() => void publish()}>{publishing || sending ? "그림 올리는 중…" : "그림 올리기"}</button>
     {pickerOpen && <ColorPicker value={color} onChange={setColor} onCommit={remember} recentColors={recentColors}
       allowAlpha={tool !== "fill"} onClose={() => setPickerOpen(false)} />}
   </div>;

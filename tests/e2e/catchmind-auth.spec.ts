@@ -1,6 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { BootstrapResponse, CatchmindResponse } from '../../shared/types';
-import { CATCHMIND_RULES } from '../../shared/balance';
 
 test.use({ serviceWorkers: 'block' });
 
@@ -14,17 +13,18 @@ async function signIn(page: Page) {
   return (await page.request.get('/api/bootstrap')).json() as Promise<BootstrapResponse>;
 }
 
+/** The viewer's own published round: only the drawer sees its answer. */
 function draft(snapshot: BootstrapResponse, version: number): CatchmindResponse {
   const player = snapshot.players.find(player => player.id === snapshot.user.id)!;
   const next = snapshot.players.find(candidate => candidate.id !== player.id) ?? snapshot.players[0];
   const drawer = { ...player, character: player.character ?? 'cat' as const };
   return { version, viewerId: player.id, serverTime: snapshot.serverTime, catchmind: {
-    round: { id: 'auth-draft', number: 1, status: 'draft', drawer, word: version === 7 ? '사과' : '바나나',
-      wordVersion: version - 7, rerollsLeft: CATCHMIND_RULES.rerolls - (version - 7), image: null, wrongCount: 0, hint: null,
-      winner: null, winnerScored: false, endReason: null, publishedAt: null, endedAt: null, guesses: [] },
+    round: { id: 'auth-draft', number: 1, status: 'open', drawer, word: version === 7 ? '사과' : '바나나',
+      image: null, wrongCount: 0, hint: null,
+      winner: null, winnerScored: false, endReason: null, publishedAt: snapshot.serverTime, endedAt: null, guesses: [] },
     turn: drawer, nextDrawer: next ? { ...next, character: next.character ?? 'cat' } : drawer,
-    previousRound: null, canClaim: false, canReroll: true, canPublish: true,
-    canGuess: false, canEnd: false, canNext: false, canSkip: false, skipAvailableAt: null,
+    previousRound: null, canClaim: false, canPublish: false,
+    canGuess: false, canEnd: true, canNext: false, canSkip: false, skipAvailableAt: null,
   } };
 }
 
@@ -40,7 +40,7 @@ test('an obsolete unauthorized read cannot erase a newer successful drawing muta
     await gate;
     await route.fulfill({ status: 401, json: { error: { code: 'UNAUTHENTICATED', message: 'old session' } } });
   });
-  await page.route('**/api/catchmind/reroll', route => {
+  await page.route('**/api/catchmind/end', route => {
     current = draft(snapshot, 8);
     return route.fulfill({ json: current });
   });
@@ -49,7 +49,8 @@ test('an obsolete unauthorized read cannot erase a newer successful drawing muta
     await expect(page.locator('.pg-prompt')).toContainText('사과');
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await expect.poll(() => held).toBe(true);
-    await page.getByRole('button', { name: /제시어 바꾸기/ }).click();
+    await page.getByRole('button', { name: '이번 판 끝내기', exact: true }).click();
+    await page.getByRole('dialog', { name: '이번 판을 끝낼까요?', exact: true }).getByRole('button', { name: '판 종료', exact: true }).click();
     await expect(page.locator('.pg-prompt')).toContainText('바나나');
     const readsAfterMutation = bootstrapReads;
     const completed = page.waitForResponse(response => response.url().includes('/api/catchmind?') && response.status() === 401);

@@ -42,7 +42,6 @@ export interface AdminState {
   games: AdminGameSettings[];
   claw: AdminClawConfig;
   changes: AdminChange[];
-  catchmindWordsRemaining: number;
   /** Administrator-added market holidays from today on. */
   marketHolidays: MarketHoliday[];
   /** Stock AI switch and spend, and recently published news (never future news). */

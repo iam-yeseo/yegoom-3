@@ -1,14 +1,13 @@
 import { ADMIN_LIMITS, type AdminChange, type AdminClawConfig, type AdminState, type PredictionRules } from "../shared/admin";
 import { defaultPredictionRules, validatePredictionRules } from "../shared/game-settings";
 import type { GameId } from "../shared/types";
-import { CATCHMIND_WORDS } from "../shared/catchmind-words";
 
 /** Explicit administrator preview only. These sample strengths are unrelated to the server configuration. */
 export function createAdminPreview(): AdminState {
   const now = new Date();
   const today = new Date(now.getTime() + 9 * 3600000).toISOString().slice(0, 10);
   const tomorrow = new Date(Date.parse(`${today}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-  return { today, tomorrow, serverTime: now.toISOString(), changes: [], catchmindWordsRemaining: CATCHMIND_WORDS.length, marketHolidays: [],
+  return { today, tomorrow, serverTime: now.toISOString(), changes: [], marketHolidays: [],
     stock: { ai: { enabled: true, provider: 'openai', keys: { anthropic: false, openai: false }, keyConfigured: false, today: { calls: 0, costMicroUsd: 0 }, month: { calls: 0, costMicroUsd: 0 } }, news: [] },
     claw: { payoutEvery: 8, weakPickup: .4, weakCarry: .25 },
     games: (["wake", "offwork", "luck"] as GameId[]).map(id => ({ id, rules: defaultPredictionRules(id),

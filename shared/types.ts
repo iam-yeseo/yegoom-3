@@ -205,7 +205,9 @@ export interface CatchmindPlayer { id: string; username: string; displayName: st
 export interface CatchmindGuess { id: string; player: CatchmindPlayer; answer: string; correct: boolean; createdAt: string }
 export interface CatchmindRound {
   id: string; number: number; status: 'draft' | 'open' | 'ended';
-  drawer: CatchmindPlayer; word: string | null; wordVersion: number; rerollsLeft: number;
+  /** The drawer's own answer: shown to the drawer once published, and to everyone once ended.
+   * A draft has no answer yet; the drawer sends it with the drawing. */
+  drawer: CatchmindPlayer; word: string | null;
   /** Authenticated image URL in API responses; offline previews may use a data URL. */
   image: string | null;
   wrongCount: number; hint: { firstCharacter: string; length: number } | null;
@@ -221,7 +223,7 @@ export interface CatchmindState {
   nextDrawer: CatchmindPlayer | null;
   canSkip: boolean; skipAvailableAt: string | null;
   previousRound: CatchmindGalleryRound | null;
-  canClaim: boolean; canReroll: boolean; canPublish: boolean; canGuess: boolean; canEnd: boolean; canNext: boolean;
+  canClaim: boolean; canPublish: boolean; canGuess: boolean; canEnd: boolean; canNext: boolean;
 }
 /** Finished rounds only; images are served separately through immutable URLs. */
 export interface CatchmindGalleryRound {
@@ -238,13 +240,13 @@ export interface CatchmindSummary {
 export interface CatchmindResponse { catchmind: CatchmindState; version: number; viewerId: string; serverTime: string }
 export interface CatchmindUnchanged { unchanged: true; version: number; viewerId: string; serverTime: string }
 export type CatchmindPollResponse = CatchmindResponse | CatchmindUnchanged;
-export type CatchmindAction = 'claim' | 'reroll' | 'publish' | 'guess' | 'end' | 'next' | 'skip';
+export type CatchmindAction = 'claim' | 'publish' | 'guess' | 'end' | 'next' | 'skip';
 export interface CatchmindMutationInput { requestId: string; roundId: string | null; expectedUserId?: string }
-export interface CatchmindRerollInput extends CatchmindMutationInput { wordVersion: number }
-export interface CatchmindPublishInput extends CatchmindRerollInput { image: string }
+/** The drawer writes the answer and publishes it together with the drawing. */
+export interface CatchmindPublishInput extends CatchmindMutationInput { word: string; image: string }
 export interface CatchmindGuessInput extends CatchmindMutationInput { answer: string }
 export interface CatchmindSkipInput extends CatchmindMutationInput { expectedTurnId: string }
-export type CatchmindInput = CatchmindMutationInput | CatchmindRerollInput | CatchmindPublishInput | CatchmindGuessInput | CatchmindSkipInput;
+export type CatchmindInput = CatchmindMutationInput | CatchmindPublishInput | CatchmindGuessInput | CatchmindSkipInput;
 
 /** Free-throw official sets (docs/plan-freethrow.md §3). A set is played on the
  * device and recorded in one request when its 10th ball lands; a set started

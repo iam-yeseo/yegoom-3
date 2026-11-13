@@ -759,3 +759,22 @@
 .pg-fail-nodes > span.open .pg-fail-tip { display: block; }
 @media (hover: hover) { .pg-fail-nodes > span.who:hover .pg-fail-tip { display: block; } }
 .pg-fails { position: relative; z-index: 1; }
+/* The drawer writes the answer; a suggestion sits quietly underneath. */
+.cm-word { padding: 16px 18px 14px; display: flex; flex-direction: column; gap: 10px; }
+.cm-word label { font-size: 13px; font-weight: 700; color: #ada4b3; }
+.cm-word input {
+  height: 48px; padding: 0 16px; border: 2px solid #f1e8de; border-radius: 16px;
+  background: #fff; font-size: 18px; font-weight: 800; color: #3a3340;
+}
+.cm-word input:focus { outline: none; border-color: #f47c66; }
+.cm-word input::placeholder { font-size: 15px; font-weight: 600; color: #c7bfcb; }
+.cm-suggestion { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: 13px; color: #ada4b3; }
+.cm-suggestion > span { font-weight: 700; }
+.cm-suggestion-word {
+  min-height: 32px; padding: 0 12px; border: 1px dashed #e3d7cb; border-radius: 999px;
+  background: #fffaf3; color: #7c7383; font-size: 14px; font-weight: 700;
+}
+.cm-suggestion-word:not(:disabled):active { background: #fff1e6; }
+.cm-suggestion-change { padding: 6px 4px; font-size: 13px; }
+.cm-word .cm-draft-note { justify-content: flex-start; font-size: 12px; color: #ada4b3; }
+.drawing-blocked { text-align: center; }

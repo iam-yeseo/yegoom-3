@@ -11,7 +11,7 @@ import { readDailyFree, readKujiSummary, readLottoNotice, settleDueLotto, ShopEr
 import { RankingError, readRanking } from './ranking';
 import { equipTag, tagShopRoute, discardTag } from './nickname-tags';
 import type { NicknameTagGrade } from '../shared/nickname-tags';
-import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary, readRemainingWords } from './catchmind';
+import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary } from './catchmind';
 import { FreeThrowError, finishFreeThrowSet, getFreeThrowState, getFreeThrowSummary, startFreeThrowSet } from './freethrow';
 import { SantaError, finishSantaRun, getSantaState, getSantaSummary, startSantaRun } from './santa';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
@@ -617,9 +617,9 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
 }
 async function adminState(env: Env, now: Date): Promise<AdminState> {
   const db = env.DB;
-  const [games, claw, changes, catchmindWordsRemaining, marketHolidays, ai, stockNews] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db),
-    readRemainingWords(db), readMarketHolidays(db, now.getTime()), readAiStatus(db, kstDate(now), { anthropic: !!env.ANTHROPIC_API_KEY, openai: !!env.OPENAI_API_KEY }), readAdminStockNews(db, now.getTime())]);
-  return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, catchmindWordsRemaining, marketHolidays,
+  const [games, claw, changes, marketHolidays, ai, stockNews] = await Promise.all([readAdminGames(db, now), readAdminClawConfig(db), readAdminChanges(db),
+    readMarketHolidays(db, now.getTime()), readAiStatus(db, kstDate(now), { anthropic: !!env.ANTHROPIC_API_KEY, openai: !!env.OPENAI_API_KEY }), readAdminStockNews(db, now.getTime())]);
+  return { today: kstDate(now), tomorrow: kstDate(new Date(now.getTime() + 86_400_000)), games, claw, changes, marketHolidays,
     stock: { ai, news: stockNews }, serverTime: now.toISOString() };
 }
 async function api(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
