@@ -4,6 +4,7 @@ import { kstDateOf } from "../../shared/ranking-periods";
 import { todayKst, usePlayClosed } from "../play-window";
 import type { CatchmindAction, CatchmindInput, CatchmindRound, CatchmindState, User } from "../../shared/types";
 import { useCatchmind } from "../catchmind";
+import { catchmindKey, catchmindWordProblem, cleanCatchmindWord, suggestCatchmindWord } from "../../shared/catchmind";
 import { DrawingCanvas } from "../components/DrawingCanvas";
 import { PreviousCatchmindRound } from "./CatchmindGallery";
 import { honorific, Avatar, PersonName, Chevron, Toolbar, useDisplayNameLookup } from "../components/UI";
@@ -115,6 +116,11 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
   const latest = useRef(game);
   latest.current = game;
   const [answer, setAnswer] = useState("");
+  /** The answer the drawer is writing; sent together with the drawing. */
+  const [word, setWord] = useState("");
+  const wordRef = useRef(word);
+  wordRef.current = word;
+  const [suggestion, setSuggestion] = useState(() => suggestCatchmindWord());
   const [acting, setActing] = useState(false);
   const actionInFlight = useRef(false);
   const form = useRef<HTMLFormElement>(null);
@@ -153,6 +159,12 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
     return () => window.clearTimeout(timer);
   }, [game.state?.skipAvailableAt, game.state?.turn?.id, game.serverNow]);
   useEffect(() => { setAnswer(""); }, [round?.id]);
+  // A new draft starts blank (a draft from the old prompt flow keeps its prompt)
+  // with a fresh suggestion that is not the previous round's answer.
+  useEffect(() => {
+    setWord(round?.status === "draft" ? round.word ?? "" : "");
+    setSuggestion(current => suggestCatchmindWord([current, latest.current.state?.previousRound?.answer]));
+  }, [round?.id]);
   useEffect(() => { if (!game.state?.canEnd) confirmation.current?.close(); }, [game.state?.canEnd]);
   useEffect(() => {
     if (confirming && confirmation.current) return openSheet(confirmation.current);
@@ -174,18 +186,21 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
   const mutation = () => ({ requestId: crypto.randomUUID(), roundId: round?.id ?? null });
   async function guess(event: FormEvent) {
     event.preventDefault();
-    if (!game.state?.canGuess || locked || !answer.replace(/\s/g, "")) return;
+    if (!game.state?.canGuess || locked || !catchmindKey(answer)) return;
     if (await run("guess", { ...mutation(), answer })) setAnswer("");
   }
   const publish = useCallback(async (image: string) => {
     const current = latest.current;
     const shown = current.state?.round;
-    if (!shown || shown.id !== round?.id || shown.wordVersion !== round.wordVersion || !current.state?.canPublish
+    if (!shown || shown.id !== round?.id || !current.state?.canPublish
       || actionInFlight.current || current.busy || current.pending) throw new Error("그림을 올릴 차례인지 확인해 주세요.");
-    // Preserve the round and prompt shown by this canvas, even if polling finds a new one.
-    await current.mutate("publish", { requestId: crypto.randomUUID(), roundId: shown.id, wordVersion: shown.wordVersion, image });
+    const problem = catchmindWordProblem(wordRef.current);
+    if (problem) throw new Error(problem);
+    // Preserve the round shown by this canvas, even if polling finds a new one.
+    await current.mutate("publish", { requestId: crypto.randomUUID(), roundId: shown.id, word: cleanCatchmindWord(wordRef.current), image });
     toast("그림을 올렸어요");
-  }, [round?.id, round?.wordVersion]);
+  }, [round?.id]);
+  const wordProblem = catchmindWordProblem(word);
   const state = game.state;
   const galleryHref = `#${demo ? "/preview" : ""}/play/catchmind/gallery`;
   return <section className="preview-game pg-catchmind">
@@ -200,21 +215,31 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
       {game.pending && !game.busy && <div className="pg-card cm-pending" role="status"><p>아직 처리 결과를 확인하지 못했어요. 같은 요청으로 다시 확인해 주세요.</p><button className="secondary-button" disabled={acting || game.busy} onClick={() => { if (game.pending) void run(game.pending.action, game.pending.input); }}>처리 결과 다시 확인</button></div>}
       {game.loading && !state && <p className="subtle-note" role="status">그림을 불러오는 중…</p>}
       {state && !round && <div className="pg-card cm-waiting">
-        <h2>누가 먼저 그려볼까요?</h2><p>그릴 차례를 맡으면 나만 볼 수 있는 제시어가 나와요.</p>
+        <h2>누가 먼저 그려볼까요?</h2><p>그릴 차례를 맡으면 정답을 직접 정하고 그림을 그려요.</p>
         {state.canClaim && <button className="primary-button" disabled={locked} onClick={() => void run("claim", mutation())}>그리기 맡기</button>}
       </div>}
       {state && round?.status === "draft" && (isDrawer ? <>
-        <div className="pg-prompt"><span>제시어</span><strong>{round.word ?? "불러오는 중"}</strong></div>
-        <div className="cm-draft-note"><span>나에게만 보이는 제시어예요.</span><button className="text-button" disabled={locked || !state.canReroll} onClick={() => void run("reroll", { ...mutation(), wordVersion: round.wordVersion })}>제시어 바꾸기 ({round.rerollsLeft}회 남음)</button></div>
+        <div className="pg-card cm-word">
+          <label htmlFor="cm-word-input">정답</label>
+          <input id="cm-word-input" value={word} onChange={event => setWord(event.target.value)} placeholder="친구들이 맞힐 정답을 적어 주세요"
+            maxLength={CATCHMIND_RULES.maxWordLength} disabled={locked} autoComplete="off" enterKeyHint="done" />
+          <div className="cm-suggestion">
+            <span>추천</span>
+            <button type="button" className="cm-suggestion-word" disabled={locked} aria-label={`추천 제시어 ${suggestion} 정답 칸에 쓰기`} onClick={() => setWord(suggestion)}>{suggestion}</button>
+            <button type="button" className="text-button cm-suggestion-change" disabled={locked} onClick={() => setSuggestion(current => suggestCatchmindWord([current, word]))}>다른 제시어</button>
+          </div>
+          <p className="cm-draft-note">나에게만 보이는 정답이에요. 띄어쓰기는 달라도 맞힌 걸로 쳐요.</p>
+        </div>
         {closed && <p className="subtle-note" role="status">{PLAY_RULES.closedMessage}</p>}
-        <DrawingCanvas key={`${round.id}:${round.wordVersion}`} disabled={locked || !state.canPublish} publishing={game.busy && game.pending?.action === "publish"} onPublish={publish} />
+        <DrawingCanvas key={round.id} disabled={locked || !state.canPublish} blockedReason={wordProblem ?? undefined}
+          publishing={game.busy && game.pending?.action === "publish"} onPublish={publish} />
       </> : <div className="pg-card cm-waiting">
         <Avatar username={round.drawer.username} userId={round.drawer.id} photoVersion={round.drawer.photoVersion} artKey={demo ? undefined : round.drawer.character} size={64} />
         {state.canNext ? <><h2>출제자가 자리를 비웠어요</h2><p>차례를 이어서 새 그림을 그려 주세요.</p><button className="primary-button" disabled={locked} onClick={() => void run("next", mutation())}>다음 그림 그리기</button></>
           : <><h2><PersonName username={round.drawer.username} fallback={round.drawer.displayName} />이 그림을 그리고 있어요</h2><p>그림이 올라오면 함께 맞혀 보세요.</p></>}
       </div>)}
       {state && round?.status === "open" && <>
-        {isDrawer && <div className="pg-prompt"><span>제시어</span><strong>{round.word}</strong></div>}
+        {isDrawer && <div className="pg-prompt"><span>정답</span><strong>{round.word}</strong></div>}
         <Picture round={round} demo={demo} />
         <FailCount round={round} demo={demo} />
         {round.hint && <HintTiles key={round.id} hint={round.hint} />}
@@ -223,7 +248,7 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
           : round.publishedAt && kstDateOf(round.publishedAt) < todayKst() && <p className="subtle-note" role="status">지난 날 공개된 그림이라 맞혀도 점수는 집계되지 않아요. 골드는 받아요.</p>}
         {user.role === "player" && !isDrawer ? <form className="pg-answer" onSubmit={guess} ref={form}>
           <input aria-label="캐치마인드 정답" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="정답 입력" maxLength={CATCHMIND_RULES.maxAnswerLength} disabled={locked || !state.canGuess} autoComplete="off" />
-          <button type="submit" disabled={locked || !state.canGuess || !answer.replace(/\s/g, "")}>{acting || game.busy ? "확인 중…" : "정답"}</button>
+          <button type="submit" disabled={locked || !state.canGuess || !catchmindKey(answer)}>{acting || game.busy ? "확인 중…" : "정답"}</button>
         </form> : isDrawer && <p className="subtle-note">내가 낸 그림에는 답할 수 없어요. 친구들의 답을 기다려 주세요.</p>}
       </>}
       {state && round?.status === "ended" && <Result key={round.id} state={state} user={user} locked={locked} demo={demo}
@@ -233,12 +258,13 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
       {state?.canEnd && <button className="text-button cm-end-button" disabled={locked} onClick={() => setConfirming(true)}>이번 판 끝내기</button>}
       <PreviousCatchmindRound round={state?.previousRound ?? null} demo={demo} galleryHref={galleryHref} loading={!state && game.loading} />
       <details className="pg-card cm-help"><summary>게임 방법</summary><ul>
+        <li>출제자가 정답을 직접 적고 그림을 그려요. 떠오르는 게 없으면 추천 제시어를 눌러 쓰거나 다른 제시어로 바꿀 수 있어요.</li>
+        <li>정답은 띄어쓰기를 빼고 글자만 같으면 맞아요.</li>
         <li>{CATCHMIND_RULES.hintAfter}번째 오답에 첫 글자 힌트가 나오고, {CATCHMIND_RULES.endAfter}번째 오답이면 보상 없이 즉시 끝나요.</li>
         <li>첫 정답자는 {CATCHMIND_RULES.score}점과 {CATCHMIND_RULES.gold}G를 받아요.</li>
         <li>그림 공개와 정답은 매일 밤 11시 50분에 마감해요. 그림이 공개된 날 마감 전에 맞혀야 점수가 들어가고, 그 뒤에 맞히면 골드만 받아요.</li>
         <li>정답·오답·수동 종료 모두 활성 플레이어의 로그인 아이디 순서대로 다음 출제를 맡아요.</li>
         <li>다음 출제자가 {CATCHMIND_RULES.skipAfterMs / 60000}분 안에 시작하지 않으면 다른 플레이어가 차례를 넘길 수 있어요.</li>
-        <li>보여 준 제시어와 바꾸기 전 단어는 다시 나오지 않아요. 전체 제시어를 다 쓰면 새로 시작해요.</li>
       </ul></details>
     </div>
     <dialog className="cm-confirmation" ref={confirmation} aria-labelledby="cm-end-title" aria-describedby="cm-end-description" onClose={event => { if (!event.currentTarget.open) setConfirming(false); }} onClick={event => { if (event.target === event.currentTarget && !locked) event.currentTarget.close(); }}>

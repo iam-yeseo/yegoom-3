@@ -24,7 +24,7 @@ export function useCatchmind(): CatchmindContextValue {
 function readPending(key: string): PendingCatchmind | null {
   try {
     const value = JSON.parse(sessionStorage.getItem(key) ?? "null") as PendingCatchmind | null;
-    return value && ["claim", "reroll", "publish", "guess", "end", "next", "skip"].includes(value.action) &&
+    return value && ["claim", "publish", "guess", "end", "next", "skip"].includes(value.action) &&
       typeof value.input?.requestId === "string" && (value.input.roundId === null || typeof value.input.roundId === "string") ? value : null;
   } catch { return null; }
 }
@@ -38,7 +38,7 @@ export function CatchmindProvider({ children, preview, viewer, accountKey, trans
   transact: <T>(action: () => Promise<T>) => Promise<T>;
   onServerRead: (state: CatchmindState) => void;
   onAccountChanged: () => void;
-  onPreviewChange: (summary: CatchmindSummary, gold: number, score: number, ledger: LedgerEntry[], wordsRemaining: number) => void;
+  onPreviewChange: (summary: CatchmindSummary, gold: number, score: number, ledger: LedgerEntry[]) => void;
 }) {
   const previewEngine = useRef<ReturnType<typeof createCatchmindPreview> | null>(null);
   if (preview && !previewEngine.current) previewEngine.current = createCatchmindPreview(viewer);
@@ -77,11 +77,11 @@ export function CatchmindProvider({ children, preview, viewer, accountKey, trans
     stateRef.current = nextState;
     setState(nextState);
     const engine = previewEngine.current;
-    if (engine) callbacks.current.onPreviewChange(engine.summary(), engine.gold, engine.score, engine.ledger, engine.wordsRemaining);
+    if (engine) callbacks.current.onPreviewChange(engine.summary(), engine.gold, engine.score, engine.ledger);
   }, []);
   useEffect(() => {
     const engine = previewEngine.current;
-    if (engine) callbacks.current.onPreviewChange(engine.summary(), engine.gold, engine.score, engine.ledger, engine.wordsRemaining);
+    if (engine) callbacks.current.onPreviewChange(engine.summary(), engine.gold, engine.score, engine.ledger);
   }, []);
   const remember = useCallback((attempt: PendingCatchmind | null) => {
     pendingRef.current = attempt;

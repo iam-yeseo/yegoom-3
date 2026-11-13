@@ -20,7 +20,6 @@ import { createAdminPreview, savePreviewGame, savePreviewClaw } from "./admin-pr
 import { NotificationToast } from "./NotificationToast";
 import { previewNotificationSummary } from "./notifications-preview";
 import { FEATURES } from "../shared/balance";
-import { CATCHMIND_WORDS } from "../shared/catchmind-words";
 import { ApiFailure, api } from "./api";
 import { markLottoSeen, markViewedLottoDraw } from "./lotto-notice";
 import { anim } from "./motion";
@@ -367,7 +366,7 @@ export default function App() {
   const [previewProfile, setPreviewProfile] = useState<{ displayName: string; photoVersion: number | null; photoUrl: string | null }>({ displayName: previewUser.displayName, photoVersion: null, photoUrl: null });
   const previewPhotoCounter = useRef(0);
   const [previewShop, setPreviewShop] = useState<{ gold: number; score: number; ledger: LedgerEntry[]; lottoNotice: LottoNotice | null; tag: NicknameTagView | null }>({ gold: previewGold, score: 0, ledger: [], lottoNotice: null, tag: null });
-  const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[]; wordsRemaining: number }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [], wordsRemaining: CATCHMIND_WORDS.length });
+  const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[] }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [] });
   const [previewFreeThrow, setPreviewFreeThrow] = useState<{ summary: FreeThrowSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewFreeThrowSummary(), gold: 0, score: 0, ledger: [] }));
   const [previewSanta, setPreviewSanta] = useState<{ summary: SantaSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewSantaSummary(), gold: 0, score: 0, ledger: [] }));
   const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
@@ -823,7 +822,7 @@ export default function App() {
     );
   else if (!view || !me) content = null;
   else if (path === "/admin" && adminAllowed) content = <Admin key={adminDemo ? "preview-admin" : me.id}
-    state={adminDemo ? { ...previewAdminState, catchmindWordsRemaining: previewCatchmind.wordsRemaining } : adminData?.owner === me.id ? adminData.state : null}
+    state={adminDemo ? previewAdminState : adminData?.owner === me.id ? adminData.state : null}
     loading={adminLoading} error={adminError} onReload={() => void reloadAdmin()}
     onSaveGame={saveAdminGame} onSaveClaw={saveAdminClaw} onSaveHoliday={saveAdminHoliday} onSetStockAi={setStockAi} onHideStockNews={hideStockNews} onSendNotice={sendNotice} onPlayClaw={() => go("/play/claw")} preview={adminDemo} />;
   else if (play === "kuji") content = <Kuji onBack={home} />;
@@ -1046,10 +1045,10 @@ export default function App() {
         }
       }}
       onServerRead={state => {
-        const key = `${data?.user.id}:${state.round?.id}:${state.round?.status}:${state.round?.wrongCount}:${state.round?.wordVersion}:${state.turn?.id}`;
+        const key = `${data?.user.id}:${state.round?.id}:${state.round?.status}:${state.round?.wrongCount}:${state.turn?.id}`;
         if (key !== catchmindReadKey.current) { catchmindReadKey.current = key; void refresh(); }
       }}
-      onPreviewChange={(summary, gold, score, ledger, wordsRemaining) => setPreviewCatchmind({ summary, gold, score, ledger: [...ledger], wordsRemaining })}>
+      onPreviewChange={(summary, gold, score, ledger) => setPreviewCatchmind({ summary, gold, score, ledger: [...ledger] })}>
     <ShopProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
       preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
       previewGoldBonus={previewAttendance.goldBonus}

@@ -98,7 +98,6 @@
   .admin-time-input > label { gap: 6px; }
   .admin-card-title > span { font-size: 12px; }
 }
-.admin-word-warning { padding: 16px; border: 2px solid #e7b85b; background: #fff4cc; color: #75530a; line-height: 1.6; }
 .admin-holiday-list {
   list-style: none;
   margin: 0 0 12px;

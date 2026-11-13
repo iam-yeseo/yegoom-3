@@ -1,5 +1,5 @@
 import { CATCHMIND_RULES } from '../shared/balance';
-import { CATCHMIND_WORDS } from '../shared/catchmind-words';
+import { catchmindKey, catchmindWordProblem, cleanCatchmindWord } from '../shared/catchmind';
 import { defaultCharacter } from '../shared/characters';
 import type {
   CatchmindAction, CatchmindInput, CatchmindPlayer, CatchmindResponse, CatchmindPollResponse,
@@ -7,7 +7,7 @@ import type {
 } from '../shared/types';
 
 const EMPTY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6D1AAAAAASUVORK5CYII=';
-const guessKey = (value: string) => value.replace(/\s/gu, '');
+const guessKey = catchmindKey;
 const person = (username: string): CatchmindPlayer => ({ id: username, username, displayName: username, photoVersion: null, character: defaultCharacter(username) });
 
 /** Render the sample with the same canvas format as a submitted drawing. */
@@ -94,17 +94,13 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
   }));
   let turn: CatchmindPlayer | null = drawer;
   let round: CatchmindRound | null = {
-    id: 'preview-catchmind-1', number: 13, status: 'open', drawer, word: '선인장', wordVersion: 0,
-    rerollsLeft: CATCHMIND_RULES.rerolls, image: drawing, wrongCount: 2, hint: null,
+    id: 'preview-catchmind-1', number: 13, status: 'open', drawer, word: '선인장', image: drawing, wrongCount: 2, hint: null,
     winner: null, winnerScored: false, endReason: null, publishedAt: new Date(startedAt - 180_000).toISOString(), endedAt: null,
     guesses: ['구름', '만두'].map((answer, index) => ({ id: `preview-guess-${index}`, player: person('min'), answer,
       correct: false, createdAt: new Date(startedAt - (2 - index) * 60_000).toISOString() })),
   };
   let gold = 0;
   let score = 0;
-  let wordHistory = ['선인장'];
-  const usedWords = new Set(history.map(item => item.answer));
-  usedWords.add('선인장');
   let version = 0;
   const ledger: LedgerEntry[] = [];
   const receipts = new Map<string, string>();
@@ -130,7 +126,7 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     return structuredClone({ catchmind: {
       round: shown, turn, previousRound: gallery(round?.number).rounds[0] ?? null,
       canClaim: participates && !turn && !draft && !open,
-      canReroll: Boolean(participates && draft && holder && (round?.rerollsLeft ?? 0) > 0), canPublish: Boolean(participates && draft && holder),
+      canPublish: Boolean(participates && draft && holder),
       canGuess: Boolean(participates && open && !isDrawer()), canEnd: Boolean(participates && open && isDrawer()),
       canNext: Boolean(participates && round?.status === 'ended' && holder),
       nextDrawer: round ? round.status === 'ended' ? turn : successor(round.drawer) : null,
@@ -141,22 +137,9 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     return structuredClone({ roundId: round?.id ?? null, status: round?.status ?? 'idle', drawer: round?.drawer ?? null,
       turn, wrongCount: round?.wrongCount ?? 0, winner: round?.winner ?? null, winnerScored: round?.winnerScored ?? false, answer: round?.status === 'ended' ? round.word : null });
   }
-  function nextWord(previous: readonly string[] = []) {
-    let words = CATCHMIND_WORDS.filter(word => !usedWords.has(word) && !previous.includes(word));
-    if (!words.length) {
-      usedWords.clear();
-      words = CATCHMIND_WORDS.filter(word => !previous.includes(word));
-    }
-    const word = words[Math.floor(Math.random() * words.length)]!;
-    usedWords.add(word);
-    return word;
-  }
   function startDraft() {
-    const word = nextWord([]);
-    wordHistory = [word];
     round = { id: crypto.randomUUID(), number: (round?.number ?? 0) + 1, status: 'draft', drawer: player,
-      word, wordVersion: 0, rerollsLeft: CATCHMIND_RULES.rerolls,
-      image: null, wrongCount: 0, hint: null, winner: null, winnerScored: false, endReason: null, publishedAt: null, endedAt: null, guesses: [] };
+      word: null, image: null, wrongCount: 0, hint: null, winner: null, winnerScored: false, endReason: null, publishedAt: null, endedAt: null, guesses: [] };
     turn = player;
   }
   function close(reason: CatchmindRound['endReason'], now: string, won = false) {
@@ -175,15 +158,20 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
   function mutate(action: CatchmindAction, input: CatchmindInput): CatchmindResponse {
     if (!participates) throw new Error('플레이어만 캐치마인드에 참여할 수 있어요.');
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.requestId)) throw new Error('요청 번호를 확인해 주세요.');
-    let answer = '';
+    let answer = ''; let word = '';
     if (action === 'guess') {
       if (!('answer' in input) || typeof input.answer !== 'string') throw new Error('답을 적어 주세요.');
       if ([...input.answer].length > CATCHMIND_RULES.maxAnswerLength) throw new Error(`답은 ${CATCHMIND_RULES.maxAnswerLength}글자 이하로 적어 주세요.`);
       answer = input.answer.trim();
       if (!guessKey(answer)) throw new Error('답을 적어 주세요.');
     }
-    const payload = JSON.stringify({ action, roundId: input.roundId,
-      ...((action === 'reroll' || action === 'publish') && 'wordVersion' in input ? { wordVersion: input.wordVersion } : {}),
+    if (action === 'publish') {
+      const written = 'word' in input && typeof input.word === 'string' ? input.word : '';
+      const problem = catchmindWordProblem(written);
+      if (problem) throw new Error(problem);
+      word = cleanCatchmindWord(written);
+    }
+    const payload = JSON.stringify({ action, roundId: input.roundId, ...(action === 'publish' ? { word } : {}),
       ...(action === 'publish' && 'image' in input ? { image: input.image } : {}), ...(action === 'guess' ? { answer: guessKey(answer) } : {}),
       ...(action === 'skip' && 'expectedTurnId' in input ? { expectedTurnId: input.expectedTurnId } : {}) });
     const previous = receipts.get(input.requestId);
@@ -204,16 +192,10 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
         throw new Error('아직 차례를 넘길 수 없거나 다음 출제자가 바뀌었어요.');
       }
       turn = successor(turn);
-    } else if (action === 'reroll' || action === 'publish') {
+    } else if (action === 'publish') {
       if (!round || round.status !== 'draft' || !isDrawer()) throw new Error('그릴 차례인 사람만 할 수 있어요.');
-      if (!('wordVersion' in input) || input.wordVersion !== round.wordVersion) throw new Error('제시어가 바뀌었어요. 다시 확인해 주세요.');
-      if (action === 'reroll') {
-        if (round.rerollsLeft < 1) throw new Error('제시어는 더 바꿀 수 없어요.');
-        round.word = nextWord(wordHistory); wordHistory.push(round.word); round.wordVersion += 1; round.rerollsLeft -= 1;
-      } else {
-        round.image = imageInput('image' in input ? input.image : null);
-        round.status = 'open'; round.publishedAt = now;
-      }
+      round.image = imageInput('image' in input ? input.image : null);
+      round.word = word; round.status = 'open'; round.publishedAt = now;
     } else if (action === 'guess') {
       if (!round || round.status !== 'open' || isDrawer()) throw new Error('지금은 이 그림의 답을 말할 수 없어요.');
       const correct = guessKey(answer) === guessKey(round.word!);
@@ -222,7 +204,7 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
       else {
         round.wrongCount += 1;
         if (round.wrongCount >= CATCHMIND_RULES.hintAfter) {
-          const characters = [...round.word!.replace(/\s+/g, '')];
+          const characters = [...guessKey(round.word!)];
           round.hint = { firstCharacter: characters[0], length: characters.length };
         }
         if (round.wrongCount >= CATCHMIND_RULES.endAfter) close('misses', now);
@@ -235,6 +217,6 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
     version++;
     return read();
   }
-  return { read, mutate, summary, gallery, get wordsRemaining() { return CATCHMIND_WORDS.length - usedWords.size; },
+  return { read, mutate, summary, gallery,
     get gold() { return gold; }, get score() { return score; }, get ledger() { return structuredClone(ledger); } };
 }

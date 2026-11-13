@@ -50,14 +50,14 @@ function fixture(snapshot: BootstrapResponse, wrongCount: number, ended = false,
     version: 20 + wrongCount + Number(ended), viewerId: snapshot.user.id, serverTime: NOW,
     catchmind: {
       round: { id: 'browser-pr4-round', number: 40, status: ended ? 'ended' : 'open', drawer,
-        word: ended ? '인형' : null, wordVersion: 0, rerollsLeft: CATCHMIND_RULES.rerolls,
+        word: ended ? '인형' : null,
         image: '/claw/dolls/doll-1.webp', wrongCount, hint: wrongCount >= CATCHMIND_RULES.hintAfter ? { firstCharacter: '인', length: 2 } : null,
         winner: null, winnerScored: false, endReason: ended ? 'manual' : null, publishedAt: '2026-10-29T23:45:00.000Z', endedAt: ended ? endedAt : null,
         guesses: Array.from({ length: wrongCount }, (_, index) => ({ id: `browser-wrong-${index}`, player: viewer,
           answer: `틀린 답 ${index + 1}`, correct: false, createdAt: NOW })),
       },
       turn: ended ? turn : drawer, nextDrawer: turn, previousRound: null,
-      canClaim: false, canPublish: false, canReroll: false, canGuess: !ended, canEnd: false, canNext: false,
+      canClaim: false, canPublish: false, canGuess: !ended, canEnd: false, canNext: false,
       canSkip: ended && overdue,
       skipAvailableAt: ended ? new Date(Date.parse(endedAt) + CATCHMIND_RULES.skipAfterMs).toISOString() : null,
     },
@@ -150,8 +150,8 @@ test('unchanged version polls preserve picture DOM and drafts do not poll their 
   await page.clock.fastForward(30000); expect(reads).toBe(hidden);
   current = { ...current, version: current.version + 1, catchmind: { ...current.catchmind,
     round: { ...current.catchmind.round!, status: 'draft', drawer: { id: snapshot.user.id, username: snapshot.user.username,
-      displayName: snapshot.user.displayName, photoVersion: null, character: snapshot.user.character ?? 'bunny' }, word: '사과', image: null },
-    canGuess: false, canPublish: true, canReroll: true } };
+      displayName: snapshot.user.displayName, photoVersion: null, character: snapshot.user.character ?? 'bunny' }, word: null, image: null },
+    canGuess: false, canPublish: true } };
   await page.reload();
   await expect(page.getByLabel('그림 그리는 캔버스', { exact: true })).toBeVisible();
   const drawingReads = reads;
@@ -167,9 +167,8 @@ test('a changed login clears a cached private prompt even when the global versio
   const author: CatchmindPlayer = { id: snapshot.user.id, username: snapshot.user.username, displayName: snapshot.user.displayName,
     photoVersion: null, character: snapshot.user.character ?? 'bunny' };
   const privateState: CatchmindResponse = { ...current, catchmind: { ...current.catchmind, turn: author,
-    round: { ...current.catchmind.round!, status: 'draft', word: secret, image: null,
-      drawer: author },
-    canGuess: false, canPublish: true, canReroll: true } };
+    round: { ...current.catchmind.round!, status: 'open', word: secret, drawer: author },
+    canGuess: false, canEnd: true } };
   await page.route('**/api/catchmind**', route => {
     const url = new URL(route.request().url());
     if (url.pathname !== '/api/catchmind') return route.continue();
@@ -178,7 +177,7 @@ test('a changed login clears a cached private prompt even when the global versio
     } });
     return route.fulfill({ json: viewerId === snapshot.user.id ? privateState : {
       ...privateState, viewerId, catchmind: { ...privateState.catchmind,
-        round: { ...privateState.catchmind.round!, word: null }, canPublish: false, canReroll: false },
+        round: { ...privateState.catchmind.round!, word: null }, canEnd: false },
     } });
   });
   await page.goto('/#/play/catchmind');
@@ -191,7 +190,7 @@ test('a changed login clears a cached private prompt even when the global versio
   const response = await switched.json(); viewerId = response.user.id;
   const changedBootstrap = page.waitForResponse(async response => response.url().endsWith('/api/bootstrap')
     && response.ok() && (await response.json()).user.id === viewerId);
-  // Own drafts do not have a timer poll; a visible return still checks identity.
+  // A visible return checks identity without waiting for the next poll.
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   await changedBootstrap;
   await expect(page.locator('.pg-prompt')).toHaveCount(0);
@@ -224,27 +223,10 @@ test('serverless drawing uses the cyclic next drawer and keeps drawing, fill and
   expect(requests).toEqual([]);
 });
 
-test('administrator word warnings start at thirty remaining words and previews stay serverless', async ({ page }) => {
-  const authenticated = await page.request.post('/api/auth/login', {
-    headers: { Origin: ORIGIN, 'CF-Connecting-IP': '192.0.2.26' },
-    data: { username: 'admin', password: 'e2e-only-password-2026' },
-  });
-  expect(authenticated.status()).toBe(200);
-  const actual = await (await page.request.get('/api/admin')).json();
-  let remaining = 31;
-  await page.route('**/api/admin', route => route.fulfill({ json: { ...actual, catchmindWordsRemaining: remaining } }));
-  await page.goto('/#/admin');
-  await expect(page.locator('.admin-page')).toBeVisible();
-  await expect(page.locator('.admin-word-warning')).toHaveCount(0);
-  for (const count of [30, 0]) {
-    remaining = count;
-    await page.reload();
-    await expect(page.locator('.admin-word-warning')).toContainText(`남은 제시어 ${count}개`);
-  }
+test('the administrator preview stays serverless', async ({ page }) => {
   const apiCalls: string[] = [];
   await page.route('**/api/**', route => { apiCalls.push(route.request().url()); return route.abort(); });
   await page.goto('/#/preview/admin');
   await expect(page.locator('.admin-page')).toBeVisible();
-  await expect(page.locator('.admin-word-warning')).toHaveCount(0);
   expect(apiCalls).toEqual([]);
 });

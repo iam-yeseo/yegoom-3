@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { NOTIFICATION_RULES } from "../../shared/notifications";
 import { ADMIN_LIMITS, type AdminChange, type AdminClawConfig, type AdminGameSettings, type AdminState, type PredictionRules } from "../../shared/admin";
-import { CATCHMIND_RULES } from "../../shared/balance";
 import { GAME_RULES } from "../../shared/balance";
 import { scoreThresholdLabel, validatePredictionRules } from "../../shared/game-settings";
 import type { GameId } from "../../shared/types";
@@ -386,10 +385,6 @@ export function Admin({ state, loading, error, onReload, onSaveGame, onSaveClaw,
       {error && <div className="card admin-load-error"><p role="alert">{error}</p><button className="secondary-button" type="button" onClick={onReload}>다시 불러오기</button></div>}
       {!state && !error && <p className="card admin-empty" role="status">운영 설정을 불러오는 중…</p>}
       {state && <>
-        {state.catchmindWordsRemaining <= CATCHMIND_RULES.wordWarningThreshold && <p className="card admin-word-warning" role="status">
-          캐치마인드 · 남은 제시어 {state.catchmindWordsRemaining}개<br />
-          모두 사용하면 새 묶음을 시작해요.
-        </p>}
         <section className="admin-predictions" aria-label="예측 게임 운영"><div className="admin-section-heading"><h2>예측 게임</h2><span>{shortDate(state.today)} 기준</span></div>
           {state.games.map(game => <PredictionCard key={game.id} game={game} state={state} disabled={loading} onSave={onSaveGame} />)}
         </section>

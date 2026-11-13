@@ -1,14 +1,13 @@
 import { CATCHMIND_RULES, PLAY_RULES, playClosed, scoreCounts } from '../shared/balance';
-import { CATCHMIND_WORDS } from '../shared/catchmind-words';
+import { catchmindKey, catchmindWordProblem, cleanCatchmindWord } from '../shared/catchmind';
 import { defaultCharacter, type ArtKey } from '../shared/characters';
 import type { CatchmindAction, CatchmindGalleryResponse, CatchmindPlayer, CatchmindPollResponse, CatchmindResponse, CatchmindState, CatchmindSummary } from '../shared/types';
 import { hashToken } from './crypto';
 import { kstDate, kstTimestamp, weekStart } from './rules';
-import { randomInt } from './shop';
 
 interface Actor { id: string; role: 'player' | 'admin' }
 interface RoundRow {
-  id: string; number: number; drawer_id: string; word: string; normalized_word: string; word_history: string; rerolls: number;
+  id: string; number: number; drawer_id: string; word: string; normalized_word: string;
   status: 'draft' | 'open' | 'ended'; has_image: number; round_date: string | null; published_at: string | null; ended_at: string | null;
   wrong_count: number; winner_id: string | null; end_reason: 'correct' | 'misses' | 'manual' | null;
 }
@@ -17,7 +16,7 @@ interface RequestRow { id: string; action: string; payload_hash: string; result_
 export class CatchmindError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
 }
-const normalize = (value: string) => value.replace(/\s/gu, '');
+const normalize = catchmindKey;
 const nextPlayerSql = (drawer: string) => `COALESCE(
   (SELECT id FROM users WHERE active = 1 AND role = 'player'
     AND username > (SELECT username FROM users WHERE id = ${drawer}) ORDER BY username LIMIT 1),
@@ -127,7 +126,7 @@ async function repairTurn(db: D1Database): Promise<void> {
 }
 async function board(db: D1Database): Promise<{ turn: TurnRow; round: (RoundRow & { drawer_active: number; successor_id: string | null }) | null }> {
   // Polling and mutations need metadata, never the stored base64 image body.
-  const row = await db.prepare(`SELECT r.id, r.number, r.drawer_id, r.word, r.normalized_word, r.word_history, r.rerolls,
+  const row = await db.prepare(`SELECT r.id, r.number, r.drawer_id, r.word, r.normalized_word,
     r.status, r.image IS NOT NULL AS has_image, r.round_date, r.published_at, r.ended_at, r.wrong_count, r.winner_id, r.end_reason,
     t.drawer_id AS next_drawer_id, t.round_id AS current_round_id, t.version,
     EXISTS (SELECT 1 FROM users WHERE id = t.drawer_id AND active = 1 AND role = 'player') AS turn_active,
@@ -218,8 +217,9 @@ async function readState(db: D1Database, user: Actor, now: Date): Promise<{ catc
     nextDrawer: round?.status === 'ended' ? next : people.get(round?.successor_id ?? '') ?? null,
     canSkip: Boolean(playing && next && next.id !== user.id && now.getTime() >= skipTime), skipAvailableAt,
     previousRound: (await readCatchmindGallery(db, round?.number, 1)).rounds[0] ?? null,
-    round: round ? { id: round.id, number: round.number, status: round.status, drawer: drawer!, word: author || round.status === 'ended' ? round.word : null,
-      wordVersion: round.rerolls, rerollsLeft: CATCHMIND_RULES.rerolls - round.rerolls,
+    // A draft has no answer until the drawer publishes one (a draft left over
+    // from the old prompt flow keeps its prompt, which prefills the drawer's input).
+    round: round ? { id: round.id, number: round.number, status: round.status, drawer: drawer!, word: (author || round.status === 'ended') && round.word ? round.word : null,
       image: round.has_image && (round.status !== 'draft' || author) ? `/api/catchmind/rounds/${encodeURIComponent(round.id)}/image` : null,
       wrongCount: round.wrong_count,
       hint: round.wrong_count >= CATCHMIND_RULES.hintAfter ? { firstCharacter: letters[0]!, length: letters.length } : null,
@@ -227,24 +227,10 @@ async function readState(db: D1Database, user: Actor, now: Date): Promise<{ catc
       guesses: guesses.map(guess => ({ id: guess.id, answer: guess.answer, correct: Boolean(guess.correct), createdAt: guess.created_at,
         player: { id: guess.player_id, username: guess.username, displayName: guess.display_name, photoVersion: guess.photo_version, character: guess.character ?? defaultCharacter(guess.username) } })) } : null,
     canClaim: playing && !turn.drawer_id && !round,
-    canReroll: Boolean(author && round?.status === 'draft' && round.rerolls < CATCHMIND_RULES.rerolls),
     canPublish: Boolean(author && round?.status === 'draft' && !closed), canGuess: Boolean(playing && !author && round?.status === 'open' && !closed),
     canEnd: Boolean(author && round?.status === 'open'),
     canNext: Boolean(playing && turn.drawer_id === user.id && (round?.status === 'ended' || (round?.status === 'draft' && !round.drawer_active))),
   } };
-}
-const wordSet = new Set<string>(CATCHMIND_WORDS);
-export async function readRemainingWords(db: D1Database): Promise<number> {
-  const used = (await db.prepare('SELECT word FROM catchmind_used_words').all<{ word: string }>()).results;
-  return CATCHMIND_WORDS.length - used.filter(row => wordSet.has(row.word)).length;
-}
-async function chooseWord(db: D1Database, history: readonly string[]): Promise<{ word: string; reset: boolean }> {
-  const used = new Set((await db.prepare('SELECT word FROM catchmind_used_words').all<{ word: string }>()).results
-    .map(row => row.word).filter(word => wordSet.has(word)));
-  const reset = used.size >= CATCHMIND_WORDS.length;
-  const excluded = new Set([...history, ...(reset ? [] : used)]);
-  const choices = CATCHMIND_WORDS.filter(word => !excluded.has(word));
-  return { word: choices[randomInt(choices.length)]!, reset };
 }
 async function priorRequest(db: D1Database, user: Actor, requestId: string, action: CatchmindAction, hash: string): Promise<RequestRow | null> {
   const previous = await db.prepare('SELECT id, action, payload_hash, result_round_id FROM catchmind_requests WHERE user_id = ? AND request_id = ?')
@@ -252,7 +238,7 @@ async function priorRequest(db: D1Database, user: Actor, requestId: string, acti
   if (previous && (previous.action !== action || previous.payload_hash !== hash)) throw new CatchmindError(409, 'REQUEST_CONFLICT', '이미 다른 동작에 사용한 요청 번호예요.');
   return previous;
 }
-async function mutateOnce(db: D1Database, user: Actor, action: CatchmindAction, input: Record<string, unknown>, now: Date): Promise<void> {
+async function mutate(db: D1Database, user: Actor, action: CatchmindAction, input: Record<string, unknown>, now: Date): Promise<void> {
   if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) {
     throw new CatchmindError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
   }
@@ -261,21 +247,23 @@ async function mutateOnce(db: D1Database, user: Actor, action: CatchmindAction, 
   if (action === 'claim' ? input.roundId !== null : typeof input.roundId !== 'string' || !input.roundId || input.roundId.length > 128) {
     throw new CatchmindError(400, 'INVALID_ROUND_ID', '판 번호를 확인해 주세요.');
   }
-  if ((action === 'reroll' || action === 'publish') && (!Number.isInteger(input.wordVersion) || Number(input.wordVersion) < 0)) {
-    throw new CatchmindError(400, 'INVALID_WORD_VERSION', '제시어를 새로 확인해 주세요.');
-  }
   if (action === 'skip' && (typeof input.expectedTurnId !== 'string' || !input.expectedTurnId || input.expectedTurnId.length > 128)) {
     throw new CatchmindError(400, 'INVALID_TURN', '넘길 차례를 확인해 주세요.');
   }
-  let answer = ''; let image: string | undefined;
+  let answer = ''; let image: string | undefined; let word = '';
   if (action === 'guess') {
     if (typeof input.answer !== 'string' || Array.from(input.answer).length > CATCHMIND_RULES.maxAnswerLength || !normalize(input.answer)) {
       throw new CatchmindError(400, 'INVALID_ANSWER', '정답을 짧은 글자로 입력해 주세요.');
     }
     answer = input.answer.trim();
   }
-  if (action === 'publish') image = validateDrawing(input.image);
-  const payload = { roundId: input.roundId, ...(action === 'reroll' || action === 'publish' ? { wordVersion: input.wordVersion } : {}),
+  if (action === 'publish') {
+    const problem = typeof input.word === 'string' ? catchmindWordProblem(input.word) : '정답을 적어 주세요.';
+    if (problem) throw new CatchmindError(400, 'INVALID_WORD', problem);
+    word = cleanCatchmindWord(input.word as string);
+    image = validateDrawing(input.image);
+  }
+  const payload = { roundId: input.roundId, ...(action === 'publish' ? { word } : {}),
     ...(image ? { image } : {}), ...(action === 'guess' ? { answer: normalize(answer) } : {}),
     ...(action === 'skip' ? { expectedTurnId: input.expectedTurnId } : {}) };
   const hash = await hashToken(JSON.stringify(payload));
@@ -284,7 +272,7 @@ async function mutateOnce(db: D1Database, user: Actor, action: CatchmindAction, 
   if ((action === 'publish' || action === 'guess') && playClosed(now.getTime())) throw new CatchmindError(409, 'PLAY_CLOSED', PLAY_RULES.closedMessage);
   const { turn, round } = await board(db);
   if (action !== 'claim' && (!round || round.id !== input.roundId)) throw new CatchmindError(409, 'ROUND_CHANGED', '새 판이 시작됐어요. 화면을 새로고침해 주세요.');
-  if ((action === 'reroll' || action === 'publish' || action === 'end') && round?.drawer_id !== user.id) throw new CatchmindError(403, 'NOT_DRAWER', '출제자만 할 수 있어요.');
+  if ((action === 'publish' || action === 'end') && round?.drawer_id !== user.id) throw new CatchmindError(403, 'NOT_DRAWER', '출제자만 할 수 있어요.');
   if (action === 'guess' && round?.drawer_id === user.id) throw new CatchmindError(403, 'DRAWER_CANNOT_GUESS', '출제자는 자기 그림을 맞힐 수 없어요.');
   if (action === 'guess' && round?.status !== 'open') throw new CatchmindError(409, 'ROUND_CHANGED', '맞히기가 끝났거나 아직 그림이 공개되지 않았어요.');
   if (action === 'next' && turn.drawer_id !== user.id) throw new CatchmindError(403, 'NOT_DRAWER', '다음 출제자만 새 판을 시작할 수 있어요.');
@@ -305,11 +293,10 @@ async function mutateOnce(db: D1Database, user: Actor, action: CatchmindAction, 
       guard += " AND r.status = 'ended' AND t.drawer_id = ? AND t.drawer_id != u.id AND unixepoch('now') * 1000 >= ROUND((julianday(r.ended_at) - 2440587.5) * 86400000) + ?";
       guardValues.push(String(input.expectedTurnId), CATCHMIND_RULES.skipAfterMs);
     }
-    else if (action === 'reroll') { guard += " AND r.status = 'draft' AND r.drawer_id = u.id AND r.rerolls = ? AND r.rerolls < ?"; guardValues.push(Number(input.wordVersion), CATCHMIND_RULES.rerolls); }
     else if (action === 'publish') {
       const start = kstTimestamp(kstDate(now), '00:00:00');
-      guard += " AND r.status = 'draft' AND r.drawer_id = u.id AND r.rerolls = ? AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?";
-      guardValues.push(Number(input.wordVersion), start, start + 86_400_000);
+      guard += " AND r.status = 'draft' AND r.drawer_id = u.id AND unixepoch('now') * 1000 >= ? AND unixepoch('now') * 1000 < ?";
+      guardValues.push(start, start + 86_400_000);
     } else if (action === 'guess') guard += " AND r.status = 'open' AND r.drawer_id != u.id";
     else guard += " AND r.status = 'open' AND r.drawer_id = u.id";
   }
@@ -318,36 +305,17 @@ async function mutateOnce(db: D1Database, user: Actor, action: CatchmindAction, 
     SELECT ?, u.id, ?, ?, ?, ?, ?, ? FROM users u JOIN catchmind_turn t ON t.id = 1 LEFT JOIN catchmind_rounds r ON r.id = t.round_id
     WHERE u.id = ? AND u.active = 1 AND u.role = 'player' AND ${guard}`)
     .bind(attempt, input.requestId, action, action === 'claim' ? null : round!.id, resultRoundId, hash, now.toISOString(), user.id, ...guardValues)];
-  let reservedWord: string | null = null;
-  if (action === 'claim' || action === 'next' || action === 'reroll') {
-    const chosen = await chooseWord(db, action === 'reroll' ? JSON.parse(round!.word_history) as string[] : []);
-    reservedWord = chosen.word;
-    if (chosen.reset) writes.push(db.prepare(`DELETE FROM catchmind_used_words
-      WHERE EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)
-        AND (SELECT COUNT(*) FROM catchmind_used_words WHERE word IN (SELECT value FROM json_each(?))) >= ?`)
-      .bind(attempt, JSON.stringify(CATCHMIND_WORDS), CATCHMIND_WORDS.length));
-    // Strict INSERT is intentional. A word collision aborts the complete batch,
-    // including its request receipt/version, before a bounded retry chooses again.
-    writes.push(db.prepare(`INSERT INTO catchmind_used_words (word, round_id, used_at)
-      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)`)
-      .bind(chosen.word, resultRoundId, now.toISOString(), attempt));
-  }
   if (action === 'claim' || action === 'next') {
-    const word = reservedWord!;
+    // The answer is written by the drawer at publish time; a draft has none.
     writes.push(db.prepare(`INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, created_at)
-      SELECT ?, COALESCE((SELECT MAX(number) FROM catchmind_rounds), 0) + 1, user_id, ?, ?, ?, 'draft', created_at FROM catchmind_requests WHERE id = ?`)
-      .bind(resultRoundId, word, normalize(word), JSON.stringify([word]), attempt));
+      SELECT ?, COALESCE((SELECT MAX(number) FROM catchmind_rounds), 0) + 1, user_id, '', '', '[]', 'draft', created_at FROM catchmind_requests WHERE id = ?`)
+      .bind(resultRoundId, attempt));
     writes.push(db.prepare(`UPDATE catchmind_turn SET drawer_id = ?, round_id = ? WHERE id = 1 AND EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)`)
       .bind(user.id, resultRoundId, attempt));
-  } else if (action === 'reroll') {
-    const history = JSON.parse(round!.word_history) as string[]; const word = reservedWord!;
-    writes.push(db.prepare(`UPDATE catchmind_rounds SET word = ?, normalized_word = ?, word_history = ?, rerolls = rerolls + 1
-      WHERE id = ? AND EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)`)
-      .bind(word, normalize(word), JSON.stringify([...history, word]), round!.id, attempt));
   } else if (action === 'publish') {
-    writes.push(db.prepare(`UPDATE catchmind_rounds SET status = 'open', image = ?, round_date = ?, published_at = ?
+    writes.push(db.prepare(`UPDATE catchmind_rounds SET status = 'open', word = ?, normalized_word = ?, word_history = ?, image = ?, round_date = ?, published_at = ?
       WHERE id = ? AND EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)`)
-      .bind(image!, kstDate(now), now.toISOString(), round!.id, attempt));
+      .bind(word, normalize(word), JSON.stringify([word]), image!, kstDate(now), now.toISOString(), round!.id, attempt));
   } else if (action === 'skip') {
     writes.push(db.prepare(`UPDATE catchmind_turn SET drawer_id = ${nextPlayerSql('catchmind_turn.drawer_id')}
       WHERE id = 1 AND EXISTS (SELECT 1 FROM catchmind_requests WHERE id = ?)`)
@@ -393,15 +361,6 @@ async function mutateOnce(db: D1Database, user: Actor, action: CatchmindAction, 
     throw new CatchmindError(409, 'ROUND_CHANGED', '판이나 제시어 상태가 바뀌었어요. 새로고침하고 다시 시도해 주세요.');
   }
 }
-async function mutate(db: D1Database, user: Actor, action: CatchmindAction, input: Record<string, unknown>, now: Date): Promise<void> {
-  for (let retry = 0; ; retry++) {
-    try { return await mutateOnce(db, user, action, input, now); }
-    catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (retry >= CATCHMIND_RULES.wordReservationRetries || !message.includes('catchmind_used_words.word')) throw error;
-    }
-  }
-}
 export function catchmindRoute(db: D1Database, user: Actor, action: string | undefined, method: string, input: Record<string, unknown> | undefined, now: Date): Promise<CatchmindResponse>;
 export function catchmindRoute(db: D1Database, user: Actor, action: string | undefined, method: string, input: Record<string, unknown> | undefined, now: Date, since: number | undefined): Promise<CatchmindPollResponse>;
 export async function catchmindRoute(db: D1Database, user: Actor, action: string | undefined, method: string, input: Record<string, unknown> | undefined, now: Date, since?: number): Promise<CatchmindPollResponse> {
@@ -418,7 +377,7 @@ export async function catchmindRoute(db: D1Database, user: Actor, action: string
     }
     return { ...await readState(db, user, now), viewerId: user.id, serverTime: now.toISOString() };
   }
-  const actions: CatchmindAction[] = ['claim', 'reroll', 'publish', 'guess', 'end', 'next', 'skip'];
+  const actions: CatchmindAction[] = ['claim', 'publish', 'guess', 'end', 'next', 'skip'];
   if (!actions.includes(action as CatchmindAction)) throw new CatchmindError(404, 'NOT_FOUND', '요청한 캐치마인드 기능이 없어요.');
   if (method !== 'POST') throw new CatchmindError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
   await mutate(db, user, action as CatchmindAction, input!, now);
