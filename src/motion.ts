@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { playSfx, type SfxName } from "./sfx";
 
 // Motion tokens and helpers from the Claude Design motion spec
 // (Yegoom Motion Spec, yegoom-motion.js). Everything animates transform
@@ -165,6 +166,7 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
   const releaseScroll = holdPageScroll();
   try {
     dialog.showModal();
+    playSfx("sheet-open");
   } catch (error) {
     releaseScroll();
     throw error;
@@ -208,6 +210,7 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
     dialog.style.removeProperty("--keyboard-inset");
     entrance?.cancel();
     openSheets.delete(dialog);
+    if (dialog.isConnected) playSfx("sheet-close");
     if (dialog.open) dialog.close();
     releaseScroll();
     const topDialog = Array.from(openSheets.keys()).at(-1);
@@ -398,14 +401,18 @@ export function crumbs(clientX: number, clientY: number) {
     setTimeout(() => d.remove(), 1600);
   }
 }
-/** Flies gold coins from one element to another, then pops the target. */
-export function coinFly(from: Element | null | undefined, to: Element | null | undefined, onArrive?: () => void, n = 6) {
+/** Flies gold coins from one element to another, then pops the target.
+ * The coin sound plays as they land (at once under reduced motion); pass
+ * `null` where the screen plays its own reward sound. */
+export function coinFly(from: Element | null | undefined, to: Element | null | undefined, onArrive?: () => void, n = 6, sound: SfxName | null = "coin") {
   const a = at(from);
   const b = at(to);
   if (!a || !b || reduced()) {
+    if (sound) playSfx(sound);
     onArrive?.();
     return;
   }
+  if (sound) setTimeout(() => playSfx(sound), 680);
   let first = true;
   for (let i = 0; i < n; i++) {
     const c = document.createElement("div");

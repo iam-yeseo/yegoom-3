@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { installPressFeedback, installTouchEffect } from "./motion";
+import { installTapSound } from "./sfx";
 import { applyFontSize, readFontSize } from "./font-size";
 import "./fonts.css";
 import "./styles.css";
@@ -11,6 +12,7 @@ import "./screens.css";
 applyFontSize(readFontSize());
 installPressFeedback();
 installTouchEffect();
+installTapSound();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

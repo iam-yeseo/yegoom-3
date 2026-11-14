@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { openSheet } from "../motion";
+import { playSfx } from "../sfx";
 
 /** What the "정말 살까요?" sheet shows before a shop purchase. */
 export interface PurchaseQuestion {
@@ -22,7 +23,7 @@ function Sheet({ question, onAnswer }: { question: PurchaseQuestion; onAnswer: (
         {question.detail && <p className="purchase-confirm-detail">{question.detail}</p>}
         <div className="sheet-actions">
           <button type="button" className="secondary-button cancel-button" onClick={() => onAnswer(false)}>취소</button>
-          <button type="button" className="primary-button" autoFocus onClick={() => onAnswer(true)}>{question.confirmLabel ?? "구매하기"}</button>
+          <button type="button" className="primary-button" autoFocus onClick={() => { playSfx("purchase"); onAnswer(true); }}>{question.confirmLabel ?? "구매하기"}</button>
         </div>
       </div>
     </dialog>

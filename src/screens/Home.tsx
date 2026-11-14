@@ -435,7 +435,7 @@ function AttendanceCard({ data, go, onClaimed }: {
       const result = await claim();
       if (!mounted.current) return;
       if (result.awarded) {
-        await new Promise<void>(resolve => coinFly(button, document.querySelector(".room-identity .avatar"), resolve));
+        await new Promise<void>(resolve => coinFly(button, document.querySelector(".room-identity .avatar"), resolve, 6, result.attendance.reward >= ATTENDANCE_RULES.cycleGold ? "coin-big" : "coin"));
         if (!mounted.current) return;
         toast(`+${attendanceRewardLabel(result.attendance.reward, result.attendance.today)} 받았어요`);
         await onClaimed();

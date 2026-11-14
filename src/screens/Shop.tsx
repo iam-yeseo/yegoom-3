@@ -6,6 +6,7 @@ import { Gold, SectionTitle, Toolbar } from "../components/UI";
 import { usePurchaseConfirm } from "../components/PurchaseConfirm";
 import { ScratchTicket } from "../components/ScratchTicket";
 import { anim, reduced, shake, toast, useCountUp } from "../motion";
+import { playSfx } from "../sfx";
 import { ticketCount, useShop } from "../shop";
 import { formatDate, formatTime } from "../format";
 import { ShopCards } from "./Home";
@@ -173,7 +174,7 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
   const full = selected.length === LOTTO_RULES.pickCount;
   function pickBall(button: HTMLElement, number: number, on: boolean) {
     if (frozen) return;
-    if (!on && picks.length >= LOTTO_RULES.pickCount) { shake(button); return; }
+    if (!on && picks.length >= LOTTO_RULES.pickCount) { shake(button); playSfx("error"); return; }
     if (!on) anim(button, [{ scale: ".6" }, { scale: "1.18", offset: .6 }, { scale: "1" }], { dur: 340, fill: "none" });
     setPicks(previous => on ? previous.filter(value => value !== number) : [...previous, number]);
     setError("");

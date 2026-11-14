@@ -5,6 +5,7 @@ import { ApiFailure } from "../api";
 import { Toolbar } from "../components/UI";
 import { formatDate, formatTime } from "../format";
 import { anim, coinFly, confetti, reduced, shake, useCountUp } from "../motion";
+import { loopSfx, playSfx } from "../sfx";
 import { useShop } from "../shop";
 import "../slot.css";
 
@@ -71,6 +72,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
   const strips = useRef<(HTMLDivElement | null)[]>([]);
   const faces = useRef<(HTMLDivElement | null)[]>([]);
   const loops = useRef<(Animation | null)[]>([null, null, null]);
+  const spinSound = useRef<ReturnType<typeof loopSfx> | null>(null);
   const animations = useRef(new Set<Animation>());
   const waits = useRef(new Map<number, (active: boolean) => void>());
   const mounted = useRef(true);
@@ -84,6 +86,8 @@ export function Slot({ onBack }: { onBack: () => void }) {
     animations.current.forEach(animation => animation.cancel());
     animations.current.clear();
     loops.current = [null, null, null];
+    spinSound.current?.stop();
+    spinSound.current = null;
   }
   function track(animation: Animation | null) {
     if (animation) {
@@ -142,7 +146,9 @@ export function Slot({ onBack }: { onBack: () => void }) {
     setAnticipating(false);
     setPhase(pending ? "checking" : "spinning");
     setSpinning([!motionReduced, !motionReduced, !motionReduced]);
+    if (!pending) playSfx("slot-lever");
     if (!motionReduced) {
+      spinSound.current = loopSfx("slot-spin");
       track(anim(lever.current, [{ rotate: "0deg" }, { rotate: "28deg", offset: .4 }, { rotate: "0deg" }], { dur: 420, ease: "inOut", fill: "none" }));
       loops.current = strips.current.map(strip => {
         if (!strip) return null;
@@ -173,11 +179,15 @@ export function Slot({ onBack }: { onBack: () => void }) {
         await Promise.all(spinResult.reels.map(async (symbol, index) => {
           if (!await wait(stopAt + index * 350 + (suspense && index === 2 ? 600 : 0) - performance.now(), run)) return;
           loops.current[index]?.cancel();
+          // The last reel lands lower and louder, and the whir stops with it.
+          playSfx("slot-stop", index === 2 ? { rate: .88, gain: 1.25 } : {});
+          if (index === 2) { spinSound.current?.stop(); spinSound.current = null; }
           setSymbols(previous => previous.map((entry, i) => i === index ? symbol : entry));
           setSpinning(previous => previous.map((entry, i) => i === index ? false : entry));
           if (suspense && index === 1) {
             setAnticipating(true);
             loops.current[2]?.updatePlaybackRate(.4);
+            spinSound.current?.setRate(.7);
           }
           const settle = track(anim(faces.current[index], [
             { transform: "translateY(-22%)" }, { transform: "translateY(9%)", offset: .68 }, { transform: "translateY(0)" },
@@ -194,9 +204,10 @@ export function Slot({ onBack }: { onBack: () => void }) {
       setShownRecent(response.slot.recent);
       setPhase(spinResult.prize > 0 ? "won" : "lost");
       setGold(response.gold);
+      playSfx(spinResult.prize > 0 ? "slot-jackpot" : "slot-lose");
       if (spinResult.prize > 0) {
         confetti(machine.current, { n: 32, spread: 140 });
-        coinFly(resultLine.current, machine.current?.closest(".slot")?.querySelector(".game-toolbar .gold"));
+        coinFly(resultLine.current, machine.current?.closest(".slot")?.querySelector(".game-toolbar .gold"), undefined, 6, null);
       } else track(shake(resultLine.current));
     } catch (cause) {
       if (!mounted.current || generation.current !== run) return;
@@ -237,7 +248,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
               </div>
             </div>)}
           </div>
-          <button className="slot-lever-button" type="button" aria-label="슬롯머신 레버 당기기" onClick={() => void spin()} disabled={disabled} data-nopress data-notouchfx>
+          <button className="slot-lever-button" type="button" aria-label="슬롯머신 레버 당기기" onClick={() => void spin()} disabled={disabled} data-nopress data-notouchfx data-nosfx>
             <span className="slot-lever" ref={lever} aria-hidden="true"><i /><b /></span>
             <span className="slot-lever-base" aria-hidden="true" />
           </button>
@@ -250,7 +261,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
             : "레버를 당겨 행운을 만나 보세요"}
         </div>
       </section>
-      <button type="button" className="primary-button slot-spin-button" onClick={() => void spin()} disabled={disabled} aria-label={buttonLabel}>
+      <button type="button" className="primary-button slot-spin-button" onClick={() => void spin()} disabled={disabled} aria-label={buttonLabel} data-nosfx>
         {busy ? phase === "checking" ? "결과 확인 중…" : "돌아가는 중…" : buttonLabel}
       </button>
       <p className="slot-rule"><strong>7 7 7이 나오면 {SLOT_RULES.jackpotPrize.toLocaleString("ko-KR")}G</strong><span>당첨 확률 {SLOT_RULES.jackpotPercent}% · 1회 {SLOT_RULES.price.toLocaleString("ko-KR")}G{SLOT_RULES.dailyLimit === null ? " · 횟수 제한 없음" : ""}</span></p>

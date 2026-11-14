@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ACHIEVEMENT_GROUPS, ACHIEVEMENT_REPEAT_LABEL, ACHIEVEMENTS, achievementViews, type AchievementClaim, type AchievementGroup, type AchievementView, type AchievementsResponse } from "../../shared/achievements";
 import { Coin, SectionTitle } from "../components/UI";
 import { anim, coinFly, pop, toast } from "../motion";
+import { BIG_GOLD } from "../sfx";
 
 /** Where the list comes from: the Worker, or the serverless preview's sample. */
 export interface AchievementClient {
@@ -67,7 +68,7 @@ export function Achievements({ client, viewerId }: { client: AchievementClient; 
       const next = await clientRef.current.claim(items.map(item => ({ key: item.key, periodKey: item.periodKey })));
       if (generation.current !== current) return;
       // Coins leave the button first; the list changes once, as they land.
-      await new Promise<void>(resolve => coinFly(from?.isConnected ? from : summary.current, summary.current?.querySelector(".achievement-gold"), resolve, Math.min(10, 4 + items.length)));
+      await new Promise<void>(resolve => coinFly(from?.isConnected ? from : summary.current, summary.current?.querySelector(".achievement-gold"), resolve, Math.min(10, 4 + items.length), earned >= BIG_GOLD ? "coin-big" : "coin"));
       if (generation.current !== current) return;
       setData(next);
       pop(summary.current?.querySelector(".achievement-gold"), 1.15);

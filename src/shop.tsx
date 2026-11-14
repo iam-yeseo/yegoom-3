@@ -4,6 +4,7 @@ import { LOTTO_RULES } from "../shared/balance";
 import { noticeDate } from "./lotto-notice";
 import { api, ApiFailure } from "./api";
 import { createShopPreview } from "./shop-preview";
+import { playSfx } from "./sfx";
 
 export type PendingPurchase =
   | { kind: "kuji"; input: KujiPurchaseInput }
@@ -168,7 +169,10 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     } catch (e) {
       // A lost response may follow a committed purchase. Keep the same request
       // and payload across routes/reloads until its persisted receipt is read.
-      if (preview || (e instanceof ApiFailure && e.status >= 400 && e.status < 500)) remember(null);
+      const rejected = e instanceof ApiFailure && e.status >= 400 && e.status < 500;
+      if (preview || rejected) remember(null);
+      // A refused purchase (not enough gold, sold out) gets the soft no; a lost response does not.
+      if (rejected) playSfx("error");
       if (mounted.current) setError(e instanceof Error ? e.message : "구매 결과를 확인하지 못했어요. 다시 확인해 주세요.");
       throw e;
     } finally {
