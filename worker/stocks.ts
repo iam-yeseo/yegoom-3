@@ -313,8 +313,9 @@ export async function tradeStock(db: D1Database, secret: string, user: StockUser
   if (row.version !== order.expectedVersion) {
     throw new StockError(409, 'PRICE_CHANGED', `가격이 ${row.price.toLocaleString('ko-KR')}G로 바뀌었어요. 확인하고 다시 주문해 주세요.`);
   }
+  // The price holds from the latest tick or news step until the next one.
   const tick = latestTickAt(now, holidays)!;
-  const windowEnd = Math.min(tick + STOCK_RULES.tickMinutes * 60_000, status.closesAt);
+  const windowEnd = Math.min(nextTickAt(now, holidays) ?? status.closesAt, status.closesAt);
   const id = crypto.randomUUID();
   const createdAt = new Date(now).toISOString();
   const name = stockInfo(order.ticker)!.name;

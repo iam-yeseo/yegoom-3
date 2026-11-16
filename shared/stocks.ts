@@ -64,18 +64,20 @@ export const STOCK_RULES = {
   /** Price-moving news per trading day (the other news slots are mood pieces), and their effect range (fraction) by class. */
   newsPerDay: [4, 7] as const,
   newsEffect: { stable: [0.01, 0.04], normal: [0.02, 0.06], wild: [0.03, 0.10] } as Record<Volatility, readonly [number, number]>,
-  /** 찌라시: spreads at ±2–3%; 2–4 hours (12–24 ticks) later true 60% (±4–8% the same
+  /** 찌라시: spreads at ±2–3%; 2–4 hours (8–16 news slots) later true 60% (±4–8% the same
    * way) or denied (the rumor undone plus 1–2% the other way). */
-  rumor: { perDay: [1, 2], truthRate: 0.6, spread: [0.02, 0.03], confirm: [0.04, 0.08], deny: [0.01, 0.02], delaySlots: [4, 8] } as const,
-  /** One article every 30 minutes from 09:00 to 17:30 (18 a day); 3 ticks apart. */
-  newsSlots: 18, newsSlotTicks: 3,
+  rumor: { perDay: [1, 2], truthRate: 0.6, spread: [0.02, 0.03], confirm: [0.04, 0.08], deny: [0.01, 0.02], delaySlots: [8, 16] } as const,
+  /** One article every 15 minutes from 09:00 to 17:45 (36 a day). Slots on the hour and
+   * half hour publish with that tick; :15 and :45 slots are news steps of their own. */
+  newsSlots: 36, newsMinutes: 15,
   /** YEGM trades only on this weekday (0 = Sunday … 3 = Wednesday) in December–February. */
   yegmWinterWeekday: 3,
   /** Free-plan budget: ticks are kept this long, daily candles forever. */
   tickRetentionDays: 30,
-  /** One advance computes at most this many 10-minute ticks; a gap longer than
-   * `staleGapDays` (e.g. the market was switched off) restarts from today. */
-  maxCatchUpTicks: 60, staleGapDays: 3,
+  /** One advance computes at most this many steps (a trading day is 55 ticks plus
+   * 18 news steps, so a whole day fits); a gap longer than `staleGapDays` (e.g. the
+   * market was switched off) restarts from today. */
+  maxCatchUpTicks: 80, staleGapDays: 3,
 } as const;
 
 /** Fee in gold for a trade amount: 1%, rounded up, at least 1G. */

@@ -296,7 +296,7 @@ describe('stock market API', () => {
     expect(blocked.data.tradeBlock).toBe('오늘은 출제자라서 거래할 수 없어요 · 결과 반영 후 거래 가능');
     expect((await market.request<StockDetailView>(kst('2026-11-06', '08:59'), 'min', '/api/stock/SIWN')).data.tradeBlock).toBeNull();
     const open = await market.request<StockDetailView>(kst('2026-11-06', '09:00') + 1000, 'siwon', '/api/stock/SIWN');
-    expect(open.data.news[0]).toMatchObject({ kind: 'game', publishAt: new Date(kst('2026-11-06', '09:00')).toISOString() });
+    expect(open.data.news.find(item => item.kind === 'game')).toMatchObject({ publishAt: new Date(kst('2026-11-06', '09:00')).toISOString() });
     expect(open.data.stock.dayOpen).toBe(Math.min(Math.floor(open.data.stock.prevClose * 1.15), Math.round(open.data.stock.prevClose * 1.08)));
     // Friday's own round is not answered yet: siwon stays locked; the game OFF unlocks.
     expect(open.data.tradeBlock).not.toBeNull();

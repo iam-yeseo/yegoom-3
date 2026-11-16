@@ -71,7 +71,7 @@ describe('AI morning news', () => {
     expect(writer.calls[0]).not.toMatch(/\d+(\.\d+)?%/); // no exact percentages in the request
     const rowsBefore = await aiNews();
     expect(rowsBefore.map(row => row.id).sort()).toEqual(items.map(item => item.id).sort());
-    for (const item of items) expect(rowsBefore.find(row => row.id === item.id)!.publish_at).toBe(kst(date, tickTimes()[item.index]!));
+    for (const item of items) expect(rowsBefore.find(row => row.id === item.id)!.publish_at).toBe(kst(date, item.time));
     // Visible to nobody before publication: every read filters publish_at <= now.
     expect(rowsBefore.every(row => row.publish_at > morning)).toBe(true);
     // Run the day: the ticks publish the same rows (no duplicates, AI text kept).

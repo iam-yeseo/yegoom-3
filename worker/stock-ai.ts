@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { AI_RULES } from '../shared/balance';
 import { STOCKS, stockInfo, type Ticker } from '../shared/stocks';
-import { kstTimestamp, tickTimes, tradesOn } from '../shared/market-calendar';
+import { kstTimestamp, tradesOn } from '../shared/market-calendar';
 import { dayItems, type DayItem, type StockRow } from '../shared/stock-market';
 import { subjectParticle } from '../shared/stock-news-templates';
 import { PHASES } from '../shared/stock-lifecycle';
@@ -215,7 +215,6 @@ interface MorningEvent { id: string; newsId: string; ticker: Ticker; kind: strin
  * administrator included) sees them early. Template rows fill anything missing. */
 export async function writeMorningNews(db: D1Database, writers: AiWriters, seed: string, date: string, rows: readonly StockRow[], now: number, phaseSeed = 'phase'): Promise<number> {
   if (!await claimRun(db, `morning:${date}`, now)) return 0;
-  const times = tickTimes();
   const listed = (ticker: Ticker) => {
     const row = rows.find(item => item.ticker === ticker)!;
     return tradesOn(ticker, date) && (row.status !== 'delisted' || (!!row.relistOn && row.relistOn <= date));
@@ -226,7 +225,7 @@ export async function writeMorningNews(db: D1Database, writers: AiWriters, seed:
     .filter(event => listed(event.ticker));
   const events: MorningEvent[] = [
     ...scheduled.map((item: DayItem) => ({ id: item.id, newsId: item.id, ticker: item.ticker, kind: item.kind, effectBp: item.effectBp,
-      publishAt: kstTimestamp(date, times[item.index]!), relatedTo: item.relatedId, phase: PHASES[item.phase].label })),
+      publishAt: kstTimestamp(date, item.time), relatedTo: item.relatedId, phase: PHASES[item.phase].label })),
     ...overnight.map(event => {
       const { headline: _h, body: _b, ...facts } = JSON.parse(event.context_json) as Record<string, unknown>;
       return { id: event.id, newsId: `event:${event.id}`, ticker: event.ticker, kind: 'game', effectBp: event.effect_bp, publishAt: kstTimestamp(date, '09:00'), facts };

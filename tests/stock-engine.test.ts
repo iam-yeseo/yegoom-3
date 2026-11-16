@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { STOCKS, STOCK_RULES, tradeFee } from '../shared/stocks';
-import { addTradingDays, holidayName, isTradingDay, kstTimestamp, marketStatus, tickTimes, tradesOn, TICKS_PER_DAY } from '../shared/market-calendar';
+import { addTradingDays, holidayName, isTradingDay, kstTimeOf, kstTimestamp, marketStatus, tickTimes, tradesOn, TICKS_PER_DAY } from '../shared/market-calendar';
 import { clampToLimit, stepPrice } from '../shared/stock-engine';
 import { advanceMarket, advanceStart, dayItems, initialRows, marketSteps, NEWS_SLOTS, nextTickAt, pendingTicks, type StockRow } from '../shared/stock-market';
 import { companyPhase, featureArticle, PHASES, type Phase } from '../shared/stock-lifecycle';
@@ -65,7 +65,7 @@ describe('price engine', () => {
     const start = at('2026-11-04', '18:00');
     const until = at('2026-11-06', '18:00');
     const ticks = pendingTicks(start, until, none, 1000);
-    expect(ticks).toHaveLength(110);
+    expect(ticks).toHaveLength(146); // two days of 55 ticks + 18 news steps
     const once = advanceMarket(initialRows(start), ticks, seedOf, [], none);
     let rows: StockRow[] = initialRows(start);
     const pieces: number[] = [];
@@ -102,9 +102,33 @@ describe('price engine', () => {
     expect(thursday.rows.find(row => row.ticker === 'YEGM')!.price).toBe(500);
     for (const item of thursday.news) {
       expect(item.ticker).not.toBe('YEGM');
-      expect(thursday.ticks.some(tick => tick.ticker === item.ticker && tick.at === item.publishAt)).toBe(true);
+      // Price-moving articles move their stock as they publish (mood pieces at :15/:45 need no tick).
+      if (item.effectBp || tickTimes().includes(kstTimeOf(item.publishAt))) {
+        expect(thursday.ticks.some(tick => tick.ticker === item.ticker && tick.at === item.publishAt)).toBe(true);
+      }
     }
     expect(nextTickAt(at('2026-12-04', '18:01'), none)).toBe(at('2026-12-07', '09:00'));
+  });
+  it('publishes :15 and :45 articles at their own instant, moving only that article\'s stock', () => {
+    const date = '2026-11-05';
+    expect(nextTickAt(at(date, '10:10'), none)).toBe(at(date, '10:15'));
+    expect(nextTickAt(at(date, '10:15'), none)).toBe(at(date, '10:20'));
+    const steps = pendingTicks(at(date, '10:10'), at(date, '10:20'), none);
+    expect(steps).toEqual([{ at: at(date, '10:15'), date, index: -1, news: '10:15' }, { at: at(date, '10:20'), date, index: tickTimes().indexOf('10:20') }]);
+    const before = advanceMarket(initialRows(at(date, '08:00')), pendingTicks(at(date, '08:00'), at(date, '17:44'), none, 1000), seedOf, [], none);
+    const step = advanceMarket(before.rows, pendingTicks(at(date, '17:44'), at(date, '17:45'), none), seedOf, [], none);
+    const item = dayItems(seedOf(date), date).find(candidate => candidate.time === '17:45')!;
+    expect(step.news.map(news => news.id)).toEqual([item.id]);
+    expect(step.news[0]!.publishAt).toBe(at(date, '17:45'));
+    for (const row of step.rows) {
+      const previous = before.rows.find(candidate => candidate.ticker === row.ticker)!;
+      expect(row.lastTickAt).toBe(at(date, '17:45'));
+      if (row.ticker !== item.ticker || !item.effectBp) expect(row.price).toBe(previous.price);
+      else expect(row.price).toBe(applyEffect(previous.price, previous.prevClose, item.effectBp / 10_000));
+    }
+    expect(step.ticks).toHaveLength(item.effectBp ? 1 : 0);
+    // A whole trading day (55 ticks + 18 news steps) fits in one advance.
+    expect(pendingTicks(at(date, '08:00'), at(date, '18:00'), none)).toHaveLength(73);
   });
   it('restarts at today after a long gap instead of replaying days nobody saw', () => {
     expect(advanceStart(at('2026-10-01', '18:00'), at('2026-11-05', '10:00'))).toBe(at('2026-11-05', '00:00'));
@@ -164,12 +188,13 @@ describe('delisting', () => {
 });
 
 describe('template news', () => {
-  it('publishes exactly one article every 30 minutes from 09:00 to 17:30, with the usual number of price-moving items', () => {
-    expect(NEWS_SLOTS.map(index => tickTimes()[index])).toEqual(['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00',
-      '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30']);
+  it('publishes exactly one article every 15 minutes from 09:00 to 17:45, with the usual number of price-moving items', () => {
+    const quarters = Array.from({ length: 36 }, (_, n) => `${String(9 + Math.floor(n / 4)).padStart(2, '0')}:${String((n % 4) * 15).padStart(2, '0')}`);
+    expect(NEWS_SLOTS).toEqual(quarters);
+    expect(NEWS_SLOTS.at(-1)).toBe('17:45');
     for (let day = 1; day <= 60; day++) {
       const items = dayItems(`seed${day}`, '2026-11-05', `phase${day}`);
-      expect(items.map(item => item.index)).toEqual(NEWS_SLOTS);
+      expect(items.map(item => item.time)).toEqual(NEWS_SLOTS);
       const news = items.filter(item => item.kind === 'news');
       expect(news.length).toBeGreaterThanOrEqual(STOCK_RULES.newsPerDay[0]);
       expect(news.length).toBeLessThanOrEqual(STOCK_RULES.newsPerDay[1]);
@@ -182,8 +207,9 @@ describe('template news', () => {
       // A rumor's confirmation or denial comes 2–4 hours later.
       for (const outcome of items.filter(item => item.relatedId)) {
         const rumor = items.find(item => item.id === outcome.relatedId)!;
-        expect(outcome.index - rumor.index).toBeGreaterThanOrEqual(12);
-        expect(outcome.index - rumor.index).toBeLessThanOrEqual(24);
+        const minutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+        expect(minutes(outcome.time) - minutes(rumor.time)).toBeGreaterThanOrEqual(120);
+        expect(minutes(outcome.time) - minutes(rumor.time)).toBeLessThanOrEqual(240);
       }
       expect(items.every(item => item.headline.length <= 40 && item.body.length <= 200)).toBe(true);
     }

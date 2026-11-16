@@ -16,9 +16,11 @@ export interface StockRow {
   status: StockStatus; warningSince: string | null; delistedOn: string | null; relistOn: string | null;
   lastTickAt: number; version: number;
 }
-/** A 10-minute tick (index 0 = 09:00 open … 54 = 18:00 close), or an event step
- * (index -1) that moves one stock the moment an event is published in market hours. */
-export interface MarketTick { at: number; date: string; index: number; ticker?: Ticker }
+/** A 10-minute tick (index 0 = 09:00 open … 54 = 18:00 close), an event step
+ * (index -1 with `ticker`) that moves one stock the moment an event is published
+ * in market hours, or a news step (index -1 with `news`, the slot time) that
+ * publishes a :15 or :45 article and moves only that article's stock. */
+export interface MarketTick { at: number; date: string; index: number; ticker?: Ticker; news?: string }
 /** A price event decided elsewhere (game results; rumors in PR 12). Its article,
  * if any, is published when the price moves. */
 export interface PendingEvent { id: string; ticker: Ticker; effectBp: number; applyAt: number; kind?: string; headline?: string; body?: string }
@@ -35,6 +37,16 @@ export interface AdvanceResult {
 }
 
 const TIMES = tickTimes();
+const hhmm = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+const OPEN_MINUTES = Number(STOCK_RULES.openTime.slice(0, 2)) * 60 + Number(STOCK_RULES.openTime.slice(3, 5));
+/** One article every 15 minutes, 09:00–17:45 (36 slots), as KST times. */
+export const NEWS_SLOTS = Array.from({ length: STOCK_RULES.newsSlots }, (_, n) => hhmm(OPEN_MINUTES + n * STOCK_RULES.newsMinutes));
+/** Every instant the market changes on a trading day: the ticks plus the news slots between them. */
+const STEP_TIMES = [...new Set([...TIMES, ...NEWS_SLOTS])].sort();
+const stepOf = (at: number, date: string, time: string): MarketTick => {
+  const index = TIMES.indexOf(time);
+  return index >= 0 ? { at, date, index } : { at, date, index: -1, news: time };
+};
 export const initialRows = (lastTickAt: number): StockRow[] => STOCKS.map(stock => ({
   ticker: stock.ticker, price: stock.listingPrice, prevClose: stock.listingPrice, dayOpen: null, dayHigh: null, dayLow: null,
   status: 'listed', warningSince: null, delistedOn: null, relistOn: null, lastTickAt, version: 0,
@@ -47,14 +59,14 @@ export function advanceStart(lastTickAt: number, now: number): number {
   return now - lastTickAt > STOCK_RULES.staleGapDays * 86_400_000
     ? Math.max(lastTickAt, kstTimestamp(kstDateOf(now), '00:00')) : lastTickAt;
 }
-/** Tick instants in (from, until], oldest first, at most `limit`. */
+/** Tick and news-step instants in (from, until], oldest first, at most `limit`. */
 export function pendingTicks(from: number, until: number, holidays: ReadonlyMap<string, string>, limit: number = STOCK_RULES.maxCatchUpTicks): MarketTick[] {
   const out: MarketTick[] = [];
   for (let date = kstDateOf(from), last = kstDateOf(until); date <= last && out.length < limit; date = nextDate(date)) {
     if (!isTradingDay(date, holidays)) continue;
-    for (let index = 0; index < TIMES.length && out.length < limit; index++) {
-      const at = kstTimestamp(date, TIMES[index]!);
-      if (at > from && at <= until) out.push({ at, date, index });
+    for (let n = 0; n < STEP_TIMES.length && out.length < limit; n++) {
+      const at = kstTimestamp(date, STEP_TIMES[n]!);
+      if (at > from && at <= until) out.push(stepOf(at, date, STEP_TIMES[n]!));
     }
   }
   return out;
@@ -72,24 +84,25 @@ export function marketSteps(from: number, until: number, holidays: ReadonlyMap<s
     const date = kstDateOf(at);
     if (!isTradingDay(date, holidays) || !tradesOn(event.ticker, date)) continue;
     if (at <= kstTimestamp(date, STOCK_RULES.openTime) || at >= kstTimestamp(date, STOCK_RULES.closeTime)) continue;
-    if (ticks.some(tick => tick.at === at) || steps.some(step => step.at === at && step.ticker === event.ticker)) continue;
+    if (ticks.some(tick => tick.at === at && tick.index >= 0) || steps.some(step => step.at === at && step.ticker === event.ticker)) continue;
     steps.push({ at, date, index: -1, ticker: event.ticker });
   }
   return [...ticks, ...steps].sort((a, b) => a.at - b.at || (a.ticker ?? '').localeCompare(b.ticker ?? ''));
 }
-/** The latest tick instant at or before `now` on a trading day, or null. */
+/** The latest tick or news-step instant at or before `now` on a trading day, or null. */
 export function latestTickAt(now: number, holidays: ReadonlyMap<string, string>): number | null {
   const date = kstDateOf(now);
   if (!isTradingDay(date, holidays)) return null;
   let latest: number | null = null;
-  for (const time of TIMES) { const at = kstTimestamp(date, time); if (at <= now) latest = at; }
+  for (const time of STEP_TIMES) { const at = kstTimestamp(date, time); if (at <= now) latest = at; }
   return latest;
 }
-/** The next tick instant after `now` (looks ahead up to three weeks). */
+/** The next tick or news-step instant after `now` (looks ahead up to three weeks):
+ * when the stock screen polls next and when a trade's price window closes. */
 export function nextTickAt(now: number, holidays: ReadonlyMap<string, string>): number | null {
   for (let date = kstDateOf(now), days = 0; days < 21; date = nextDate(date), days++) {
     if (!isTradingDay(date, holidays)) continue;
-    for (const time of TIMES) { const at = kstTimestamp(date, time); if (at > now) return at; }
+    for (const time of STEP_TIMES) { const at = kstTimestamp(date, time); if (at > now) return at; }
   }
   return null;
 }
@@ -99,14 +112,12 @@ export function tickNormal(seed: string, ticker: Ticker, index: number): number 
   const random = seededRandom(`${seed}|${ticker}|${index}`);
   return normalFrom(random(), random());
 }
-/** One article every 30 minutes, 09:00–17:30: tick indexes 0, 3, …, 51 (18 slots). */
-export const NEWS_SLOTS = Array.from({ length: STOCK_RULES.newsSlots }, (_, n) => n * STOCK_RULES.newsSlotTicks);
 export type DayItemKind = 'news' | 'feature' | 'mosquito' | 'rumor' | 'confirm' | 'denied';
 /** Every article scheduled for a day, with its template text. The AI morning batch
  * rewrites these before they are published. `phase` is internal (never shown). */
-export interface DayItem { id: string; ticker: Ticker; index: number; effectBp: number; kind: DayItemKind; headline: string; body: string; relatedId?: string; phase: Phase }
+export interface DayItem { id: string; ticker: Ticker; time: string; effectBp: number; kind: DayItemKind; headline: string; body: string; relatedId?: string; phase: Phase }
 
-/** A day's 18 articles. Price-moving items keep their usual number (rumors and
+/** A day's 36 articles. Price-moving items keep their usual number (rumors and
  * their outcome, YEGM mosquito hunts, 4–7 news); every other slot is a mood
  * piece with no price effect. Hidden company phases decide who makes the news
  * and whether moving news is good or bad. */
@@ -126,12 +137,12 @@ export function dayItems(seed: string, date: string, phaseSeed = 'phase'): DayIt
     return options.length ? options[Math.floor(random() * options.length)]! : null;
   };
   const items: DayItem[] = [];
-  const add = (slot: number, item: Omit<DayItem, 'index' | 'phase'>) => {
+  const add = (slot: number, item: Omit<DayItem, 'time' | 'phase'>) => {
     free.delete(slot);
-    items.push({ ...item, index: NEWS_SLOTS[slot]!, phase: phaseOf.get(item.ticker)! });
+    items.push({ ...item, time: NEWS_SLOTS[slot]!, phase: phaseOf.get(item.ticker)! });
   };
   if (!trading.length) return [];
-  // 찌라시 and its confirmation/denial 2–4 hours (4–8 slots) later.
+  // 찌라시 and its confirmation/denial 2–4 hours (8–16 slots) later.
   const { perDay: [rumorMin, rumorMax], truthRate, spread, confirm, deny, delaySlots: [early, late] } = STOCK_RULES.rumor;
   const rumors = rumorMin + Math.floor(random() * (rumorMax - rumorMin + 1));
   for (let n = 0; n < rumors; n++) {
@@ -182,7 +193,7 @@ export function dayItems(seed: string, date: string, phaseSeed = 'phase'): DayIt
     const variant = Math.floor(random() * 1000);
     add(slot, { id: `feature:${date}:s${slot}`, ticker: stock.ticker, effectBp: 0, kind: 'feature', ...featureArticle(stock.ticker, phaseOf.get(stock.ticker)!, variant) });
   }
-  return items.sort((a, b) => a.index - b.index);
+  return items.sort((a, b) => a.time.localeCompare(b.time));
 }
 
 function disclosure(ticker: Ticker, kind: DisclosureKind, date: string, at: number): NewsRecord {
@@ -205,6 +216,24 @@ export function advanceMarket(input: readonly StockRow[], ticks: readonly Market
     let todays = itemsOf.get(tick.date);
     if (!todays) itemsOf.set(tick.date, todays = dayItems(seed, tick.date, phaseSeed));
     const closing = tick.index === TICKS_PER_DAY - 1;
+    if (tick.news) {
+      // News step (:15/:45): publish the slot's article; only its stock moves, by the article's effect.
+      for (const row of rows) row.lastTickAt = tick.at;
+      for (const item of todays.filter(candidate => candidate.time === tick.news)) {
+        const row = rows.find(candidate => candidate.ticker === item.ticker)!;
+        if (row.status === 'delisted' || !tradesOn(row.ticker, tick.date)) continue;
+        if (item.effectBp) {
+          row.version += 1;
+          row.price = applyEffect(row.price, row.prevClose, item.effectBp / 10_000);
+          row.dayOpen ??= row.price;
+          row.dayHigh = Math.max(row.dayHigh ?? row.price, row.price);
+          row.dayLow = Math.min(row.dayLow ?? row.price, row.price);
+          result.ticks.push({ ticker: row.ticker, at: tick.at, price: row.price });
+        }
+        result.news.push({ id: item.id, ticker: item.ticker, kind: item.kind, publishAt: tick.at, effectBp: item.effectBp, headline: item.headline, body: item.body });
+      }
+      continue;
+    }
     if (tick.index === -1) {
       // Event step: only the event's stock moves, at the publication instant.
       for (const row of rows) row.lastTickAt = tick.at;
@@ -233,7 +262,7 @@ export function advanceMarket(input: readonly StockRow[], ticks: readonly Market
         Object.assign(row, { status: 'listed', price: info.listingPrice, prevClose: info.listingPrice, delistedOn: null, relistOn: null, warningSince: null });
         result.news.push(disclosure(row.ticker, 'relist', tick.date, tick.at));
       }
-      const scheduled = todays.filter(item => item.ticker === row.ticker && item.index === tick.index);
+      const scheduled = todays.filter(item => item.ticker === row.ticker && item.time === TIMES[tick.index]);
       const effect = (due.reduce((sum, event) => sum + event.effectBp, 0) + scheduled.reduce((sum, item) => sum + item.effectBp, 0)) / 10_000;
       if (tick.index === 0) {
         row.prevClose = row.price;
