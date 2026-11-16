@@ -59,14 +59,14 @@ export const STOCK_RULES = {
   /** Per-tick log-return standard deviation by volatility class. */
   sigma: { stable: 0.0035, normal: 0.006, wild: 0.01 } as Record<Volatility, number>,
   /** Per-tick mean reversion toward the listing price. Tuned with the 1,000-run
-   * simulation in tests/stock-engine.test.ts (about 0.3 delistings a month). */
-  reversion: 0.005,
+   * simulation in tests/stock-engine.test.ts (about 0.6 delistings a month, 2026-11-16). */
+  reversion: 0.006,
   /** Price-moving news per trading day (the other news slots are mood pieces), and their effect range (fraction) by class. */
-  newsPerDay: [4, 7] as const,
+  newsPerDay: [8, 14] as const,
   newsEffect: { stable: [0.01, 0.04], normal: [0.02, 0.06], wild: [0.03, 0.10] } as Record<Volatility, readonly [number, number]>,
   /** 찌라시: spreads at ±2–3%; 2–4 hours (8–16 news slots) later true 60% (±4–8% the same
    * way) or denied (the rumor undone plus 1–2% the other way). */
-  rumor: { perDay: [1, 2], truthRate: 0.6, spread: [0.02, 0.03], confirm: [0.04, 0.08], deny: [0.01, 0.02], delaySlots: [8, 16] } as const,
+  rumor: { perDay: [2, 4], truthRate: 0.6, spread: [0.02, 0.03], confirm: [0.04, 0.08], deny: [0.01, 0.02], delaySlots: [8, 16] } as const,
   /** One article every 15 minutes from 09:00 to 17:45 (36 a day). Slots on the hour and
    * half hour publish with that tick; :15 and :45 slots are news steps of their own. */
   newsSlots: 36, newsMinutes: 15,

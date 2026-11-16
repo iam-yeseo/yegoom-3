@@ -118,7 +118,7 @@ export type DayItemKind = 'news' | 'feature' | 'mosquito' | 'rumor' | 'confirm' 
 export interface DayItem { id: string; ticker: Ticker; time: string; effectBp: number; kind: DayItemKind; headline: string; body: string; relatedId?: string; phase: Phase }
 
 /** A day's 36 articles. Price-moving items keep their usual number (rumors and
- * their outcome, YEGM mosquito hunts, 4–7 news); every other slot is a mood
+ * their outcome, YEGM mosquito hunts, 8–14 news); every other slot is a mood
  * piece with no price effect. Hidden company phases decide who makes the news
  * and whether moving news is good or bad. */
 export function dayItems(seed: string, date: string, phaseSeed = 'phase'): DayItem[] {
@@ -174,7 +174,7 @@ export function dayItems(seed: string, date: string, phaseSeed = 'phase'): DayIt
       if (slot !== null) add(slot, { id: `mosquito:${date}:s${slot}`, ticker: 'YEGM', effectBp, kind: 'mosquito', ...mosquitoArticle(success, variant) });
     }
   }
-  // Price-moving news (4–7), direction and size shaped by the hidden phase.
+  // Price-moving news (8–14), direction and size shaped by the hidden phase.
   const [min, max] = STOCK_RULES.newsPerDay;
   const moving = min + Math.floor(random() * (max - min + 1));
   for (let n = 0; n < moving; n++) {
