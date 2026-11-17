@@ -16,6 +16,17 @@ export function catchmindWordProblem(value: string): string | null {
   return null;
 }
 
+/** Why a drawing with these pixel dimensions cannot be published, or null.
+ * The Worker applies it to every uploaded PNG and WebP; the canvas export
+ * never produces a drawing it would refuse. */
+export function catchmindImageSizeProblem(width: number, height: number): string | null {
+  const { maxImageSide: side, maxImagePixels: pixels } = CATCHMIND_RULES;
+  if (width > side || height > side || width * height > pixels) {
+    return `그림이 너무 커요. 가로세로 ${side.toLocaleString('ko-KR')}픽셀 이하로 줄여 다시 올려 주세요.`;
+  }
+  return null;
+}
+
 /** A random prompt from the shared word list, for a drawer who has no idea yet. */
 export function suggestCatchmindWord(exclude: readonly (string | null | undefined)[] = [], random: () => number = Math.random): string {
   const skipped = new Set(exclude);

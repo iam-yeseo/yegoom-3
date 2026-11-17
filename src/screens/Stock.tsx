@@ -18,7 +18,8 @@ const info = (ticker: string) => stockInfo(ticker)!;
 const LIMIT = STOCK_RULES.dailyLimit;
 const kstDay = (iso: string) => new Date(Date.parse(iso) + 9 * 3_600_000).toISOString().slice(0, 10);
 
-type Clocked = { market: MarketClock; serverTime: string } | null;
+/** `again`: read once more after this many milliseconds even though no tick is due. */
+type Clocked = { market: MarketClock; serverTime: string; again?: number } | null;
 /** Read once now and again just after every 10-minute tick (only while the page
  * is visible); no fixed-interval polling. */
 function useTickPolling(load: () => Promise<Clocked>) {
@@ -29,10 +30,10 @@ function useTickPolling(load: () => Promise<Clocked>) {
       clearTimeout(timer);
       if (!alive || document.visibilityState !== "visible") return;
       const result = await load();
-      if (!alive || !result?.market.nextTickAt) return;
+      if (!alive || !result || (!result.market.nextTickAt && result.again === undefined)) return;
       const serverNow = Date.parse(result.serverTime);
-      const wait = Date.parse(result.market.nextTickAt) - serverNow + 5_000;
-      timer = window.setTimeout(run, Math.min(Math.max(wait, 5_000), 6 * 3_600_000));
+      const wait = result.market.nextTickAt ? Date.parse(result.market.nextTickAt) - serverNow + 5_000 : Infinity;
+      timer = window.setTimeout(run, Math.min(Math.max(Math.min(wait, result.again ?? Infinity), 5_000), 6 * 3_600_000));
     };
     const visible = () => { if (document.visibilityState === "visible") void run(); };
     void run();
@@ -161,6 +162,18 @@ function holdingsTotal(stocks: StockQuote[]) {
   const cost = held.reduce((sum, stock) => sum + stock.costBasis, 0);
   return { value, cost, count: held.length };
 }
+/** The closing article is written a little after the last tick (the 18:00 Cron
+ * asks the AI first), and no tick follows it until the next open. While it is
+ * still missing shortly after a trading day's close, the list reads again soon;
+ * each of those reads is the short "unchanged" answer until it arrives. */
+const CLOSING_WAIT = { every: 30_000, until: 15 * 60_000 };
+function awaitingClosingArticle(view: StockMarketView, serverTime: string): boolean {
+  const { market } = view;
+  const day = new Date(`${market.date}T00:00:00Z`).getUTCDay();
+  const sinceClose = Date.parse(serverTime) - Date.parse(market.closesAt);
+  return !market.open && !market.holiday && day !== 0 && day !== 6 && sinceClose >= 0 && sinceClose < CLOSING_WAIT.until
+    && view.closing?.summary?.publishAt !== market.closesAt;
+}
 function closedLabel(market: MarketClock, serverTime: string) {
   if (market.holiday) return `휴장 · ${market.holiday}`;
   const day = new Date(`${market.date}T00:00:00Z`).getUTCDay();
@@ -268,19 +281,22 @@ export function StockMarket({ client, orders, account, gold, onBack, go, onTrade
   const [view, setView] = useState<StockMarketView | null>(null);
   const [error, setError] = useState("");
   const versionRef = useRef<string | undefined>(undefined);
+  const shown = useRef<StockMarketView | null>(null);
   const announce = useNewsToasts();
   const load = useCallback(async (): Promise<Clocked> => {
     try {
       const next = await client.market(versionRef.current);
       setError("");
+      const again = (view: StockMarketView | null) => view && awaitingClosingArticle({ ...view, market: next.market }, next.serverTime) ? CLOSING_WAIT.every : undefined;
       if ("unchanged" in next) {
         setView((current) => current && { ...current, market: next.market, serverTime: next.serverTime });
-        return next;
+        return { ...next, again: again(shown.current) };
       }
       versionRef.current = next.version;
+      shown.current = next;
       announce(next.news);
       setView(next);
-      return next;
+      return { ...next, again: again(next) };
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "주식 시장을 불러오지 못했어요.");
       return null;

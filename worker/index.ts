@@ -24,7 +24,7 @@ import { notificationsRoute, readNotificationSummary, sendAdminNotification, Not
 import { maintainDatabase } from './maintenance';
 import { AchievementError, claimAchievement, readAchievements, recordAchievementEvent, syncAchievements, syncAchievementsFor } from './achievements';
 import { RankResultError, markRankResultsSeen, readRankResults, settleDueRankingRewards } from './ranking-rewards';
-import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockSecret, tradeStock } from './stocks';
+import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockPricesMoved, stockSecret, tradeStock } from './stocks';
 import { aiWriters, isAiProvider, readAiStatus, saveAiSettings } from './stock-ai';
 import { FEATURES, PLAY_RULES, nextPredictionOpenAt, playClosed, predictionDayOff, scoreCounts } from '../shared/balance';
 
@@ -860,10 +860,12 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (url.pathname === '/api/stock') {
       const since = url.searchParams.get('since');
-      const view = await readStockMarket(env.DB, secret, user, now.getTime(), since && since.length <= 64 ? since : undefined);
-      // A full read (prices moved) may have brought a limit move or a
-      // delisting on a stock the player holds: those are achievements too.
-      if (!('unchanged' in view) && user.role === 'player') await syncAchievements(env.DB, user.id, now).catch(() => undefined);
+      const known = since && since.length <= 64 ? since : undefined;
+      const view = await readStockMarket(env.DB, secret, user, now.getTime(), known);
+      // Moved prices may have brought a limit move or a delisting on a stock
+      // the player holds: those are achievements too. A full answer for news,
+      // gold or holdings alone (prices unchanged) brings none of them.
+      if (!('unchanged' in view) && user.role === 'player' && stockPricesMoved(known, view.version)) await syncAchievements(env.DB, user.id, now).catch(() => undefined);
       return json(view);
     }
     if (url.pathname === '/api/stock/news') return json(await readStockNews(env.DB, secret, user, url.searchParams.get('before'), now.getTime()));

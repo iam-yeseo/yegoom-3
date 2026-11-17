@@ -59,6 +59,14 @@ const settled_default = { ...${entry}, async fetch(request, env, context) {
   const response = await ${entry}.fetch(request, env, { waitUntil: promise => { pending.push(promise); }, passThroughOnException: () => context?.passThroughOnException?.() });
   await Promise.all(pending);
   return response;
+},
+// A Cron run triggered by a test (/cdn-cgi/handler/scheduled) happens at this
+// artifact's frozen instant, like everything else it does, and has finished
+// when the trigger returns.
+async scheduled(event, env, context) {
+  const pending = [];
+  ${entry}.scheduled({ cron: event.cron, scheduledTime: ${timestamp}, noRetry() {} }, env, { waitUntil: promise => { pending.push(promise); }, passThroughOnException() {} });
+  await Promise.all(pending);
 } };
 export { settled_default as default };`);
 const run = (args) => {

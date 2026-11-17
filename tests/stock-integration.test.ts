@@ -7,6 +7,8 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { hashPassword } from '../worker/crypto';
 import { kstTimestamp } from '../shared/market-calendar';
 import { readStockMarket } from '../worker/stocks';
+import { writeCloseNews } from '../worker/stock-ai';
+import { marketVersion, type StockRow } from '../shared/stock-market';
 import type { AdminState } from '../shared/admin';
 import type { AchievementsResponse } from '../shared/achievements';
 import { STOCK_ORDER_UNFILLED_CODES, type StockDetailView, type StockMarketView, type StockNewsPage, type StockTradeResponse, type StockUnchanged } from '../shared/stock-types';
@@ -323,7 +325,96 @@ describe('stock market API', () => {
     expect(statements).toBe(8); // state + holidays + new game results + pending events, then holdings + news + gold + closing
     statements = 0;
     expect(await readStockMarket(counted, SECRET, { id: 'min', role: 'player', username: 'min' }, now, view.version)).toMatchObject({ unchanged: true });
-    expect(statements).toBe(4);
+    // "Unchanged" now also vouches for the news, the gold and the holdings, so the
+    // same four shown-row statements run; the answer is still the short one.
+    expect(statements).toBe(8);
+  });
+
+  it('never answers "unchanged" for a market read whose news, gold or holdings changed while prices stood still', async () => {
+    const market = await Market.create(kst('2026-11-05', '17:50'));
+    const user = { id: 'min', role: 'player' as const, username: 'min' };
+    // The close tick ran; the 18:00 Cron has not written the closing article yet.
+    const closed = kst('2026-11-05', '18:00') + 5_000;
+    const first = (await market.request<StockMarketView>(closed, 'min', '/api/stock')).data;
+    expect(first.market.open).toBe(false);
+    expect(first.closing).toEqual({ summary: null, comment: null, weekly: null });
+    const poll = async (timestamp: number, since: string, username = 'min') =>
+      (await market.request<StockMarketView & Partial<StockUnchanged>>(timestamp, username, `/api/stock?since=${encodeURIComponent(since)}`)).data;
+    expect(await poll(closed, first.version)).toMatchObject({ unchanged: true, version: first.version });
+
+    // The article is stored a little later: same prices, same tick.
+    const rows = (await market.db.prepare('SELECT ticker, price, prev_close AS prevClose, day_open AS dayOpen, status, last_tick_at AS lastTickAt, version FROM stock_state ORDER BY rowid').all<StockRow>()).results;
+    await writeCloseNews(market.db as unknown as D1Database, {}, '2026-11-05', rows, closed + 20_000);
+    const later = closed + 30_000;
+    const withArticle = await poll(later, first.version);
+    expect(withArticle.unchanged).toBeUndefined();
+    expect(withArticle.closing!.summary).toMatchObject({ id: 'close:2026-11-05', kind: 'close' });
+    expect(withArticle.stocks.map(stock => [stock.ticker, stock.price, stock.version])).toEqual(first.stocks.map(stock => [stock.ticker, stock.price, stock.version]));
+    // The price part of the version did not move; only the content stamp did.
+    expect(withArticle.version.split('.').slice(0, 2)).toEqual(first.version.split('.').slice(0, 2));
+    expect(withArticle.version).not.toBe(first.version);
+    expect(withArticle.version.startsWith(`${marketVersion(rows)}.`)).toBe(true);
+    expect(await poll(later, withArticle.version)).toMatchObject({ unchanged: true, version: withArticle.version });
+
+    // The administrator hides the article, then shows it again.
+    expect((await market.request(later, 'admin', '/api/admin/stock/news/close%3A2026-11-05', 'PUT', { hidden: true })).status).toBe(200);
+    const hidden = await poll(later, withArticle.version);
+    expect(hidden.unchanged).toBeUndefined();
+    expect(hidden.closing!.summary).toBeNull();
+    expect(await poll(later, hidden.version)).toMatchObject({ unchanged: true });
+    expect((await market.request(later, 'admin', '/api/admin/stock/news/close%3A2026-11-05', 'PUT', { hidden: false })).status).toBe(200);
+    const shown = await poll(later, hidden.version);
+    expect(shown.closing!.summary).toMatchObject({ id: 'close:2026-11-05' });
+    expect(shown.version).toBe(withArticle.version);
+
+    // A public article with no price effect (a whale), the player's gold, and their holdings.
+    await market.db.prepare("INSERT INTO stock_news (id, ticker, kind, publish_at, headline, body, source, created_at) VALUES ('whale:test', 'YKHX', 'whale', ?, '익명의 큰손, YK하이커스 100주 매수', '본문', 'template', 'x')").bind(closed).run();
+    const whale = await poll(later, shown.version);
+    expect(whale.news[0]).toMatchObject({ id: 'whale:test' });
+    await market.db.prepare("INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('gift', 'min', 'gold', 77, '선물', 'fixture:gift', '2026-11-05T09:00:00.000Z')").run();
+    const richer = await poll(later, whale.version);
+    expect(richer.gold).toBe(whale.gold + 77);
+    await market.db.prepare("INSERT INTO stock_holdings (user_id, ticker, quantity, cost_basis) VALUES ('min', 'YKHX', 3, 4500)").run();
+    const holding = await poll(later, richer.version);
+    expect(holding.stocks.find(stock => stock.ticker === 'YKHX')).toMatchObject({ held: 3, costBasis: 4500 });
+    // Another player's private comment or holdings are not this player's change.
+    await market.db.prepare("INSERT INTO stock_holdings (user_id, ticker, quantity, cost_basis) VALUES ('siwon', 'YKHX', 1, 1500)").run();
+    expect(await poll(later, holding.version)).toMatchObject({ unchanged: true });
+    // A version from before the content stamp (prices only) is never "unchanged".
+    expect((await poll(later, marketVersion(rows))).unchanged).toBeUndefined();
+
+    // The cost of a quiet poll does not grow with the news history: 3,000 older articles change nothing.
+    const measure = async (since?: string) => {
+      let rowsRead = 0;
+      const metered = new Proxy(market.db, { get(target, key) {
+        const value = Reflect.get(target, key);
+        if (key === 'prepare') return (sql: string) => target.prepare(sql.replaceAll("unixepoch('now') * 1000", String(later)));
+        if (key === 'batch') return async (statements: never[]) => {
+          const results = await target.batch(statements);
+          for (const result of results) rowsRead += result.meta.rows_read ?? 0;
+          return results;
+        };
+        return typeof value === 'function' ? value.bind(target) : value;
+      } }) as unknown as D1Database;
+      const answer = await readStockMarket(metered, SECRET, user, later, since);
+      return { rowsRead, version: answer.version, unchanged: 'unchanged' in answer };
+    };
+    // Enough recent articles to fill the list, so older ones can never enter it.
+    await market.db.prepare(`INSERT INTO stock_news (id, ticker, kind, publish_at, headline, body, source, created_at)
+      SELECT 'recent:' || value, 'YEGM', 'news', ? - 60000 - value, '오늘 기사', '본문', 'template', 'x' FROM json_each('[1,2,3,4,5,6]')`).bind(closed).run();
+    const current = await measure();
+    const quiet = await measure(current.version);
+    expect(quiet.unchanged).toBe(true);
+    for (let offset = 0; offset < 3000; offset += 500) {
+      await market.db.prepare(`INSERT INTO stock_news (id, ticker, kind, publish_at, headline, body, source, created_at)
+        SELECT 'old:' || value, 'YEGM', 'news', ? - 86400000 - value, '지난 기사', '본문', 'template', 'x' FROM json_each(?)`)
+        .bind(closed, JSON.stringify(Array.from({ length: 500 }, (_, index) => offset + index))).run();
+    }
+    const afterHistory = await measure(current.version);
+    expect(afterHistory.unchanged).toBe(true);
+    expect(afterHistory.rowsRead).toBe(quiet.rowsRead);
+    console.info(`Stock market poll D1 rows_read: full ${current.rowsRead}, unchanged ${quiet.rowsRead}, unchanged after 3,000 older articles ${afterHistory.rowsRead}`);
+    expect(quiet.rowsRead).toBeLessThanOrEqual(80);
   });
 
   it('turns a result published in market hours into an immediate move with a news item, once', async () => {

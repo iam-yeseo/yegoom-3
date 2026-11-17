@@ -228,8 +228,16 @@ export interface CatchmindState {
   nextDrawer: CatchmindPlayer | null;
   canSkip: boolean; skipAvailableAt: string | null;
   previousRound: CatchmindGalleryRound | null;
+  /** What the viewer's role allows on this round. These depend on the board
+   * only, so they change with its version. Whether publishing and guessing are
+   * open right now (the 23:50 close) is the response's `play` window. */
   canClaim: boolean; canPublish: boolean; canGuess: boolean; canEnd: boolean; canNext: boolean;
 }
+/** The daily close on the server's clock: publishing and guessing are closed
+ * from 23:50 to midnight KST. It changes with time, not with the board, so
+ * every response carries it, an unchanged poll included. (Optional in the
+ * types only: a response without it is read by its `serverTime` instead.) */
+export interface CatchmindPlayWindow { closed: boolean; changesAt: string }
 /** Finished rounds only; images are served separately through immutable URLs. */
 export interface CatchmindGalleryRound {
   id: string; number: number; drawer: CatchmindPlayer; answer: string;
@@ -242,8 +250,8 @@ export interface CatchmindSummary {
   drawer: CatchmindPlayer | null; turn: CatchmindPlayer | null; wrongCount: number;
   winner: CatchmindPlayer | null; winnerScored: boolean; answer: string | null;
 }
-export interface CatchmindResponse { catchmind: CatchmindState; version: number; viewerId: string; serverTime: string }
-export interface CatchmindUnchanged { unchanged: true; version: number; viewerId: string; serverTime: string }
+export interface CatchmindResponse { catchmind: CatchmindState; version: number; viewerId: string; serverTime: string; play?: CatchmindPlayWindow }
+export interface CatchmindUnchanged { unchanged: true; version: number; viewerId: string; serverTime: string; play?: CatchmindPlayWindow }
 export type CatchmindPollResponse = CatchmindResponse | CatchmindUnchanged;
 export type CatchmindAction = 'claim' | 'publish' | 'guess' | 'end' | 'next' | 'skip';
 export interface CatchmindMutationInput { requestId: string; roundId: string | null; expectedUserId?: string }

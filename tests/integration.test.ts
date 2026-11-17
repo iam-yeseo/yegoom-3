@@ -13,6 +13,7 @@ import { PASSWORD_RULES } from '../shared/password';
 import { CATCHMIND_RULES, SLOT_RULES, SPEETTO_RULES } from '../shared/balance';
 import { CATCHMIND_WORDS } from '../shared/catchmind-words';
 import { catchmindRoute } from '../worker/catchmind';
+import { catchmindImageSizeProblem } from '../shared/catchmind';
 import type { AdminState, PredictionRules } from '../shared/admin';
 import { defaultPredictionRules } from '../shared/game-settings';
 import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
@@ -238,6 +239,27 @@ function drawingPng(width = 2, height = 2, decodedBytes?: number): string {
     chunks.push(chunk('tEXt', Buffer.concat([prefix, Buffer.alloc(padding, 120)])));
   }
   return `data:image/png;base64,${Buffer.concat([...chunks, ending]).toString('base64')}`;
+}
+/** A real one-bit grayscale PNG of any size: all white, so even 16,000 x 16,000
+ * pixels compress to a few dozen kilobytes. */
+function sizedPng(width: number, height: number): string {
+  const chunk = (kind: string, data: Buffer) => {
+    const contents = Buffer.concat([Buffer.from(kind), data]);
+    let crc = 0xffffffff;
+    for (const value of contents) {
+      crc ^= value;
+      for (let bit = 0; bit < 8; bit++) crc = crc >>> 1 ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    const size = Buffer.alloc(4); size.writeUInt32BE(data.length);
+    const checksum = Buffer.alloc(4); checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+    return Buffer.concat([size, contents, checksum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width); header.writeUInt32BE(height, 4);
+  header[8] = 1; header[9] = 0; // One bit per pixel, grayscale.
+  const rows = Buffer.alloc(height * (Math.ceil(width / 8) + 1), 0xff);
+  for (let row = 0; row < height; row++) rows[row * (Math.ceil(width / 8) + 1)] = 0; // filter type: none
+  return `data:image/png;base64,${Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]).toString('base64')}`;
 }
 const catchmindImagePath = (roundId: string) => `/api/catchmind/rounds/${encodeURIComponent(roundId)}/image`;
 const DRAWING_PNG = drawingPng();
@@ -1284,9 +1306,11 @@ describe('Worker and D1 integration', () => {
         await closed('/api/shop/slot', { requestId: crypto.randomUUID() });
         await closed('/api/claw/play', { requestId: crypto.randomUUID(), version: (await getClaw(cookie, instance)).version, x: .05, stop: null });
         await closed('/api/freethrow/sets', { requestId: 'req-closed-0123456789abcdef' });
-        // Drawing may start; only publishing and guessing are closed.
+        // Drawing may start; only publishing and guessing are closed. The board
+        // says the drawer may publish this round; the play window says not now.
         const claimed = await catchmindAction('claim', cookie, null, {}, instance);
-        expect(claimed.catchmind.canPublish).toBe(false);
+        expect(claimed.catchmind.canPublish).toBe(true);
+        expect(claimed.play).toEqual({ closed: true, changesAt: '2026-10-30T15:00:00.000Z' });
         await closed('/api/catchmind/publish', { requestId: crypto.randomUUID(), roundId: claimed.catchmind.round!.id,
           word: CATCHMIND_TEST_WORD, image: DRAWING_PNG });
       } finally { await instance.dispose(); }
@@ -1353,6 +1377,66 @@ describe('Worker and D1 integration', () => {
           // Nothing was charged, drawn or paid again.
           expect(await stored(), instant).toEqual(saved);
         }
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it('reports the Catchmind play window apart from the board: the same round closes at 23:50 and reopens at midnight without a new version', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-catchmind-window-'));
+      let instance = runtime(await workerAt(`${TODAY}T14:49:00Z`), persistence); // 23:49 KST
+      const at = async (instant: string) => {
+        await instance.dispose();
+        instance = runtime(await workerAt(instant), persistence);
+        return { drawer: (await login('min', instance)).cookie, guesser: (await login('siwon', instance)).cookie };
+      };
+      const poll = async (cookie: string, since?: number) => {
+        const response = await request(`/api/catchmind${since === undefined ? '' : `?since=${since}`}`, { cookie, instance });
+        expect(response.status).toBe(200);
+        return response.json() as Promise<CatchmindResponse & { unchanged?: true }>;
+      };
+      const act = async (action: string, cookie: string, roundId: string, extra: Record<string, unknown>) => {
+        const response = await request(`/api/catchmind/${action}`, { method: 'POST', cookie, instance, body: { requestId: crypto.randomUUID(), roundId, ...extra } });
+        return { status: response.status, data: await response.json() as CatchmindResponse & { error?: { code: string } } };
+      };
+      const OPEN_UNTIL = '2026-10-30T14:50:00.000Z', CLOSED_UNTIL = '2026-10-30T15:00:00.000Z';
+      try {
+        await provision(await instance.getD1Database('DB'), migration, passwordHash);
+        let { drawer, guesser } = { drawer: (await login('min', instance)).cookie, guesser: (await login('siwon', instance)).cookie };
+        // 23:49: min starts a draft. Open, and the window says when that changes.
+        const claimed = await catchmindAction('claim', drawer, null, {}, instance);
+        const draft = claimed.catchmind.round!;
+        expect(claimed).toMatchObject({ play: { closed: false, changesAt: OPEN_UNTIL }, catchmind: { canPublish: true } });
+        const draftVersion = claimed.version;
+
+        // 23:50 and 23:55: the board did not change, so the poll is still "unchanged" — and says closed.
+        for (const instant of [`${TODAY}T14:50:00Z`, `${TODAY}T14:55:00Z`]) {
+          ({ drawer, guesser } = await at(instant));
+          expect(await poll(drawer, draftVersion), instant).toMatchObject({ unchanged: true, version: draftVersion, play: { closed: true, changesAt: CLOSED_UNTIL } });
+          // A full read has the same permissions as at 23:49; only the window differs.
+          const full = await poll(drawer);
+          expect(full, instant).toMatchObject({ version: draftVersion, play: { closed: true, changesAt: CLOSED_UNTIL } });
+          expect(full.catchmind, instant).toEqual(claimed.catchmind);
+          // The Worker still has the last word.
+          expect(await act('publish', drawer, draft.id, { word: CATCHMIND_TEST_WORD, image: DRAWING_PNG }), instant).toMatchObject({ status: 409, data: { error: { code: 'PLAY_CLOSED' } } });
+        }
+        // 00:00:05: still the same draft and version, open again; the drawer publishes it.
+        ({ drawer, guesser } = await at(`${TODAY}T15:00:05Z`));
+        expect(await poll(drawer, draftVersion)).toMatchObject({ unchanged: true, version: draftVersion, play: { closed: false, changesAt: '2026-10-31T14:50:00.000Z' } });
+        const published = await act('publish', drawer, draft.id, { word: CATCHMIND_TEST_WORD, image: DRAWING_PNG });
+        expect(published).toMatchObject({ status: 200, data: { catchmind: { round: { id: draft.id, status: 'open' } }, play: { closed: false } } });
+        const openVersion = published.data.version;
+        expect((await poll(guesser)).catchmind).toMatchObject({ canGuess: true, round: { id: draft.id } });
+
+        // The next evening the open round is the same one: guessing closes at 23:50 and reopens at midnight.
+        ({ drawer, guesser } = await at('2026-10-31T14:49:00Z'));
+        expect(await poll(guesser, openVersion)).toMatchObject({ unchanged: true, play: { closed: false, changesAt: '2026-10-31T14:50:00.000Z' } });
+        ({ drawer, guesser } = await at('2026-10-31T14:55:00Z'));
+        expect(await poll(guesser, openVersion)).toMatchObject({ unchanged: true, version: openVersion, play: { closed: true, changesAt: '2026-10-31T15:00:00.000Z' } });
+        expect((await poll(guesser)).catchmind).toMatchObject({ canGuess: true, round: { id: draft.id, status: 'open' } });
+        expect(await act('guess', guesser, draft.id, { answer: '오답' })).toMatchObject({ status: 409, data: { error: { code: 'PLAY_CLOSED' } } });
+        ({ drawer, guesser } = await at('2026-10-31T15:00:05Z'));
+        expect(await poll(guesser, openVersion)).toMatchObject({ unchanged: true, version: openVersion, play: { closed: false } });
+        const guessed = await act('guess', guesser, draft.id, { answer: '오답' });
+        expect(guessed).toMatchObject({ status: 200, data: { catchmind: { round: { id: draft.id, wrongCount: 1 } } } });
       } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
     });
 
@@ -3899,7 +3983,9 @@ describe('Worker and D1 integration', () => {
         const full = await fullResponse.json() as CatchmindResponse;
         expect(Number.isSafeInteger(full.version)).toBe(true);
         const poll = await request(`/api/catchmind?since=${full.version}`, { cookie: siwon.cookie, instance });
-        expect(await poll.json()).toEqual({ unchanged: true, version: full.version, viewerId: 'siwon', serverTime: `${TODAY}T00:00:00.000Z` });
+        // The short answer still carries the play window: at 09:00 KST, open until 23:50.
+        expect(await poll.json()).toEqual({ unchanged: true, version: full.version, viewerId: 'siwon', serverTime: `${TODAY}T00:00:00.000Z`,
+          play: { closed: false, changesAt: `${TODAY}T14:50:00.000Z` } });
         expect(Number(poll.headers.get('X-Test-D1-Queries'))).toBeLessThanOrEqual(2);
         expect(Number(poll.headers.get('X-Test-D1-Rows-Read'))).toBeLessThanOrEqual(5);
         expect(Number(poll.headers.get('X-Test-D1-Rows-Written'))).toBe(0);
@@ -4272,6 +4358,65 @@ describe('Worker and D1 integration', () => {
       expect(Buffer.from(image.split(',')[1]!, 'base64')).toHaveLength(300 * 1024);
       const published = await catchmindAction('publish', cookie, draft.id, { word: CATCHMIND_TEST_WORD, image });
       expect(published.catchmind.round).toMatchObject({ status: 'open', image: catchmindImagePath(draft.id) });
+    });
+
+    it('accepts drawings up to 1,024 pixels a side and refuses larger ones however small the file, in PNG and WebP', async () => {
+      const { cookie } = await login('min');
+      const draft = (await catchmindAction('claim', cookie, null)).catchmind.round!;
+      const publish = async (image: string) => {
+        const response = await request('/api/catchmind/publish', { method: 'POST', cookie,
+          body: { requestId: crypto.randomUUID(), roundId: draft.id, word: CATCHMIND_TEST_WORD, image } });
+        return { status: response.status, code: response.ok ? undefined : (await response.json() as { error: { code: string; message: string } }).error.code };
+      };
+      const kib = (image: string) => Buffer.from(image.split(',')[1]!, 'base64').length / 1024;
+      // The review's case: a valid 16,000 x 16,000 PNG that is far below the 300KiB file limit.
+      const huge = sizedPng(16_000, 16_000);
+      expect(kib(huge)).toBeLessThan(300);
+      const overLimit = [huge, sizedPng(1025, 1025), sizedPng(2048, 512), sizedPng(1024, 1025),
+        photoFixture('drawing-1025-lossy.webp'), photoFixture('drawing-1025-lossless.webp'), photoFixture('drawing-1025-alpha.webp')];
+      for (const [index, image] of overLimit.entries()) {
+        expect(kib(image), String(index)).toBeLessThan(300);
+        expect(await publish(image), String(index)).toEqual({ status: 413, code: 'IMAGE_DIMENSIONS_TOO_LARGE' });
+      }
+      // A damaged oversized file is still simply invalid, and a square that fits must still be square.
+      const damaged = photoFixture('drawing-1025-lossy.webp');
+      expect(await publish(damaged.slice(0, -8))).toEqual({ status: 400, code: 'INVALID_IMAGE' });
+      expect(await publish(sizedPng(1024, 1000))).toEqual({ status: 400, code: 'INVALID_IMAGE' });
+      expect(await publish(sizedPng(0, 0))).toEqual({ status: 400, code: 'INVALID_IMAGE' });
+      // Nothing was published by any refusal: the draft is still the drawer's to retry.
+      expect((await getCatchmind(cookie)).catchmind.round).toMatchObject({ id: draft.id, status: 'draft', image: null, publishedAt: null });
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_requests WHERE action = ?').bind('publish').first('n')).toBe(0);
+      expect((await publish(sizedPng(1024, 1024))).status).toBe(200);
+      expect((await getCatchmind(cookie)).catchmind.round).toMatchObject({ id: draft.id, status: 'open', image: catchmindImagePath(draft.id) });
+
+      // The shared rule itself: one side, and the pixel count.
+      expect(catchmindImageSizeProblem(CATCHMIND_RULES.canvasSide, CATCHMIND_RULES.canvasSide)).toBeNull();
+      expect(catchmindImageSizeProblem(1024, 1024)).toBeNull();
+      for (const [width, height] of [[1025, 1], [1, 1025], [1025, 1025], [16_000, 16_000]]) expect(catchmindImageSizeProblem(width!, height!), `${width}x${height}`).toContain('1,024픽셀');
+      expect(CATCHMIND_RULES.maxImagePixels).toBe(CATCHMIND_RULES.maxImageSide ** 2);
+    });
+
+    it.each(['drawing-canvas-680.webp', 'drawing-1024-lossy.webp', 'drawing-1024-lossless.webp', 'drawing-1024-alpha.webp'])('accepts the WebP drawing %s at or under the limit', async name => {
+      const { cookie } = await login('min');
+      const draft = (await catchmindAction('claim', cookie, null)).catchmind.round!;
+      const published = await catchmindAction('publish', cookie, draft.id, { word: CATCHMIND_TEST_WORD, image: photoFixture(name) });
+      expect(published.catchmind.round).toMatchObject({ status: 'open', image: catchmindImagePath(draft.id) });
+    });
+
+    it('keeps serving a drawing stored before the dimension limit, unchanged', async () => {
+      const { cookie } = await login('min');
+      const legacy = photoFixture('drawing-1025-lossy.webp');
+      await db.batch([
+        db.prepare(`INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, image, end_reason, round_date, published_at, ended_at, created_at)
+          VALUES ('legacy-large', 1, 'siwon', '옛그림', '옛그림', '[]', 'ended', ?, 'manual', '2026-10-29', '2026-10-29T01:00:00.000Z', '2026-10-29T02:00:00.000Z', '2026-10-29T00:00:00.000Z')`).bind(legacy),
+      ]);
+      const response = await request(catchmindImagePath('legacy-large'), { cookie });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('image/webp');
+      expect(Buffer.from(await response.arrayBuffer()).toString('base64')).toBe(legacy.split(',')[1]);
+      const gallery = await (await request('/api/catchmind/gallery', { cookie })).json() as CatchmindGalleryResponse;
+      expect(gallery.rounds.map(round => round.id)).toContain('legacy-large');
+      expect(await db.prepare("SELECT image FROM catchmind_rounds WHERE id = 'legacy-large'").first('image')).toBe(legacy);
     });
 
     it('pays a Sunday-published round solved after Monday midnight gold only, never score', async () => {

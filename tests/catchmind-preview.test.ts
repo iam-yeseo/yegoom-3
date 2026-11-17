@@ -74,7 +74,9 @@ describe('offline Catchmind rules', () => {
     const engine = createCatchmindPreview(viewer);
     const before = engine.read();
     expect(engine.read(before.version)).toEqual({ unchanged: true, version: before.version, viewerId: viewer.id,
-      serverTime: new Date().toISOString() });
+      serverTime: new Date().toISOString(),
+      // The play window travels with every answer; at 09:00 KST it is open until 23:50.
+      play: { closed: false, changesAt: '2026-11-04T14:50:00.000Z' } });
     const attempt = input(engine, { answer: '선인장' });
     const solved = engine.mutate('guess', attempt);
     expect(solved.version).toBe(before.version + 1);

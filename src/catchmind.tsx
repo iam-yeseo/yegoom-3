@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { CatchmindAction, CatchmindGalleryResponse, CatchmindInput, CatchmindPlayer, CatchmindResponse, CatchmindState, CatchmindSummary, LedgerEntry } from "../shared/types";
+import type { CatchmindAction, CatchmindGalleryResponse, CatchmindInput, CatchmindPlayer, CatchmindPollResponse, CatchmindResponse, CatchmindState, CatchmindSummary, LedgerEntry } from "../shared/types";
+import { playWindow } from "../shared/balance";
 import { api, ApiFailure } from "./api";
 import { createCatchmindPreview } from "./catchmind-preview";
 
@@ -10,6 +11,10 @@ interface CatchmindContextValue {
   busy: boolean;
   error: string;
   pending: PendingCatchmind | null;
+  /** True from 23:50 to midnight KST on the server's clock: publishing and
+   * guessing are closed, whatever the board's permissions say. It follows the
+   * clock on its own; no change to the board (or a request) is needed. */
+  playClosed: boolean;
   refresh: () => Promise<void>;
   serverNow: () => number;
   gallery: (before?: number) => Promise<CatchmindGalleryResponse>;
@@ -50,6 +55,33 @@ export function CatchmindProvider({ children, preview, viewer, accountKey, trans
   const version = useRef<number | null>(initial.current?.version ?? null);
   const clockOffset = useRef(0);
   const serverNow = useCallback(() => Date.now() + clockOffset.current, []);
+  // The play window is time, not board data: it is kept apart from `state`
+  // (which only changes with the board's version) and flips at 23:50 and at
+  // midnight by the server's clock, with nothing re-created around it.
+  const [playClosed, setPlayClosed] = useState(() => playWindow(Date.now()).closed);
+  const windowTimer = useRef(0);
+  const followPlayWindow = useCallback((known?: { closed: boolean; changesAt: string }) => {
+    const play = known ?? playWindow(serverNow());
+    setPlayClosed(play.closed);
+    window.clearTimeout(windowTimer.current);
+    // A little past the boundary, then by the clock alone: this also reaches a
+    // drawer who is not polling. Long waits are fine; a sleeping tab is caught
+    // up by the visibility handler below.
+    const wait = Date.parse(play.changesAt) - serverNow();
+    if (Number.isFinite(wait)) windowTimer.current = window.setTimeout(() => followPlayWindow(), Math.max(0, wait) + 500);
+  }, [serverNow]);
+  /** Every answer carries the server's clock and its play window. */
+  const sync = useCallback((next: CatchmindPollResponse) => {
+    clockOffset.current = Date.parse(next.serverTime) - Date.now();
+    if (mounted.current) followPlayWindow(next.play);
+  }, [followPlayWindow]);
+  useEffect(() => {
+    followPlayWindow();
+    // Timers do not run on time in a hidden or sleeping tab: read the clock again on return.
+    const visible = () => { if (document.visibilityState === "visible") followPlayWindow(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { window.clearTimeout(windowTimer.current); document.removeEventListener("visibilitychange", visible); };
+  }, [followPlayWindow]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -65,7 +97,7 @@ export function CatchmindProvider({ children, preview, viewer, accountKey, trans
   const accountInvalid = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const apply = useCallback((next: CatchmindResponse) => {
-    clockOffset.current = Date.parse(next.serverTime) - Date.now();
+    sync(next);
     if (!mounted.current || (stateRef.current && version.current === next.version)) return;
     // A previous round is immutable. Keep its identity through guesses in the
     // current round, while still allowing refreshed profile metadata to appear.
@@ -78,7 +110,7 @@ export function CatchmindProvider({ children, preview, viewer, accountKey, trans
     setState(nextState);
     const engine = previewEngine.current;
     if (engine) callbacks.current.onPreviewChange(engine.summary(), engine.gold, engine.score, engine.ledger);
-  }, []);
+  }, [sync]);
   useEffect(() => {
     const engine = previewEngine.current;
     if (engine) callbacks.current.onPreviewChange(engine.summary(), engine.gold, engine.score, engine.ledger);
@@ -116,7 +148,8 @@ export function CatchmindProvider({ children, preview, viewer, accountKey, trans
       const next = previewEngine.current ? previewEngine.current.read(version.current ?? undefined) : await api.catchmind(version.current ?? undefined);
       if (!mounted.current || current !== generation.current) return;
       if (!previewEngine.current && next.viewerId !== callbacks.current.viewerId) { invalidateAccount(); return; }
-      clockOffset.current = Date.parse(next.serverTime) - Date.now();
+      // Same board or not, the clock and the play window are always current.
+      sync(next);
       if ('unchanged' in next) { setError(""); return; }
       const changed = version.current !== next.version || !stateRef.current;
       apply(next);
@@ -166,7 +199,7 @@ export function CatchmindProvider({ children, preview, viewer, accountKey, trans
     }
   }, [apply, remember, preview, refresh, invalidateAccount]);
   const gallery = useCallback(async (before?: number) => previewEngine.current ? previewEngine.current.gallery(before) : api.catchmindGallery(before), []);
-  const value = useMemo(() => ({ state, loading, busy, error, pending, refresh, mutate, gallery, serverNow }),
-    [state, loading, busy, error, pending, refresh, mutate, gallery, serverNow]);
+  const value = useMemo(() => ({ state, loading, busy, error, pending, playClosed, refresh, mutate, gallery, serverNow }),
+    [state, loading, busy, error, pending, playClosed, refresh, mutate, gallery, serverNow]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

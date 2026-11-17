@@ -6,6 +6,7 @@ import { GAME_RULES } from '../shared/balance';
 import type { GameId } from '../shared/types';
 import { readGameRules } from './game-settings';
 import { notify } from './notifications';
+import { hashToken } from './crypto';
 import { AI_RULES } from '../shared/balance';
 import { writeCloseNews, writeMorningNews, type AiWriters } from './stock-ai';
 import type { Candle, MarketClock, MarketHoliday, StockDetailView, StockHomeSummary, StockMarketView, StockNewsItem, StockNewsKind, StockNewsPage, StockQuote, StockTradeResponse, StockTradeView, StockUnchanged } from '../shared/stock-types';
@@ -204,27 +205,55 @@ function quote(row: StockRow, date: string, holding?: HoldingRow): StockQuote {
 }
 const VISIBLE_NEWS = 'publish_at <= ? AND hidden = 0 AND (audience_user_id IS NULL OR audience_user_id = ?)';
 
+/** A market version is `<price version>.<content stamp>`; the price version
+ * (two dot-separated numbers) moves with every tick and news step. Versions
+ * from before the content stamp are the price version alone. */
+const pricePart = (version: string) => version.split('.').slice(0, 2).join('.');
+/** Whether prices moved between the reader's last version and this one. */
+export const stockPricesMoved = (since: string | undefined, version: string): boolean => !since || pricePart(since) !== pricePart(version);
+
+/** The market list. `since` is the version of the reader's last full answer;
+ * the short "unchanged" answer is given only when nothing in that answer would
+ * differ: prices, the listed news, the closing articles, the gold and the
+ * holdings. Prices standing still say nothing about the rest: the closing
+ * article is written after the last tick, a whale or a hidden article changes
+ * the news at any moment, and gold and holdings move with trades elsewhere.
+ * So the version is the price version plus a stamp of what is shown, and the
+ * shown rows are read either way (a handful of indexed rows, never history). */
 export async function readStockMarket(db: D1Database, secret: string, user: StockUser, now: number, since?: string): Promise<StockMarketView | StockUnchanged> {
   const { rows, holidays } = await advanceStocks(db, secret, now);
-  const version = marketVersion(rows);
   const market = clock(now, holidays);
   const serverTime = new Date(now).toISOString();
-  if (since === version) return { unchanged: true, version, market, serverTime };
   const [holdings, news, gold, closingRows] = await db.batch([
-    db.prepare('SELECT ticker, quantity, cost_basis FROM stock_holdings WHERE user_id = ?').bind(user.id),
+    db.prepare('SELECT ticker, quantity, cost_basis FROM stock_holdings WHERE user_id = ? ORDER BY ticker').bind(user.id),
     db.prepare(`SELECT id, ticker, kind, headline, body, publish_at, effect_bp, source FROM stock_news WHERE ${VISIBLE_NEWS}
       AND kind NOT IN ('close', 'comment', 'weekly') ORDER BY publish_at DESC, id DESC LIMIT 5`).bind(now, user.id),
     db.prepare('SELECT gold FROM user_balances WHERE user_id = ?').bind(user.id),
     // The latest closing articles (one publish time); empty work while the market is open.
+    // The newest one is found first and only its instant is read: asking for
+    // "the three newest" walked back through older news whenever fewer than
+    // three were visible (no weekly report, or no comment for this player).
     db.prepare(`SELECT id, ticker, kind, headline, body, publish_at, effect_bp, source FROM stock_news WHERE ${VISIBLE_NEWS}
-      AND kind IN ('close', 'comment', 'weekly') AND ? = 0 ORDER BY publish_at DESC LIMIT 3`).bind(now, user.id, market.open ? 1 : 0),
+      AND kind IN ('close', 'comment', 'weekly') AND ? = 0
+      AND publish_at = (SELECT publish_at FROM stock_news WHERE ${VISIBLE_NEWS} AND kind IN ('close', 'comment', 'weekly')
+        ORDER BY publish_at DESC LIMIT 1)
+      ORDER BY publish_at DESC LIMIT 3`).bind(now, user.id, market.open ? 1 : 0, now, user.id),
   ]);
   const held = new Map((holdings!.results as HoldingRow[]).map(row => [row.ticker, row]));
   const closingNews = (closingRows!.results as NewsRow[]).filter((row, _, all) => row.publish_at === all[0]!.publish_at).map(newsView);
   const closing = market.open ? null : { summary: closingNews.find(item => item.kind === 'close') ?? null,
     comment: closingNews.find(item => item.kind === 'comment') ?? null, weekly: closingNews.find(item => item.kind === 'weekly') ?? null };
-  return { market, version, stocks: rows.map(row => quote(row, market.date, held.get(row.ticker))), news: (news!.results as NewsRow[]).map(newsView), closing,
-    gold: (gold!.results[0] as { gold: number } | undefined)?.gold ?? 0, canTrade: user.role === 'player', serverTime };
+  const listed = (news!.results as NewsRow[]).map(newsView);
+  const balance = (gold!.results[0] as { gold: number } | undefined)?.gold ?? 0;
+  const article = (item: StockNewsItem | null | undefined) => item ? [item.id, item.source, item.headline] : null;
+  const stamp = (await hashToken(JSON.stringify([
+    listed.map(article), closing && [article(closing.summary), article(closing.comment), article(closing.weekly)],
+    balance, (holdings!.results as HoldingRow[]).map(row => [row.ticker, row.quantity, row.cost_basis]), user.role,
+  ]))).slice(0, 16);
+  const version = `${marketVersion(rows)}.${stamp}`;
+  if (since === version) return { unchanged: true, version, market, serverTime };
+  return { market, version, stocks: rows.map(row => quote(row, market.date, held.get(row.ticker))), news: listed, closing,
+    gold: balance, canTrade: user.role === 'player', serverTime };
 }
 
 export async function readStockDetail(db: D1Database, secret: string, user: StockUser, ticker: string, now: number): Promise<StockDetailView> {

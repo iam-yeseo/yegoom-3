@@ -35,6 +35,15 @@ export const playCloseAt = (date: string): number => Date.parse(`${date}T${PLAY_
 /** True from 23:50 to midnight KST. */
 export const playClosed = (now: number): boolean =>
   new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(11, 19) >= PLAY_RULES.closeTime;
+/** The play window at `now`: whether the 23:50 close is on, and the instant it
+ * next flips (23:50 today, or the coming midnight). A screen that knows the
+ * server's clock can close and reopen its inputs on time from this alone. */
+export function playWindow(now: number): { closed: boolean; changesAt: string } {
+  const date = new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const closed = playClosed(now);
+  const changesAt = closed ? Date.parse(`${date}T00:00:00+09:00`) + 24 * 60 * 60 * 1000 : playCloseAt(date);
+  return { closed, changesAt: new Date(changesAt).toISOString() };
+}
 /** A score belongs to its game day only if it was earned before that day closed. */
 export const scoreCounts = (gameDate: string, earnedAt: number): boolean => earnedAt < playCloseAt(gameDate);
 
@@ -86,6 +95,11 @@ export const CATCHMIND_RULES = {
   pollIntervalMs: 5000, idlePollIntervalMs: 10000,
   skipAfterMs: 10 * 60 * 1000,
   maxImageBytes: 300 * 1024, maxAnswerLength: 80, maxWordLength: 20, galleryPageSize: 9,
+  // A drawing's decoded size is bounded as well as its file size: a few hundred
+  // kilobytes can encode an image that decodes to gigabytes. The canvas is
+  // 680px and exports at 680, 544, 408 or 340px (DrawingCanvas), so one side of
+  // 1,024px leaves room; 1,024 x 1,024 pixels decode to 4MiB of RGBA.
+  canvasSide: 680, maxImageSide: 1024, maxImagePixels: 1024 * 1024,
 } as const;
 /** Public claw economy only; grip settings and counters stay in the server DB. */
 export const CLAW_RULES = {
