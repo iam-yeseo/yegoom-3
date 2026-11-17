@@ -584,8 +584,8 @@ async function useUpLottoTickets(page: Page, goldSelector = '.game-toolbar .gold
 }
 /** Signed-in only: spends every 이용권 held through the API, as another client
  * would, so the next purchase on screen is a gold one. Returns the last state. */
-async function drainTickets(page: Page, kind: 'lotto' | 'speetto') {
-  let state = await shopSnapshot<ShopState>(page, kind);
+async function drainTickets<T extends ShopState>(page: Page, kind: 'lotto' | 'speetto'): Promise<T> {
+  let state = await shopSnapshot<T>(page, kind);
   const held = () => (state.free?.[kind] ?? 0) + (kind === 'lotto' ? state.inventory.lottoTickets : state.inventory.speettoTickets);
   for (let spent = 0; held() > 0; spent++) {
     expect(spent, `${kind} 이용권 never ran out`).toBeLessThan(40);
@@ -824,7 +824,7 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   await expect(page.getByRole('button', { name: /^골드로 사기/ })).toHaveCount(0);
   await expect(page.locator('.shop-buy-bar .shop-purchase-actions button')).toHaveCount(1);
   // Spend the rest elsewhere; this screen then offers gold instead.
-  const drained = await drainTickets(page, 'lotto');
+  const drained = await drainTickets<LottoResponse>(page, 'lotto');
   expect(drained.gold).toBe(before.gold);
   expect(drained.inventory.lottoTickets).toBe(0);
   expect(drained.free?.lotto).toBe(0);
@@ -913,12 +913,28 @@ test('speetto pays at purchase, restores owned tickets after leaving and scratch
   await expect(resultDialog).toHaveCount(0);
 
   // With no 이용권 left the pay button is the gold one.
-  const drained = await drainTickets(page, 'speetto');
+  const drained = await drainTickets<SpeettoResponse>(page, 'speetto');
   expect(drained.inventory.speettoTickets).toBe(0);
   expect(drained.free?.speetto).toBe(0);
   const beforePaid = (await snapshot(page)).user.gold;
   expect(beforePaid).toBe(drained.gold);
+  // Those were scratched on that other device too. (The test Worker's clock is
+  // frozen, so same-instant tickets have no newest; only one stays covered below.)
+  const elsewhere = drained.speetto.tickets.filter(entry => !entry.revealed);
+  expect(elsewhere).toHaveLength(drained.speetto.tickets.length - 1);
+  for (const entry of elsewhere) {
+    const scratched = await page.request.post('/api/shop/speetto/reveal', { data: { ticketId: entry.id }, headers: { Origin: new URL(page.url()).origin } });
+    expect(scratched.status()).toBe(200);
+  }
+  expect((await snapshot(page)).user.gold).toBe(beforePaid);
   await page.reload();
+  // Scratched elsewhere means scratched here: nothing is covered or announced again.
+  await expect(history.locator('.speetto-ticket-row')).toHaveCount(drained.speetto.tickets.length);
+  await expect(history.getByText('긁기 전', { exact: true })).toHaveCount(0);
+  for (const entry of elsewhere) await expect(history.locator(`[data-ticket-id="${entry.id}"]`)).toContainText(entry.won ? '+1,500G' : '낙첨');
+  await expect(cover).toHaveClass(/revealed/);
+  await expect(scratchAll).toHaveCount(0);
+  await expect(resultDialog).toHaveCount(0);
   await expect(ticketPayButton(page)).toHaveCount(0);
   await expect(page.locator('.shop-buy-bar .shop-purchase-actions button')).toHaveCount(1);
   const paid = purchaseResponse(page, 'speetto');
@@ -938,23 +954,25 @@ test('speetto pays at purchase, restores owned tickets after leaving and scratch
   await page.goto('/#/shop');
   await page.goto('/#/shop/speetto');
   await page.reload();
-  // The newest ticket still covered is the one offered.
+  // The ticket still covered is the one offered.
   await expect(card).toHaveAttribute('data-ticket-id', ticket.id);
+  await expect(cover).not.toHaveClass(/revealed/);
   const afterPurchase = (await snapshot(page)).user.gold;
   const saved = revealResponse();
   await scratchAll.click();
   await confirmSpeettoResult(page, result(ticket.won));
   expect((await saved).status()).toBe(200);
   expect((await snapshot(page)).user.gold).toBe(afterPurchase);
-  // Rows are numbered from the oldest; the newest is on top.
+  // Rows count down to 1 at the bottom, in the order the server lists them.
   const rows = history.locator('.speetto-ticket-row');
   const count = data.speetto.tickets.length;
-  await expect(rows).toHaveCount(count);
-  await expect(rows.first()).toHaveAttribute('data-ticket-id', ticket.id);
-  await expect(rows.first().locator('.shop-ticket-order')).toHaveText(String(count));
-  await expect(rows.last()).toHaveAttribute('data-ticket-id', first.id);
-  await expect(rows.last().locator('.shop-ticket-order')).toHaveText('1');
-  await expect(rows.last()).toContainText(first.won ? '+1,500G' : '낙첨');
+  expect(count).toBe(drained.speetto.tickets.length + 1);
+  await expect(rows.locator('.shop-ticket-order')).toHaveText(Array.from({ length: count }, (_, index) => String(count - index)));
+  expect(await rows.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-ticket-id'))))
+    .toEqual((await shopSnapshot<SpeettoResponse>(page, 'speetto')).speetto.tickets.map(entry => entry.id));
+  await expect(history.locator(`[data-ticket-id="${ticket.id}"]`)).toContainText(ticket.won ? '+1,500G' : '낙첨');
+  await expect(history.locator(`[data-ticket-id="${first.id}"]`)).toContainText(first.won ? '+1,500G' : '낙첨');
+  await expect(history.getByText('긁기 전', { exact: true })).toHaveCount(0);
 });
 
 test('administrators cannot purchase any shop item through UI or API', async ({ page }) => {

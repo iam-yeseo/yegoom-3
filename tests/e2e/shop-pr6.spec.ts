@@ -229,6 +229,10 @@ for (const width of [390, 560]) test(`home notice, one pinned pay button, folded
   // The newest ticket still covered is the one offered.
   await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
   await expect(page.locator('.scratch-result')).toHaveCount(0);
+  // Chosen by hand from here on, so the card stays on this ticket once it is scratched.
+  await history.locator(`[data-ticket-id="${first}"]`).click();
+  await expect(history.locator(`[data-ticket-id="${first}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await readyCover(page);
   await capture(page, 'scratch-before', width, info);
   await scratchLine(page, [.15, .48], [.55, .48]);
   // A partial scratch reveals nothing yet: still covered, no result, nothing saved.
@@ -271,6 +275,25 @@ for (const width of [390, 560]) test(`home notice, one pinned pay button, folded
   await expect(page.getByRole('button', { name: '한 번에 긁기', exact: true })).toHaveCount(0);
   await expect(resultDialog(page)).toHaveCount(0);
   expect(data.reveals).toEqual([first, second]);
+  expect(data.writes).toEqual([]);
+});
+
+test('a speetto offered by default stays on screen while its result is announced', async ({ page }) => {
+  const first = '00000000-0000-4000-8000-000000000101';
+  const data = await fixture(page);
+  await page.goto('/#/shop/speetto');
+  await readyCover(page);
+  // Nothing was picked in the list: the newest covered ticket is offered.
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
+  await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
+  await expect(resultDialog(page).locator('h2')).toHaveText('당첨! +1,500G');
+  await expect.poll(() => data.reveals).toEqual([first]);
+  // The card under the modal is still the ticket just scratched, now open,
+  // not the next covered one.
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
+  await expect(cover(page)).toHaveClass(/revealed/);
+  await confirmResult(page, '당첨! +1,500G');
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
   expect(data.writes).toEqual([]);
 });
 
