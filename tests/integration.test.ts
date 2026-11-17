@@ -919,8 +919,8 @@ describe('Worker and D1 integration', () => {
         expect(lotto.gold).toBe(5000);
         const scratch = await request('/api/shop/speetto', { cookie, instance }); expect(scratch.status).toBe(200);
         const speetto = await scratch.json() as SpeettoResponse;
-        expect(speetto.speetto.tickets.map(ticket => ticket.id)).toEqual(['speetto:today', 'speetto:last-visible']);
-        expect(speetto.speetto.tickets[1]).toMatchObject({ purchaseDate: '2026-10-24', createdAt: '2026-10-23T15:00:00.000Z' });
+        // Speetto lists only today's tickets (2026-11-17); lotto keeps its seven days.
+        expect(speetto.speetto.tickets.map(ticket => ticket.id)).toEqual(['speetto:today']);
         expect(await database.prepare("SELECT prize, rank, settled_at FROM lotto_tickets WHERE id = 'lotto:old-unpaid'").first())
           .toMatchObject({ prize: 5000, rank: 1, settled_at: `${TODAY}T09:00:00.000Z` });
         await Promise.all(['/api/bootstrap', '/api/shop/lotto', '/api/shop/speetto'].map(path => request(path, { cookie, instance })));
@@ -977,8 +977,12 @@ describe('Worker and D1 integration', () => {
             measurements.push(row);
             expect(row.bindingCalls).toBeLessThanOrEqual(50); expect(row.rowsWritten).toBe(0);
             if (tickets) {
-              expect(tickets).toHaveLength(baseline ? historicalTickets + 3 : 3);
-              if (!baseline) expect(tickets.map(ticket => ticket.purchaseDate)).toEqual([TODAY, '2026-10-29', '2026-10-24']);
+              // Speetto lists only today's tickets; lotto the last seven days.
+              if (route === 'speetto') expect(tickets.map(ticket => ticket.purchaseDate)).toEqual([TODAY]);
+              else {
+                expect(tickets).toHaveLength(baseline ? historicalTickets + 3 : 3);
+                if (!baseline) expect(tickets.map(ticket => ticket.purchaseDate)).toEqual([TODAY, '2026-10-29', '2026-10-24']);
+              }
             }
             if (!baseline && route === 'bootstrap') {
               expect(body.lottoNotice).toEqual(clockKst === '09:00' ? null : { drawDate: TODAY, tickets: 1, winners: 0, prize: 0 });
