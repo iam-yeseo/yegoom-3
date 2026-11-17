@@ -23,6 +23,7 @@ import { readNotificationSummary } from '../worker/notifications';
 import { isToastWorthy } from '../shared/notifications';
 import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
+import { readTagState } from '../worker/nickname-tags';
 import { maintainDatabase } from '../worker/maintenance';
 import { settleDueRankingRewards } from '../worker/ranking-rewards';
 import { mondayOf } from '../shared/ranking-periods';
@@ -64,11 +65,14 @@ const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds
  * finished week and month (one partial-index probe, at most 2 rows). */
 const STOCK_HOME = { prepares: 1 + 1 + 1 + 1, queries: 1 + 1 + 1 + 1, bindingCalls: 1 + 1 + 1 + 1, rowsRead: 12 + 2 + 12 + 2, rowsWritten: 0 } as const;
 const stockAllowance = (route: string, field: keyof typeof STOCK_HOME) => route.includes('bootstrap') ? STOCK_HOME[field] : 0;
-/** Every successful player write is followed by the achievement check: one
- * batch that reads the facts and the known rows, and, only when something new
- * was earned, one batch of two statements per unlock (the row and its notice).
+/** Every successful player write is followed by the achievement check of that
+ * write's activity: one batch that reads the player and the rows they already
+ * hold (plus the limit-day watermark for a stock check), one statement with
+ * the facts still undecided (none once the activity's one-time achievements are
+ * all held), and, only when something new was earned, one batch of two
+ * statements per unlock (the row and its notice) and the watermark.
  * A first write in a fresh fixture earns up to three at once. */
-const ACHIEVEMENT_SYNC = { prepares: 2 + 2 * 3, queries: 2 + 2 * 3, bindingCalls: 2, rowsRead: 60, rowsWritten: 8 * 3 + 1 } as const;
+const ACHIEVEMENT_SYNC = { prepares: 3 + 1 + 2 * 3 + 1, queries: 3 + 1 + 2 * 3 + 1, bindingCalls: 3, rowsRead: 60, rowsWritten: 8 * 3 + 1 + 2 } as const;
 /** bootstrap also carries up to five of my own fresh achievement notices for the toast. */
 const achievementAllowance = (route: string, field: keyof typeof ACHIEVEMENT_SYNC) =>
   /^POST\b/.test(route) ? ACHIEVEMENT_SYNC[field] : route.includes('bootstrap') && field === 'rowsRead' ? 5 : 0;
@@ -1645,6 +1649,75 @@ describe('Worker and D1 integration', () => {
       expect((await equip(cookie, kept.id)).status).toBe(200);
       expect((await discard(kept.id)).status).toBe(409);
       expect((await discard('someone-else')).status).toBe(404);
+    });
+    it('lists owned tags from their own index and counts today apart, whatever was discarded before', async () => {
+      await giveGold(db, 'yeseo', 1000);
+      const { cookie } = await login('yeseo');
+      const user = { id: 'yeseo', role: 'player' as const };
+      const now = new Date(`${TODAY}T00:00:00Z`);
+      // Two free draws today; one is thrown away at once.
+      const kept = (await (await draw(cookie, 'owned-1')).json() as TagResponse).draw!;
+      const tossed = (await (await draw(cookie, 'owned-2')).json() as TagResponse).draw!;
+      expect((await request('/api/me/nickname-tag/discard', { method: 'POST', body: { tagId: tossed.id }, cookie })).status).toBe(200);
+      // Ten owned tags of every grade from earlier days (one worn), and a material spent today.
+      const grades = ['C', 'S', 'B', 'A', 'C', 'B', 'S', 'A', 'C', 'B'];
+      await db.batch([
+        ...grades.map((grade, index) => db.prepare(`INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at, payment, discarded)
+          VALUES (?, 'yeseo', ?, ?, '느긋한', ?, '2026-10-2' || ?, '2026-10-2' || ? || 'T03:00:0' || ? || '.000Z', 'gold', 0)`)
+          .bind(`old-${index}`, `old-${index}`, grade, index === 3 ? 1 : 0, index % 5, index % 5, index)),
+        db.prepare(`INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at, payment, discarded)
+          VALUES ('material', 'yeseo', 'material', 'C', '느긋한', 0, ?, ?, 'ticket', 1)`).bind(TODAY, `${TODAY}T00:00:00.000Z`),
+      ]);
+      /** The collection as the single query used to build it: every row, filtered afterwards. */
+      const legacy = async () => {
+        const rows = (await db.prepare(`SELECT id, date, discarded FROM nickname_tags WHERE user_id = 'yeseo'
+          ORDER BY equipped DESC, CASE grade WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 3 END, created_at DESC, id`).all<{ id: string; date: string; discarded: number }>()).results;
+        return { ids: rows.filter(row => !row.discarded).map(row => row.id), drawsToday: rows.filter(row => row.date === TODAY).length };
+      };
+      const observed = measuredDatabase(db, now.getTime());
+      const read = async () => {
+        observed.reset();
+        const state = await readTagState(observed.binding, user, now);
+        return { state, rows: observed.rowsRead(), statements: observed.queries.length };
+      };
+      const before = await read();
+      expect(before.state.tags.map(tag => tag.id)).toEqual((await legacy()).ids);
+      expect(before.state.tags).toHaveLength(11);
+      expect(before.state.tags[0]).toMatchObject({ id: 'old-3', equipped: true });
+      expect(before.state.equipped?.id).toBe('old-3');
+      // Drawn today: the kept one, the tossed one and the spent material. Discarding gave nothing back.
+      expect(before.state.drawsToday).toBe(3);
+      expect((await legacy()).drawsToday).toBe(3);
+      expect((await bootstrap(cookie)).dailyFree.tag).toBe(1);
+      expect(before.statements).toBe(3);
+
+      // 2,000 tags discarded over earlier days: the same answer for the same rows read.
+      for (let offset = 0; offset < 2000; offset += 500) {
+        await db.prepare(`INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at, payment, discarded)
+          SELECT 'gone-' || value, 'yeseo', 'gone-' || value, 'C', '배가 고픈', 0, date('2026-10-01', '-' || (value % 300) || ' days'), '2025-01-01T00:00:00.000Z', 'gold', 1 FROM json_each(?)`)
+          .bind(JSON.stringify(Array.from({ length: 500 }, (_, index) => offset + index))).run();
+      }
+      const after = await read();
+      expect(after.state).toEqual(before.state);
+      expect(after.state.tags.map(tag => tag.id)).toEqual((await legacy()).ids);
+      expect(after.rows).toBe(before.rows);
+      expect(after.rows).toBeLessThanOrEqual(40);
+      console.info(`Nickname tag state D1 rows_read: ${before.rows} with 11 owned tags, ${after.rows} after 2,000 more discarded tags`);
+      const plan = (await db.prepare(`EXPLAIN QUERY PLAN SELECT * FROM nickname_tags WHERE user_id = ? AND discarded = 0
+        ORDER BY equipped DESC, CASE grade WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 3 END, created_at DESC, id`).bind('yeseo').all<{ detail: string }>()).results.map(row => row.detail).join(' | ');
+      expect(plan).toContain('nickname_tags_owned_idx');
+
+      // The receipt of the discarded draw is still returned for its request; nothing new is drawn.
+      const replay = await (await draw(cookie, 'owned-2')).json() as TagResponse;
+      expect(replay.draw).toMatchObject({ id: tossed.id });
+      expect(replay.tags.drawsToday).toBe(3);
+      expect(replay.tags.tags.map(tag => tag.id)).toEqual(after.state.tags.map(tag => tag.id));
+      expect(replay.tags.tags.map(tag => tag.id)).toContain(kept.id);
+      // The daily limit still counts discarded draws: two more, then no more.
+      expect((await draw(cookie, 'owned-4')).status).toBe(200);
+      expect((await draw(cookie, 'owned-5')).status).toBe(200);
+      const sixth = await draw(cookie, 'owned-6');
+      expect([sixth.status, (await sixth.json() as { error: { code: string } }).error.code]).toEqual([409, 'DAILY_LIMIT']);
     });
     describe('evolution', () => {
       const evolve = (cookie: string, body: Record<string, unknown>, instance: Miniflare) =>

@@ -13,20 +13,24 @@ function tagView(row: TagRow): NicknameTag {
 }
 const GRADE_ORDER = `CASE grade WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 3 END`;
 
-/** My collection: equipped first, then S→C, newest first; plus today's draw count. One query. */
+/** My collection: equipped first, then S→C, newest first; plus today's draw
+ * and evolution counts. One batch of three statements.
+ * The list asks only for tags still owned (the owned-tags index of migration
+ * 0033), so tags thrown away or spent on evolutions over the months cost
+ * nothing. Today's draws are counted apart, by date, over every tag drawn
+ * today: a tag drawn and then discarded or used as material still counts
+ * toward the daily limit, exactly as before. */
 export async function readTagState(db: D1Database, user: ShopUser, now: Date): Promise<NicknameTagState> {
   const today = dayWindow(now).date;
-  const [list, evolves] = await db.batch<TagRow & { n: number }>([
-    db.prepare(`SELECT * FROM nickname_tags WHERE user_id = ?
+  const [list, draws, evolves] = await db.batch<TagRow & { n: number }>([
+    db.prepare(`SELECT * FROM nickname_tags WHERE user_id = ? AND discarded = 0
       ORDER BY equipped DESC, ${GRADE_ORDER}, created_at DESC, id`).bind(user.id),
+    db.prepare('SELECT COUNT(*) AS n FROM nickname_tags WHERE user_id = ? AND date = ?').bind(user.id, today),
     db.prepare('SELECT COUNT(*) AS n FROM nickname_tag_evolutions WHERE user_id = ? AND date = ?').bind(user.id, today),
   ]);
-  const rows = list!.results;
-  // Discarded tags (thrown away, or spent on an evolution) still count toward
-  // today's draws but leave the collection.
-  const tags = rows.filter(row => !row.discarded).map(tagView);
+  const tags = list!.results.map(tagView);
   return { tags, equipped: tags.find(tag => tag.equipped) ?? null,
-    drawsToday: rows.filter(row => row.date === today).length,
+    drawsToday: draws!.results[0]?.n ?? 0,
     dailyLimit: NICKNAME_TAG_RULES.dailyLimit, price: NICKNAME_TAG_RULES.price,
     evolvesToday: evolves!.results[0]?.n ?? 0 };
 }

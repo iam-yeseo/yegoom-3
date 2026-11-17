@@ -290,7 +290,7 @@ export async function settleDueLotto(db: D1Database, now: Date): Promise<void> {
   // keeps the same call budget, with payouts, notices and settlement atomic.
   if (writes.length) await db.batch(writes);
   // A first prize or a blank ticket completes an achievement for its owner.
-  await syncAchievementsFor(db, tickets.map(ticket => ticket.user_id), now);
+  await syncAchievementsFor(db, tickets.map(ticket => ticket.user_id), now, ['lotto']);
 }
 
 /** A daily free use is stored as a zero-cost gold row marked free, so no gold or

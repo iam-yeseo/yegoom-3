@@ -7,6 +7,7 @@ import type { GameId } from '../shared/types';
 import { readGameRules } from './game-settings';
 import { notify } from './notifications';
 import { hashToken } from './crypto';
+import { syncMarketAchievements } from './achievements';
 import { AI_RULES } from '../shared/balance';
 import { writeCloseNews, writeMorningNews, type AiWriters } from './stock-ai';
 import type { Candle, MarketClock, MarketHoliday, StockDetailView, StockHomeSummary, StockMarketView, StockNewsItem, StockNewsKind, StockNewsPage, StockQuote, StockTradeResponse, StockTradeView, StockUnchanged } from '../shared/stock-types';
@@ -516,7 +517,14 @@ export async function runStockCron(db: D1Database, secret: string, writers: AiWr
     const seeds = await daySeeds(secret, [date, 'phase']);
     await writeMorningNews(db, writers, seeds.get(date)!, date, rows, now, seeds.get('phase')!);
   }
-  if (time === '18:00') await writeCloseNews(db, writers, date, rows, now);
+  if (time === '18:00') {
+    await writeCloseNews(db, writers, date, rows, now);
+    // The day's candles and delistings are final: credit what they earned.
+    // A missed run loses nothing; the next check starts from the same watermark.
+    await syncMarketAchievements(db, new Date(now)).catch(error => {
+      console.error('Market achievement sync failed', error instanceof Error ? error.name : 'UnknownError');
+    });
+  }
 }
 
 // Administrator: published news only (never future), hide/show, and the AI switch.

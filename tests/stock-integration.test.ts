@@ -6,7 +6,7 @@ import { Miniflare } from 'miniflare';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { hashPassword } from '../worker/crypto';
 import { kstTimestamp } from '../shared/market-calendar';
-import { readStockMarket } from '../worker/stocks';
+import { advanceStocks, readStockMarket, runStockCron } from '../worker/stocks';
 import { writeCloseNews } from '../worker/stock-ai';
 import { marketVersion, type StockRow } from '../shared/stock-market';
 import type { AdminState } from '../shared/admin';
@@ -443,6 +443,65 @@ describe('stock market API', () => {
     expect(await market.db.prepare("SELECT COUNT(*) AS n FROM stock_news WHERE kind = 'game'").first('n')).toBe(4);
   });
 
+  it('finds recently published game results by date, however many older rounds exist, settled ones included', async () => {
+    const market = await Market.create(yesterdayClose);
+    const now = kst('2026-11-05', '10:05');
+    // Three recent rounds inside the look-back: two already settled, one not; one of them already has its event.
+    for (const [game, date, answer, settled] of [['wake', '2026-11-04', '07:50:00', 1], ['offwork', '2026-11-04', '17:40:00', 0], ['luck', '2026-11-03', '90', 1]] as const) {
+      await market.db.prepare('INSERT INTO game_rounds (game_id, round_date, answer, revealed_at, settled_at, updated_at) VALUES (?, ?, ?, ?, ?, 0)')
+        .bind(game, date, answer, kst(date, '19:00'), settled ? kst(date, '19:01') : null).run();
+    }
+    const ROUNDS_SQL = `SELECT r.game_id, r.round_date, r.answer, COALESCE(r.revealed_at, r.reveal_at) AS published_at FROM game_rounds r
+      WHERE r.answer IS NOT NULL AND (r.revealed_at IS NOT NULL OR r.reveal_at <= ?) AND r.round_date >= ?
+        AND NOT EXISTS (SELECT 1 FROM stock_events e WHERE e.id = 'game:' || r.game_id || ':' || r.round_date)`;
+    const lookback = '2026-11-01';
+    const plan = async () => (await market.db.prepare(`EXPLAIN QUERY PLAN ${ROUNDS_SQL}`).bind(now, lookback).all<{ detail: string }>()).results.map(row => row.detail).join(' | ');
+    const rowsRead = async () => (await market.db.prepare(ROUNDS_SQL).bind(now, lookback).all()).meta.rows_read;
+    expect(await plan()).toContain('game_rounds_answered_date_idx');
+    const recent = (await market.db.prepare(ROUNDS_SQL).bind(now, lookback).all<{ game_id: string; round_date: string }>()).results;
+    expect(recent.map(round => `${round.game_id}:${round.round_date}`).sort()).toEqual(['luck:2026-11-03', 'offwork:2026-11-04', 'wake:2026-11-04']);
+    const few = await rowsRead();
+
+    // 10,000 settled rounds from the years before (every one answered and published).
+    for (let offset = 0; offset < 3334; offset += 500) {
+      await market.db.prepare(`INSERT INTO game_rounds (game_id, round_date, answer, revealed_at, settled_at, updated_at)
+        SELECT g.value, date('2026-10-01', '-' || d.value || ' days'), CASE g.value WHEN 'luck' THEN '50' ELSE '08:00:00' END, 1, 2, 0
+        FROM json_each('["wake","offwork","luck"]') g, json_each(?) d`)
+        .bind(JSON.stringify(Array.from({ length: Math.min(500, 3334 - offset) }, (_, index) => offset + index))).run();
+    }
+    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM game_rounds').first('n')).toBe(10_005);
+    expect(await plan()).toContain('game_rounds_answered_date_idx');
+    const many = await rowsRead();
+    // What the same statement costs without the index: every answered round.
+    const scan = (await market.db.prepare(ROUNDS_SQL.replace('FROM game_rounds r', 'FROM game_rounds r NOT INDEXED')).bind(now, lookback).all()).meta.rows_read;
+    console.info(`Stock game-result lookup D1 rows_read: ${few} with 3 rounds, ${many} with 10,005 rounds (full scan of the same query: ${scan})`);
+    expect(many).toBe(few);
+    expect(many).toBeLessThanOrEqual(12);
+    expect(scan).toBeGreaterThanOrEqual(10_005);
+
+    // The advance itself (as a stock read runs it) creates exactly the recent rounds' events, settled or not, once.
+    let lookup = 0;
+    const metered = new Proxy(market.db, { get(target, key) {
+      const value = Reflect.get(target, key);
+      if (key === 'prepare') return (sql: string) => target.prepare(sql.replaceAll("unixepoch('now') * 1000", String(now)));
+      if (key === 'batch') return async (statements: never[]) => {
+        const results = await target.batch(statements);
+        // The first batch of an advance is: state, holidays, new game results, pending events.
+        if (results.length === 4 && lookup === 0) lookup = results[2]!.meta.rows_read ?? 0;
+        return results;
+      };
+      return typeof value === 'function' ? value.bind(target) : value;
+    } }) as unknown as D1Database;
+    await advanceStocks(metered, SECRET, now);
+    expect(lookup).toBe(many);
+    const events = (await market.db.prepare("SELECT id, ticker FROM stock_events WHERE kind = 'game' ORDER BY id").all()).results;
+    expect(events).toEqual([{ id: 'game:luck:2026-11-03', ticker: 'YEDO' }, { id: 'game:offwork:2026-11-04', ticker: 'SIWN' }, { id: 'game:wake:2026-11-04', ticker: 'MINJ' }]);
+    await advanceStocks(metered, SECRET, now + 1000);
+    expect(await market.db.prepare("SELECT COUNT(*) AS n FROM stock_events WHERE kind = 'game'").first('n')).toBe(3);
+    // Nothing from before the look-back became an event.
+    expect(await market.db.prepare("SELECT COUNT(*) AS n FROM stock_events WHERE id LIKE 'game:%:2026-10-%' OR id LIKE 'game:%:2025%'").first('n')).toBe(0);
+  });
+
   it('applies results published after the close at the next open, and locks the author until then', async () => {
     const market = await Market.create(kst('2026-11-05', '17:50'));
     const published = kst('2026-11-05', '18:40');
@@ -541,6 +600,31 @@ describe('stock market API', () => {
     ]);
     expect(await unlocked()).toEqual(['stock_buy', 'stock_delisted', 'stock_gain_100', 'stock_gain_1000', 'stock_gain_2000', 'stock_gain_500',
       'stock_limit_down', 'stock_limit_up', 'stock_loss_100', 'stock_loss_1000', 'stock_loss_500', 'stock_sell']);
+  });
+
+  it('credits market achievements from the 18:00 Cron, without any request from the holder', async () => {
+    const market = await Market.create(kst('2026-11-05', '17:50'));
+    // min bought SOAR yesterday, the day it closed at the upper limit; siwon never traded.
+    await market.db.batch([
+      market.db.prepare(`INSERT INTO stock_trades (id, user_id, request_id, ticker, side, quantity, price, fee, total, cost_basis, date, created_at)
+        VALUES ('held', 'min', 'held', 'SOAR', 'buy', 1, 760, 8, 768, 768, '2026-11-04', '2026-11-04T01:00:00.000Z')`),
+      market.db.prepare("INSERT INTO stock_holdings (user_id, ticker, quantity, cost_basis) VALUES ('min', 'SOAR', 1, 768)"),
+      market.db.prepare("INSERT INTO stock_daily (ticker, date, open, high, low, close) VALUES ('SOAR', '2026-11-03', 750, 760, 740, 750), ('SOAR', '2026-11-04', 760, 862, 760, 862)"),
+    ]);
+    const now = kst('2026-11-05', '18:00') + 20_000;
+    const cronDb = new Proxy(market.db, { get(target, key) {
+      const value = Reflect.get(target, key);
+      if (key === 'prepare') return (sql: string) => target.prepare(sql.replaceAll("unixepoch('now') * 1000", String(now)));
+      return typeof value === 'function' ? value.bind(target) : value;
+    } }) as unknown as D1Database;
+    const rows = async () => (await market.db.prepare('SELECT user_id, key FROM achievements ORDER BY user_id, key').all()).results;
+    expect(await rows()).toEqual([]);
+    await runStockCron(cronDb, SECRET, {}, now);
+    expect(await rows()).toEqual([{ user_id: 'min', key: 'stock_limit_up' }, { user_id: 'min', key: 'welcome' }]);
+    // Today's candles are final after the close; the watermark stops at the last finished day before today.
+    expect(await market.db.prepare("SELECT stock_limit_date FROM achievement_scans WHERE user_id = 'min'").first('stock_limit_date')).toBe('2026-11-04');
+    expect(await market.db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE kind = 'achievement' AND user_id = 'min'").first('n')).toBe(2);
+    expect(await market.db.prepare("SELECT COUNT(*) AS n FROM stock_news WHERE id = 'close:2026-11-05'").first('n')).toBe(1);
   });
 
   it('returns 503 until the seed secret is configured', async () => {
