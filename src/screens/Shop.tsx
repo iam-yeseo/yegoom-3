@@ -346,6 +346,8 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
   function reveal(entry: SpeettoTicket) {
     if (entry.revealed) return;
     // Scratched on the server too: another device shows it open, never covered again.
+    // Keep this ticket on screen: the default would otherwise move on to the next covered one.
+    setSelectedId(entry.id);
     setScratched(previous => new Set(previous).add(entry.id));
     void shop.revealSpeetto(entry.id);
     window.clearTimeout(resultTimer.current);
