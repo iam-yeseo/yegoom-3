@@ -77,6 +77,7 @@ const chips = {
   host: ["출제", "#EEE8FC", "#7556C4"],
   waiting: ["새 판 대기", "#F3EEE8", "#8A8190"],
   off: ["오늘은 쉬어요", "#F3EEE8", "#8A8190"],
+  rest: ["휴무", "#F3EEE8", "#8A8190"],
 } as const;
 type ChipKind = keyof typeof chips;
 interface GameRow {
@@ -112,6 +113,7 @@ function predictionRow(game: GameState, me: string): GameRow {
     name: game.title,
     icon: icons[game.id],
   };
+  if (game.dayOff) return { ...row, chip: "rest", sub: "월요일에 다시 열려요", right: "" };
   if (!game.rules.enabled) return { ...row, chip: "off", sub: "오늘은 이 게임을 쉬어요", right: "" };
   const author = game.authorUsername === me;
   if (game.phase === "revealed") {

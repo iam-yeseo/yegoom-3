@@ -1,11 +1,11 @@
-import { DAILY_FREE, KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, NICKNAME_TAG_RULES, SHOP_HISTORY_DAYS, SPEETTO_RULES, SLOT_RULES, attendanceTickets, kujiCost, type DailyFreeKind, lottoPrize, lottoRank } from '../shared/balance';
+import { DAILY_FREE, KUJI_RULES, LAUNCH_GIFT, LOTTO_RULES, NICKNAME_TAG_RULES, SHOP_HISTORY_DAYS, TAG_EVOLUTION_RULES, SPEETTO_RULES, SLOT_RULES, attendanceTickets, kujiCost, type DailyFreeKind, lottoPrize, lottoRank } from '../shared/balance';
 import type { KujiDraw,
   Inventory, KujiCell, KujiGrade, KujiPurchase, KujiPurchaseInput, KujiResponse,
   LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoTicket, ShopKind, ShopPayment,
   ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoSymbol, SpeettoTicket, SlotSpin, SlotSpinInput, SlotResponse,
-  NicknameTag, NicknameTagState, TagDrawInput, TagResponse,
+  NicknameTag, NicknameTagState, TagDrawInput, TagEvolution, TagEvolveInput, TagResponse,
 } from '../shared/types';
-import { drawNicknameTag } from '../shared/nickname-tags';
+import { drawNicknameTag, evolutionChance, nextTagGrade } from '../shared/nickname-tags';
 import { slotResult } from '../shared/slot';
 
 const DAY = 86_400_000;
@@ -56,6 +56,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
   // Nickname tags drawn in this preview visit only.
   const tags: (NicknameTag & { date: string; discarded?: boolean })[] = [];
   const tagReceipts = new Map<string, NicknameTag & { date: string }>();
+  const evolutions: (TagEvolution & { date: string })[] = [];
   const GRADE_RANK = { S: 0, A: 1, B: 2, C: 3 } as const;
   const draws = new Map<string, number[]>();
   const receipts = new Map<string, {
@@ -162,8 +163,8 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     }, ...(purchase ? { purchase } : {}) });
   }
   function speetto(now: Date, purchase?: SpeettoTicket): SpeettoResponse {
-    const cutoff = nextDate(kstDate(now), -(SHOP_HISTORY_DAYS - 1));
-    return structuredClone({ ...state(now), speetto: { tickets: speettoTickets.filter(ticket => ticket.purchaseDate >= cutoff) }, ...(purchase ? { purchase } : {}) });
+    const today = kstDate(now);
+    return structuredClone({ ...state(now), speetto: { tickets: speettoTickets.filter(ticket => ticket.purchaseDate === today) }, ...(purchase ? { purchase } : {}) });
   }
   function slot(now: Date, spin?: SlotSpin): SlotResponse {
     const cutoff = nextDate(kstDate(now), -(SHOP_HISTORY_DAYS - 1));
@@ -178,10 +179,11 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
       || GRADE_RANK[left.grade] - GRADE_RANK[right.grade] || right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id))
       .map(({ date: _date, discarded: _discarded, ...tag }) => tag);
     return { tags: list, equipped: list.find(tag => tag.equipped) ?? null,
-      drawsToday: tags.filter(tag => tag.date === today).length, dailyLimit: NICKNAME_TAG_RULES.dailyLimit, price: NICKNAME_TAG_RULES.price };
+      drawsToday: tags.filter(tag => tag.date === today).length, dailyLimit: NICKNAME_TAG_RULES.dailyLimit, price: NICKNAME_TAG_RULES.price,
+      evolvesToday: evolutions.filter(entry => entry.date === today).length };
   }
-  function tagResponse(now: Date, draw?: NicknameTag): TagResponse {
-    return structuredClone({ ...state(now), tags: tagState(now), ...(draw ? { draw } : {}) });
+  function tagResponse(now: Date, draw?: NicknameTag, evolution?: TagEvolution): TagResponse {
+    return structuredClone({ ...state(now), tags: tagState(now), ...(draw ? { draw } : {}), ...(evolution ? { evolution } : {}) });
   }
   function lottoNotice(now = new Date()): LottoNotice | null {
     settle(now);
@@ -292,7 +294,7 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     const purchase: SpeettoTicket = { id: crypto.randomUUID(), requestId: input.requestId, cells: resultCells, won,
       purchaseDate: kstDate(now),
       prize: won ? SPEETTO_RULES.prize : 0, payment: input.payment,
-      cost: input.payment === 'gold' ? SPEETTO_RULES.price : 0, createdAt: now.toISOString() };
+      cost: input.payment === 'gold' ? SPEETTO_RULES.price : 0, createdAt: now.toISOString(), revealed: false };
     record('gold', purchase.prize, '스피또 당첨', now);
     speettoTickets.unshift(purchase);
     receipts.set(input.requestId, { kind: 'speetto', payload, purchase });
@@ -349,7 +351,41 @@ export function createShopPreview(initialGold: number, initialAttendanceBonus = 
     tag.discarded = true;
     return tagResponse(now);
   }
-  return { read, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, discardTag, lottoNotice,
+  function revealSpeetto(ticketId: string) {
+    const ticket = speettoTickets.find(entry => entry.id === ticketId);
+    if (ticket) ticket.revealed = true;
+  }
+  /** The server's evolution rules, with this visit's tags (shared/balance.ts). */
+  function evolveTag(input: TagEvolveInput): TagResponse {
+    const now = new Date();
+    begin(now);
+    if (typeof input.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.requestId)) throw new Error('진화 요청을 다시 시도해 주세요.');
+    const previous = evolutions.find(entry => entry.requestId === input.requestId);
+    if (previous) { const { date: _date, ...evolution } = previous; return tagResponse(now, undefined, evolution); }
+    const base = tags.find(tag => tag.id === input.tagId && !tag.discarded);
+    const material = tags.find(tag => tag.id === input.materialId && !tag.discarded);
+    if (!base || !material || base === material) throw new Error('내가 모은 별명 태그가 아니에요.');
+    if (base.text !== material.text) throw new Error('같은 별명끼리만 진화할 수 있어요.');
+    if (material.equipped) throw new Error('달고 있는 별명 태그는 재료로 쓸 수 없어요. 먼저 떼어 주세요.');
+    const target = nextTagGrade(base.grade);
+    const chance = evolutionChance(base.grade, material.grade, TAG_EVOLUTION_RULES);
+    if (!target || !chance) throw new Error('S등급 별명 태그는 더 진화하지 않아요.');
+    const today = kstDate(now);
+    const cost = evolutions.filter(entry => entry.date === today).length < TAG_EVOLUTION_RULES.dailyFree ? 0 : TAG_EVOLUTION_RULES.price;
+    if (gold < cost) throw new Error('골드가 부족해요');
+    record('gold', -cost, '별명 태그 진화', now);
+    const success = Math.random() * 100 < chance.total;
+    const materialLost = success || Math.random() * 100 < TAG_EVOLUTION_RULES.loseOnFailPercent;
+    const fromGrade = base.grade, materialGrade = material.grade;
+    if (success) base.grade = target;
+    if (materialLost) material.discarded = true;
+    const { date: _date, discarded: _discarded, ...tag } = base;
+    const evolution: TagEvolution = { requestId: input.requestId, tag, text: base.text, fromGrade, toGrade: target, materialGrade,
+      chance: chance.total, success, materialLost, cost };
+    evolutions.push({ ...evolution, date: today });
+    return tagResponse(now, undefined, evolution);
+  }
+  return { read, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, discardTag, evolveTag, revealSpeetto, lottoNotice,
     get equippedTag() { const tag = tags.find(entry => entry.equipped); return tag ? { grade: tag.grade, text: tag.text } : null; },
     claimLaunchGift() {
       const now = new Date();

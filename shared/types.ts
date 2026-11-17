@@ -75,6 +75,8 @@ export interface GameState {
   canPredict: boolean;
   canEditAnswer: boolean;
   canReveal: boolean;
+  /** Set on a rest day (weekend): no round today; the next one opens at this instant. */
+  dayOff?: { reason: 'weekend'; nextOpenAt: string } | null;
 }
 export interface LedgerEntry {
   id: string;
@@ -187,7 +189,10 @@ export interface SpeettoPurchaseInput { requestId: string; payment: ShopPayment 
 export interface SpeettoTicket {
   id: string; requestId: string; cells: SpeettoSymbol[]; won: boolean; prize: number;
   payment: ShopPayment; cost: number; purchaseDate: string; createdAt: string;
+  /** Scratched open on any device; a scratched ticket is never covered again. */
+  revealed: boolean;
 }
+export interface SpeettoRevealInput { ticketId: string }
 export interface SpeettoState { tickets: SpeettoTicket[] }
 export interface SpeettoResponse extends ShopState { speetto: SpeettoState; purchase?: SpeettoTicket }
 
@@ -382,7 +387,17 @@ export interface NicknameTagState {
   tags: NicknameTag[];
   equipped: NicknameTag | null;
   drawsToday: number; dailyLimit: number; price: number;
+  /** Evolution attempts made today (free ones first, see TAG_EVOLUTION_RULES). */
+  evolvesToday: number;
 }
+/** One evolution attempt. `tag` is the evolved tag after the attempt (its grade
+ * rose on success); the material is gone when `materialLost`. */
+export interface TagEvolution {
+  requestId: string; tag: NicknameTag; text: string;
+  fromGrade: NicknameTagGrade; toGrade: NicknameTagGrade; materialGrade: NicknameTagGrade;
+  chance: number; success: boolean; materialLost: boolean; cost: number;
+}
+export interface TagEvolveInput { requestId: string; tagId: string; materialId: string }
 export interface TagDrawInput { requestId: string; /** Spend one of today's free draws. */ free?: boolean }
 export interface TagEquipInput { tagId: string | null }
-export interface TagResponse extends ShopState { tags: NicknameTagState; draw?: NicknameTag }
+export interface TagResponse extends ShopState { tags: NicknameTagState; draw?: NicknameTag; evolution?: TagEvolution }

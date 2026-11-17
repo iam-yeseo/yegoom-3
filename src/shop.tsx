@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import type { Inventory, KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState, SlotResponse, SlotSpinInput, SlotState, NicknameTagState, NicknameTagView, TagDrawInput, TagResponse } from "../shared/types";
+import type { Inventory, KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState, SlotResponse, SlotSpinInput, SlotState, NicknameTagState, NicknameTagView, TagDrawInput, TagEvolveInput, TagResponse } from "../shared/types";
 import { LOTTO_RULES } from "../shared/balance";
 import { noticeDate } from "./lotto-notice";
 import { api, ApiFailure } from "./api";
@@ -13,6 +13,8 @@ export type PendingPurchase =
   | { kind: "tag"; input: TagDrawInput };
 type ShopResponse = ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse | TagResponse;
 interface ShopContextValue extends ShopState {
+  /** Names this account's device-local notes (e.g. which draw was already shown). */
+  accountKey: string;
   kuji: KujiState | null;
   lotto: LottoState | null;
   speetto: SpeettoState | null;
@@ -30,6 +32,10 @@ interface ShopContextValue extends ShopState {
   /** Not a purchase: wearing or removing a tag never changes a balance. */
   equipTag: (tagId: string | null) => Promise<TagResponse>;
   discardTag: (tagId: string) => Promise<TagResponse>;
+  /** One evolution attempt; the request id makes a retry return the same result. */
+  evolveTag: (input: TagEvolveInput) => Promise<TagResponse>;
+  /** Records that a speetto was scratched, so it stays open on every device. */
+  revealSpeetto: (ticketId: string) => Promise<void>;
   claimPreviewLaunchGift: () => { inventory: Inventory; awarded: boolean };
 }
 const ShopContext = createContext<ShopContextValue | null>(null);
@@ -229,6 +235,26 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
       throw e;
     } finally { writeInFlight.current = false; }
   }, [apply, syncPreview]);
+  const evolveTag = useCallback(async (input: TagEvolveInput) => {
+    if (writeInFlight.current || pendingRef.current) throw new Error("진행 중인 구매 결과를 먼저 확인해 주세요.");
+    generation.current++;
+    writeInFlight.current = true;
+    setError("");
+    try {
+      const engine = syncPreview();
+      const next = await callbacks.current.transact(async () => engine ? engine.evolveTag(input) : api.evolveTag(input));
+      apply(next);
+      return next;
+    } finally { writeInFlight.current = false; }
+  }, [apply, syncPreview]);
+  const revealSpeetto = useCallback(async (ticketId: string) => {
+    // Shown as scratched at once; the server copy only matters to other devices
+    // and later visits, so a failed save is retried by the next reveal or read.
+    setSpeetto(current => current && { tickets: current.tickets.map(ticket => ticket.id === ticketId ? { ...ticket, revealed: true } : ticket) });
+    const engine = syncPreview();
+    if (engine) { engine.revealSpeetto(ticketId); return; }
+    await api.revealSpeetto(ticketId).catch(() => {});
+  }, [syncPreview]);
   const claimPreviewLaunchGift = useCallback(() => {
     const engine = syncPreview();
     if (!engine) throw new Error("미리보기에서만 사용할 수 있어요.");
@@ -238,7 +264,7 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     apply(result.state);
     return { inventory: result.state.inventory, awarded: result.awarded };
   }, [syncPreview, apply]);
-  return <ShopContext.Provider value={{ ...state, kuji, lotto, speetto, slot, tags, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, discardTag, claimPreviewLaunchGift }}>{children}</ShopContext.Provider>;
+  return <ShopContext.Provider value={{ ...state, accountKey, kuji, lotto, speetto, slot, tags, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, discardTag, evolveTag, revealSpeetto, claimPreviewLaunchGift }}>{children}</ShopContext.Provider>;
 }
 
 /** One 이용권 count per item: today's free uses (spent first, reset at KST

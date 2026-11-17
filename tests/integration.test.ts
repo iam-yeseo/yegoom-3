@@ -1335,6 +1335,40 @@ describe('Worker and D1 integration', () => {
     });
   });
 
+  describe('weekend rest for prediction games', () => {
+    it('opens no round on Saturday or Sunday and says when the next one opens', async () => {
+      const instance = runtime(await workerAt('2026-10-31T01:00:00Z')); // Saturday 10:00 KST
+      try {
+        const database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        const { cookie } = await login('yeseo', instance);
+        const games = (await (await request('/api/bootstrap', { cookie, instance })).json() as BootstrapResponse).games;
+        expect(games.map(game => game.id)).toEqual(['wake', 'offwork', 'luck']);
+        for (const game of games) {
+          expect(game).toMatchObject({ phase: 'closed', canPredict: false, canEditAnswer: false, canReveal: false,
+            dayOff: { reason: 'weekend', nextOpenAt: '2026-11-01T15:00:00.000Z' } }); // Monday 00:00 KST
+        }
+        const refused = async (path: string, method: string, body: Record<string, unknown>, who = cookie) => {
+          const response = await request(path, { method, cookie: who, instance, body: { roundDate: '2026-10-31', ...body } });
+          expect(response.status, path).toBe(409);
+          expect((await response.json() as { error: { code: string } }).error.code, path).toBe('GAME_OFF');
+        };
+        await refused('/api/games/wake/prediction', 'PUT', { value: '08:00:00' });
+        await refused('/api/games/offwork/prediction', 'PUT', { value: '18:00:00' });
+        await refused('/api/games/wake/wake', 'POST', {}, (await login('min', instance)).cookie);
+        await refused('/api/games/luck/photo', 'PUT', { image: LUCK_PHOTO });
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM game_rounds').first<number>('n')).toBe(0);
+        expect(await database.prepare('SELECT COUNT(*) AS n FROM predictions').first<number>('n')).toBe(0);
+      } finally { await instance.dispose(); }
+    });
+    it('keeps weekday rounds open', async () => {
+      const { cookie } = await login('yeseo');
+      const games = (await bootstrap(cookie)).games;
+      expect(games.every(game => game.dayOff === null)).toBe(true);
+      expect(games.find(game => game.id === 'wake')!.canPredict).toBe(true);
+    });
+  });
+
   describe('nickname tags', () => {
     async function giveGold(database: Database, userId: string, amount: number) {
       await database.prepare(`INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at)
@@ -1455,6 +1489,117 @@ describe('Worker and D1 integration', () => {
       expect((await equip(cookie, kept.id)).status).toBe(200);
       expect((await discard(kept.id)).status).toBe(409);
       expect((await discard('someone-else')).status).toBe(404);
+    });
+    describe('evolution', () => {
+      const evolve = (cookie: string, body: Record<string, unknown>, instance: Miniflare) =>
+        request('/api/me/nickname-tag/evolve', { method: 'POST', body, cookie, instance });
+      async function seed(database: Database, tags: [id: string, grade: string, text: string][]) {
+        for (const [id, grade, text] of tags) await database.prepare(`INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at, payment)
+          VALUES (?, 'min', ?, ?, ?, 0, '2026-10-29', '2026-10-29T03:00:00.000Z', 'gold')`).bind(id, `seed-${id}`, grade, text).run();
+      }
+      /** The compiled test artifact fixes every randomInt(100): the success roll and the loss roll. */
+      async function evolving(roll: number, run: (instance: Miniflare, database: Database, cookie: string) => Promise<void>) {
+        const instance = runtime(await workerAt(`${TODAY}T03:00:00Z`, `${TODAY}T03:00:00Z`, roll));
+        try {
+          const database = await instance.getD1Database('DB');
+          await provision(database, migration, passwordHash);
+          await run(instance, database, (await login('min', instance)).cookie);
+        } finally { await instance.dispose(); }
+      }
+      it('raises the tag one grade on success, spends the material and replays the same request', async () => {
+        await evolving(29, async (instance, database, cookie) => { // 29 < 30: C → B succeeds
+          await seed(database, [['base', 'C', '띠용'], ['mat', 'C', '띠용'], ['other', 'C', '작은']]);
+          const response = await evolve(cookie, { requestId: 'evo-1', tagId: 'base', materialId: 'mat' }, instance);
+          expect(response.status).toBe(200);
+          const body = await response.json() as TagResponse;
+          expect(body.evolution).toMatchObject({ fromGrade: 'C', toGrade: 'B', materialGrade: 'C', chance: 30, success: true, materialLost: true, cost: 0, text: '띠용' });
+          expect(body.evolution!.tag).toMatchObject({ id: 'base', grade: 'B' });
+          expect(body.tags.tags.map(tag => [tag.id, tag.grade])).toEqual([['base', 'B'], ['other', 'C']]);
+          expect(body.tags.evolvesToday).toBe(1);
+          const replay = await (await evolve(cookie, { requestId: 'evo-1', tagId: 'base', materialId: 'mat' }, instance)).json() as TagResponse;
+          expect(replay.evolution).toEqual(body.evolution);
+          expect(replay.tags.evolvesToday).toBe(1);
+          // The spent material cannot be used, worn or evolved again.
+          expect((await evolve(cookie, { requestId: 'evo-2', tagId: 'base', materialId: 'mat' }, instance)).status).toBe(404);
+          expect((await request('/api/me/nickname-tag', { method: 'PUT', body: { tagId: 'mat' }, cookie, instance })).status).toBe(404);
+          const unlocked = (await database.prepare("SELECT key FROM achievements WHERE user_id = 'min' AND key LIKE 'tag_evolve%' ORDER BY key").all<{ key: string }>()).results;
+          expect(unlocked.map(row => row.key)).toEqual(['tag_evolve_success']);
+        });
+      });
+      it('adds 3% per grade step between the two tags, up to two steps', async () => {
+        await evolving(17, async (instance, database, cookie) => { // 17 < 15 + 3
+          await seed(database, [['base', 'B', '애매한'], ['mat', 'C', '애매한']]);
+          const body = await (await evolve(cookie, { requestId: 'evo-1', tagId: 'base', materialId: 'mat' }, instance)).json() as TagResponse;
+          expect(body.evolution).toMatchObject({ fromGrade: 'B', toGrade: 'A', chance: 18, success: true });
+        });
+        await evolving(10, async (instance, database, cookie) => { // 10 < 5 + 6
+          await seed(database, [['base', 'A', '애매한'], ['mat', 'C', '애매한']]);
+          const body = await (await evolve(cookie, { requestId: 'evo-1', tagId: 'base', materialId: 'mat' }, instance)).json() as TagResponse;
+          expect(body.evolution).toMatchObject({ fromGrade: 'A', toGrade: 'S', chance: 11, success: true });
+          expect(body.evolution!.tag.grade).toBe('S');
+          const unlocked = (await database.prepare("SELECT key FROM achievements WHERE user_id = 'min' AND key IN ('tag_evolve_s', 'tag_s') ORDER BY key").all<{ key: string }>()).results;
+          expect(unlocked.map(row => row.key)).toEqual(['tag_evolve_s', 'tag_s']);
+        });
+      });
+      it('keeps the tag on failure and loses the material half the time', async () => {
+        await evolving(49, async (instance, database, cookie) => { // 49 >= 30 fails, 49 < 50 loses the material
+          await seed(database, [['base', 'C', '띠용'], ['mat', 'C', '띠용']]);
+          const body = await (await evolve(cookie, { requestId: 'evo-1', tagId: 'base', materialId: 'mat' }, instance)).json() as TagResponse;
+          expect(body.evolution).toMatchObject({ success: false, materialLost: true });
+          expect(body.tags.tags.map(tag => [tag.id, tag.grade])).toEqual([['base', 'C']]);
+          const unlocked = (await database.prepare("SELECT key FROM achievements WHERE user_id = 'min' AND key LIKE 'tag_evolve%' ORDER BY key").all<{ key: string }>()).results;
+          expect(unlocked.map(row => row.key)).toEqual(['tag_evolve_fail', 'tag_evolve_lost']);
+        });
+        await evolving(50, async (instance, database, cookie) => { // 50 >= 50 keeps it
+          await seed(database, [['base', 'C', '띠용'], ['mat', 'C', '띠용']]);
+          const body = await (await evolve(cookie, { requestId: 'evo-1', tagId: 'base', materialId: 'mat' }, instance)).json() as TagResponse;
+          expect(body.evolution).toMatchObject({ success: false, materialLost: false });
+          expect(body.tags.tags.map(tag => tag.id).sort()).toEqual(['base', 'mat']);
+        });
+      });
+      it('gives three free attempts a day and then charges 100 gold each', async () => {
+        await evolving(50, async (instance, database, cookie) => { // always fails, never loses the material
+          await seed(database, [['base', 'C', '띠용'], ['mat', 'C', '띠용']]);
+          for (const index of [1, 2, 3]) {
+            const body = await (await evolve(cookie, { requestId: `free-${index}`, tagId: 'base', materialId: 'mat' }, instance)).json() as TagResponse;
+            expect(body.evolution!.cost).toBe(0);
+            expect(body.tags.evolvesToday).toBe(index);
+          }
+          const broke = await evolve(cookie, { requestId: 'paid-1', tagId: 'base', materialId: 'mat' }, instance);
+          expect(broke.status).toBe(409);
+          expect((await broke.json() as { error: { code: string } }).error.code).toBe('INSUFFICIENT_GOLD');
+          await giveGold(database, 'min', 250);
+          const paid = await (await evolve(cookie, { requestId: 'paid-1', tagId: 'base', materialId: 'mat' }, instance)).json() as TagResponse;
+          expect(paid.evolution!.cost).toBe(100);
+          expect(paid.gold).toBe(150);
+          // A replay of the paid request charges nothing more.
+          expect((await (await evolve(cookie, { requestId: 'paid-1', tagId: 'base', materialId: 'mat' }, instance)).json() as TagResponse).gold).toBe(150);
+          const debit = await database.prepare("SELECT COUNT(*) AS n, SUM(amount) AS total FROM ledger WHERE user_id = 'min' AND reason = '별명 태그 진화'").first<{ n: number; total: number }>();
+          expect(debit).toEqual({ n: 1, total: -100 });
+        });
+      });
+      it('refuses an S tag, different phrases, a worn material, the same tag twice and other players\' tags', async () => {
+        await evolving(0, async (instance, database, cookie) => {
+          await seed(database, [['top', 'S', '왕'], ['top2', 'S', '왕'], ['a', 'C', '띠용'], ['b', 'C', '작은'], ['c', 'C', '띠용']]);
+          const code = async (body: Record<string, unknown>) => {
+            const response = await evolve(cookie, { requestId: crypto.randomUUID(), ...body }, instance);
+            return [response.status, (await response.json() as { error: { code: string } }).error.code];
+          };
+          expect(await code({ tagId: 'top', materialId: 'top2' })).toEqual([409, 'TAG_MAX_GRADE']);
+          expect(await code({ tagId: 'a', materialId: 'b' })).toEqual([409, 'TAG_MISMATCH']);
+          expect(await code({ tagId: 'a', materialId: 'a' })).toEqual([400, 'INVALID_TAG']);
+          expect(await code({ tagId: 'a', materialId: 'nope' })).toEqual([404, 'TAG_NOT_FOUND']);
+          expect((await request('/api/me/nickname-tag', { method: 'PUT', body: { tagId: 'c' }, cookie, instance })).status).toBe(200);
+          expect(await code({ tagId: 'a', materialId: 'c' })).toEqual([409, 'TAG_EQUIPPED']);
+          const other = await login('siwon', instance);
+          expect((await evolve(other.cookie, { requestId: 'theirs', tagId: 'a', materialId: 'c' }, instance)).status).toBe(404);
+          expect(await database.prepare('SELECT COUNT(*) AS n FROM nickname_tag_evolutions').first<number>('n')).toBe(0);
+          // The worn tag itself may evolve, and stays worn.
+          const worn = await (await evolve(cookie, { requestId: 'worn', tagId: 'c', materialId: 'a' }, instance)).json() as TagResponse;
+          expect(worn.evolution).toMatchObject({ success: true });
+          expect(worn.tags.equipped).toMatchObject({ id: 'c', grade: 'B' });
+        });
+      });
     });
     it('grants five draw tickets to the players that existed when the migration ran', async () => {
       const instance = runtime(script);
@@ -5640,6 +5785,29 @@ describe('Worker and D1 integration', () => {
         expect(await database.prepare('SELECT COUNT(*) AS count FROM shop_purchases').first('count')).toBe(1);
         expect((await ledgerRows(database)).filter(row => row.amount === 1500)).toHaveLength(roll < 10 ? 1 : 0);
       } finally { await instance.dispose(); }
+    });
+
+    it('remembers a scratched speetto for every device and lists only today\'s tickets', async () => {
+      await fund(600);
+      const { cookie } = await login('min');
+      const bought = (await (await request('/api/shop/speetto', { method: 'POST', cookie, body: { requestId: crypto.randomUUID(), payment: 'gold' } })).json() as SpeettoResponse).purchase!;
+      expect(bought.revealed).toBe(false);
+      await db.prepare(`INSERT INTO shop_purchases (id, user_id, request_id, kind, request_payload, payment, cost, date, created_at, outcome, last_one)
+        VALUES ('old-speetto', 'min', 'old-speetto', 'speetto', '{}', 'gold', 300, '2026-10-29', '2026-10-29T03:00:00.000Z', '{"cells":["cat","cat","drop"],"won":false,"prize":0}', 0)`).run();
+      const gold = (await bootstrap(cookie)).user.gold;
+      const reveal = (ticketId: string, who = cookie) => request('/api/shop/speetto/reveal', { method: 'POST', cookie: who, body: { ticketId } });
+      const first = await reveal(bought.id);
+      expect(first.status).toBe(200);
+      expect((await first.json() as SpeettoResponse).speetto.tickets).toEqual([{ ...bought, revealed: true }]);
+      // Scratching again, or from another session, neither pays nor covers it again.
+      expect((await reveal(bought.id)).status).toBe(200);
+      const elsewhere = await login('min');
+      const seen = await (await request('/api/shop/speetto', { cookie: elsewhere.cookie })).json() as SpeettoResponse;
+      expect(seen.speetto.tickets.map(ticket => [ticket.id, ticket.revealed])).toEqual([[bought.id, true]]);
+      expect((await bootstrap(cookie)).user.gold).toBe(gold);
+      expect((await reveal(bought.id, (await login('siwon')).cookie)).status).toBe(404);
+      expect((await reveal('missing')).status).toBe(404);
+      expect((await request('/api/shop/speetto/reveal', { cookie })).status).toBe(405);
     });
 
     it('deduplicates concurrent speetto requests into one debit and one persistent outcome', async () => {

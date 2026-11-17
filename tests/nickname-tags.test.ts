@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { TAG_GRADES, TAG_POOLS, TAG_TEXTS, drawNicknameTag, gradeLabel } from '../shared/nickname-tags';
+import { TAG_GRADES, TAG_POOLS, TAG_TEXTS, drawNicknameTag, evolutionChance, gradeLabel, nextTagGrade } from '../shared/nickname-tags';
+import { TAG_EVOLUTION_RULES, nextPredictionOpenAt, predictionDayOff } from '../shared/balance';
 
 /** A scripted RNG: the first value is the grade roll (0–99), the second picks the phrase. */
 const scripted = (...values: number[]) => (max: number) => {
@@ -42,5 +43,30 @@ describe('nickname tags', () => {
     expect(counts.A / 20000).toBeCloseTo(0.20, 1);
     expect(counts.B / 20000).toBeCloseTo(0.30, 1);
     expect(counts.C / 20000).toBeCloseTo(0.45, 1);
+  });
+  it('evolves C → B → A → S and never past S', () => {
+    expect((['C', 'B', 'A', 'S'] as const).map(nextTagGrade)).toEqual(['B', 'A', 'S', null]);
+    expect(evolutionChance('S', 'S', TAG_EVOLUTION_RULES)).toBeNull();
+  });
+  it('uses 30/15/5% by target grade plus 3% per grade step between the two tags (at most 6%)', () => {
+    const total = (base: 'A' | 'B' | 'C', material: 'S' | 'A' | 'B' | 'C') => evolutionChance(base, material, TAG_EVOLUTION_RULES)!.total;
+    expect([total('C', 'C'), total('B', 'B'), total('A', 'A')]).toEqual([30, 15, 5]);
+    expect([total('C', 'B'), total('B', 'C'), total('B', 'A'), total('A', 'B'), total('A', 'S')]).toEqual([33, 18, 18, 8, 8]);
+    expect([total('C', 'A'), total('A', 'C'), total('B', 'S')]).toEqual([36, 11, 21]);
+    // Three steps apart is capped at the two-step bonus.
+    expect(total('C', 'S')).toBe(36);
+    expect(TAG_EVOLUTION_RULES).toMatchObject({ dailyFree: 3, price: 100, loseOnFailPercent: 50 });
+  });
+});
+
+describe('prediction rest days', () => {
+  it('rests on Saturday and Sunday (KST dates) only', () => {
+    expect(['2026-11-16', '2026-11-17', '2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23'].map(predictionDayOff))
+      .toEqual([false, false, false, true, true, false]);
+  });
+  it('reopens at 00:00 KST on the next Monday', () => {
+    const monday = Date.parse('2026-11-23T00:00:00+09:00');
+    expect(nextPredictionOpenAt('2026-11-21')).toBe(monday);
+    expect(nextPredictionOpenAt('2026-11-22')).toBe(monday);
   });
 });

@@ -11,7 +11,7 @@
 
 | 탭 | 내용 | 코드에서 쓰는 곳 |
 | --- | --- | --- |
-| 별명 태그 | 등급(S·A·B·C)별 확률·모양·문구 | `shared/nickname-tags.ts` |
+| 별명 태그 | 등급(S·A·B·C)별 확률·모양·문구 | `shared/nickname-tags.ts` (진화 확률·비용은 시트에 없고 `shared/balance.ts`의 `TAG_EVOLUTION_RULES`) |
 | 캐치마인드 제시어 | 번호·제시어·글자 수·단어 수 (4행이 헤더) | `shared/catchmind-words.ts` (출제자 정답 칸 아래 추천 제시어) |
 | 주식 리스트 | 종목명·티커·상장가·기업규모·업종·연동 게임·회사 소개 (2행이 헤더) | `shared/stocks.ts`, `shared/stock-news-templates.ts`, `migrations/0015_stock_market.sql` |
 | 도전과제 | 유형·제목·달성조건·보상(골드)·반복 (2행이 헤더, 유형은 묶음의 첫 행에만) | `shared/achievements.ts`(문구·보상·반복), `worker/achievements.ts`(달성 판정) |

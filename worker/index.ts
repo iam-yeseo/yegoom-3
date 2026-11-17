@@ -9,7 +9,7 @@ import { PASSWORD_RULES, validNewPassword } from '../shared/password';
 import { GAME_IDS, GAME_RULES, isGameId, kstDate, kstTime, kstTimestamp, TIME_ZONE, validValue, valueDifference, weekStart } from './rules';
 import { readDailyFree, readKujiSummary, readLottoNotice, settleDueLotto, ShopError, shopRoute } from './shop';
 import { RankingError, readRanking } from './ranking';
-import { equipTag, tagShopRoute, discardTag } from './nickname-tags';
+import { equipTag, evolveTag, tagShopRoute, discardTag } from './nickname-tags';
 import type { NicknameTagGrade } from '../shared/nickname-tags';
 import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImage, readCatchmindSummary } from './catchmind';
 import { FreeThrowError, finishFreeThrowSet, getFreeThrowState, getFreeThrowSummary, startFreeThrowSet } from './freethrow';
@@ -26,7 +26,7 @@ import { AchievementError, claimAchievement, readAchievements, recordAchievement
 import { RankResultError, markRankResultsSeen, readRankResults, settleDueRankingRewards } from './ranking-rewards';
 import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockSecret, tradeStock } from './stocks';
 import { aiWriters, isAiProvider, readAiStatus, saveAiSettings } from './stock-ai';
-import { FEATURES, PLAY_RULES, playClosed, scoreCounts } from '../shared/balance';
+import { FEATURES, PLAY_RULES, nextPredictionOpenAt, playClosed, predictionDayOff, scoreCounts } from '../shared/balance';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher; STOCK_SEED_SECRET?: string; ANTHROPIC_API_KEY?: string; OPENAI_API_KEY?: string }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
@@ -336,7 +336,9 @@ async function readGames(db: D1Database, user: UserRow, ids: readonly GameId[], 
     const round = rounds.results.find(row => row.game_id === id)!;
     const rules = JSON.parse(round.settings_json!) as PredictionRules;
     const revealed = round.answer != null && (round.revealed_at != null || (round.reveal_at != null && round.reveal_at <= now.getTime()));
-    const closed = !rules.enabled || revealed || now.getTime() >= kstTimestamp(date, rules.deadline);
+    // Weekends are rest days: nothing can be predicted, entered or revealed.
+    const dayOff = predictionDayOff(date);
+    const closed = dayOff || !rules.enabled || revealed || now.getTime() >= kstTimestamp(date, rules.deadline);
     const author = user.role === 'player' && user.username === identity.author;
     const gamePredictions = predictions.results.filter(row => row.game_id === id);
     const submitted = new Set(gamePredictions.map(row => row.player_id));
@@ -355,8 +357,9 @@ async function readGames(db: D1Database, user: UserRow, ids: readonly GameId[], 
       answerEntered: round.answer != null,
       results: revealed ? calculateResults(gamePredictions.filter(row => row.role === 'player' && row.username.toLowerCase() !== identity.author), id, round.answer!, rules, answerCounts({ round_date: date, revealed_at: round.revealed_at, reveal_at: round.reveal_at })) : [],
       canPredict: !closed && !author && user.role === 'player',
-      canEditAnswer: rules.enabled && author && !revealed,
-      canReveal: rules.enabled && id !== 'wake' && author && !revealed && round.answer != null,
+      canEditAnswer: !dayOff && rules.enabled && author && !revealed,
+      canReveal: !dayOff && rules.enabled && id !== 'wake' && author && !revealed && round.answer != null,
+      dayOff: dayOff ? { reason: 'weekend' as const, nextOpenAt: new Date(nextPredictionOpenAt(date)).toISOString() } : null,
     };
   });
 }
@@ -519,6 +522,7 @@ async function mutateGame(request: Request, env: Env, user: UserRow, id: GameId,
   const identity = GAME_RULES[id];
   const author = user.role === 'player' && user.username === identity.author;
   const rules = await rulesForRound(env.DB, id, date);
+  if (predictionDayOff(date)) throw new HttpError(409, 'GAME_OFF', '주말에는 이 게임을 쉬어요. 월요일에 다시 만나요.');
   if (!rules.enabled) throw new HttpError(409, 'GAME_OFF', '오늘은 이 게임을 쉬어요.');
   const start = kstTimestamp(date, '00:00:00');
   if (action === 'prediction') {
@@ -874,6 +878,10 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
   if (url.pathname === '/api/me/nickname-tag/discard') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     return json(await discardTag(env.DB, user, await body(request), new Date()));
+  }
+  if (url.pathname === '/api/me/nickname-tag/evolve') {
+    if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    return json(await evolveTag(env.DB, user, await body(request), new Date()));
   }
   if (url.pathname === '/api/me/nickname-tag') {
     if (request.method !== 'PUT') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');

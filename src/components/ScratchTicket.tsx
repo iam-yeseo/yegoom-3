@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import type { SpeettoTicket } from "../../shared/types";
 import { art, artSrc } from "./UI";
-import { confetti, crumbs, popIn, reduced, tween } from "../motion";
+import { crumbs, popIn } from "../motion";
 import { SCRATCH_FONT, SCRATCH_LABEL, scratchBitmapSize, scratchMark, scratchedRatio } from "../scratch";
 
-/** A purchased result is only revealed here; scratching never changes a balance. */
+/** A purchased result is only revealed here; scratching never changes a balance.
+ * The result itself is announced by the screen's modal, not under the ticket. */
 export function ScratchTicket({ ticket, revealed: savedRevealed = false, onReveal }: {
   ticket: SpeettoTicket; revealed?: boolean; onReveal?: () => void;
 }) {
@@ -17,7 +18,6 @@ export function ScratchTicket({ ticket, revealed: savedRevealed = false, onRevea
   const celebrate = useRef(false);
   const [localRevealed, setLocalRevealed] = useState(savedRevealed);
   const [coverReady, setCoverReady] = useState(savedRevealed);
-  const [prize, setPrize] = useState(savedRevealed ? ticket.prize : 0);
   const revealed = savedRevealed || localRevealed;
   const shown = useRef(revealed);
   shown.current = revealed;
@@ -32,17 +32,11 @@ export function ScratchTicket({ ticket, revealed: savedRevealed = false, onRevea
   }
 
   useEffect(() => {
-    if (!revealed) return;
-    // Selecting an already revealed history row must not celebrate/pay again.
-    if (!celebrate.current) { setPrize(ticket.prize); return; }
+    // Selecting an already scratched ticket must not celebrate again.
+    if (!revealed || !celebrate.current) return;
     const effects = [...(symbols.current?.children ?? [])].map((element, i) => popIn(element, { delay: 450 + i * 150 }));
-    let stop = () => {};
-    const timer = ticket.won ? window.setTimeout(() => {
-      confetti(symbols.current);
-      stop = tween(0, ticket.prize, 900, value => setPrize(Math.round(value)));
-    }, reduced() ? 0 : 450 + ticket.cells.length * 150) : null;
-    return () => { if (timer !== null) clearTimeout(timer); stop(); effects.forEach(effect => effect?.cancel()); };
-  }, [revealed, ticket.won, ticket.prize, ticket.cells.length]);
+    return () => { effects.forEach(effect => effect?.cancel()); };
+  }, [revealed]);
 
   useLayoutEffect(() => {
     const node = canvas.current;
@@ -130,7 +124,6 @@ export function ScratchTicket({ ticket, revealed: savedRevealed = false, onRevea
         }} onPointerMove={event => { if (scratching.current) scratch(event); }}
         onPointerUp={() => { scratching.current = false; }} onPointerCancel={() => { scratching.current = false; }} onLostPointerCapture={() => { scratching.current = false; }} />
     </div>
-    <div className={`scratch-result ${revealed ? ticket.won ? "won" : "lost" : ""}`} aria-live="polite">{revealed ? ticket.won ? `당첨! +${prize.toLocaleString("ko-KR")}G` : "아쉽지만 낙첨이에요" : "?"}</div>
     {!revealed && <button className="text-button" onClick={reveal}>한 번에 긁기</button>}
   </section>;
 }

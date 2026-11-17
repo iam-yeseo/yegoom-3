@@ -1,4 +1,4 @@
-import { ATTENDANCE_RULES, CATCHMIND_RULES, GAME_RULES, PREDICTION_REWARDS, KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank, predictionPoints } from "../shared/balance";
+import { ATTENDANCE_RULES, CATCHMIND_RULES, GAME_RULES, PREDICTION_REWARDS, KUJI_RULES, LOTTO_RULES, SPEETTO_RULES, kujiCost, lottoPrize, lottoRank, nextPredictionOpenAt, predictionDayOff, predictionPoints } from "../shared/balance";
 import { defaultPredictionRules, predictionPointsForRules } from "../shared/game-settings";
 import type { PredictionRules } from "../shared/admin";
 import { defaultCharacter } from "../shared/characters";
@@ -124,6 +124,13 @@ export function previewGame(id: GameId, rules: PredictionRules = defaultPredicti
     canPredict: viewer !== authorUsername,
     canEditAnswer: viewer === authorUsername,
     canReveal: false,
+  };
+  // Weekends are rest days in the preview too.
+  if (predictionDayOff(base.roundDate)) return {
+    ...base, phase: "closed", answerEntered: false,
+    canPredict: false, canEditAnswer: false, canReveal: false,
+    participants: base.participants.map(player => ({ ...player, submitted: false })),
+    dayOff: { reason: "weekend", nextOpenAt: new Date(nextPredictionOpenAt(base.roundDate)).toISOString() },
   };
   if (!rules.enabled) return {
     ...base, phase: "closed", answerEntered: false,

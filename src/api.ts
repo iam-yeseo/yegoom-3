@@ -12,7 +12,7 @@ import type {
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput, FreeThrowSetInput, FreeThrowFinishInput, FreeThrowFinishResponse, FreeThrowState,
   SantaFinishInput, SantaFinishResponse, SantaRunInput, SantaState,
-  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagResponse, NotificationsResponse, NotificationSummary,
+  LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagEvolveInput, TagResponse, NotificationsResponse, NotificationSummary,
   AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
 import type { RankingPeriod } from "../shared/ranking-periods";
 import type { RankResult, RankResultKey } from "../shared/ranking-rewards";
@@ -103,6 +103,8 @@ export const api = {
   drawTag: (input: TagDrawInput) => request<TagResponse>("/shop/tag", { method: "POST", body: JSON.stringify(input) }),
   equipTag: (tagId: string | null) => request<TagResponse>("/me/nickname-tag", { method: "PUT", body: JSON.stringify({ tagId }) }),
   discardTag: (tagId: string) => request<TagResponse>("/me/nickname-tag/discard", { method: "POST", body: JSON.stringify({ tagId }) }),
+  evolveTag: (input: TagEvolveInput) => request<TagResponse>("/me/nickname-tag/evolve", { method: "POST", body: JSON.stringify(input) }),
+  revealSpeetto: (ticketId: string) => request<SpeettoResponse>("/shop/speetto/reveal", { method: "POST", body: JSON.stringify({ ticketId }) }),
   stock: (since?: string) => request<StockMarketView | StockUnchanged>(`/stock${since ? `?since=${encodeURIComponent(since)}` : ""}`),
   stockDetail: (ticker: string) => request<StockDetailView>(`/stock/${ticker}`),
   stockNews: (before?: string) => request<StockNewsPage>(`/stock/news${before ? `?before=${encodeURIComponent(before)}` : ""}`),

@@ -65,3 +65,8 @@ python3 scripts/prepare-claw-dolls.py /path/to/yegoom/public/assets
 ```sh
 python3 scripts/prepare-santa-art.py /path/to/santa-images
 ```
+
+## 별명 태그 진화 그림
+
+- 아직 전용 그림이 없다. 진화 중·성공·실패 화면은 플레이어의 캐릭터 스프라이트(`public/characters/sprites/*`)와 CSS만으로 그린다.
+- 전용 그림 4장은 [이미지 프롬프트](tag-evolution-image-prompts.md)로 만들어 받을 예정이다. 받으면 `public/tags/`에 WebP로 넣고 이 절을 갱신한다.

@@ -88,3 +88,60 @@
 
 /* A wider touch area than the drawn button (44px), without moving anything. */
 .lotto-notice-close::after { content: ''; position: absolute; inset: -6px; }
+
+/* 2026-11 shop UX: one use/buy button pinned to the bottom of the viewport. */
+.shop-buy-bar {
+  position: fixed; z-index: 9; left: 0; right: 0; bottom: 0; margin: 0 auto; width: min(100%, var(--app-width));
+  padding: 10px 16px calc(12px + env(safe-area-inset-bottom)); box-sizing: border-box;
+  background: rgba(255, 249, 238, .94); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-radius: 24px 24px 0 0; box-shadow: 0 -6px 24px rgba(120, 90, 60, .08);
+}
+.shop-buy-bar .shop-purchase-actions { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.shop-buy-bar .shop-purchase-actions > p { text-align: center; font-size: 13px; }
+.shop-buy-bar .shop-purchase-actions > button { width: 100%; min-height: 52px; font-size: 16px; }
+.shop-buy-bar .primary-button > small { font-size: 12px; font-weight: 600; opacity: .85; }
+/* Room for the bar (and its note line) under the page's last card. */
+.with-buy-bar .screen-body, .lotto.with-buy-bar .screen-body, .speetto.with-buy-bar .screen-body, .slot.with-buy-bar .screen-body {
+  padding-bottom: calc(132px + env(safe-area-inset-bottom));
+}
+
+/* Shared result modal (lotto draw, speetto result, tag evolution). */
+.result-dialog { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 26px; }
+.result-dialog:not([open]) { display: none; }
+.result-dialog h2 { margin: 0; }
+.result-dialog p { margin: 0; }
+.result-dialog p strong { color: var(--text); font-size: 16px; }
+.result-dialog-eyebrow { font-size: 12px; font-weight: 700; color: #ada4b3; }
+.lotto-draw-dialog { overflow: hidden; }
+.lotto-draw-dialog .draw { padding: 6px 0 4px; width: 100%; }
+.lotto-draw-dialog .draw > div { gap: 6px; width: 100%; justify-content: center; }
+.lotto-draw-dialog .draw i { width: min(52px, 17%); height: auto; aspect-ratio: 1; flex-shrink: 0; }
+.lotto-draw-summary { min-height: 52px; }
+.lotto-draw .draw { padding-bottom: 10px; gap: 10px; }
+.lotto-draw .text-button { font-size: 13px; }
+.speetto-result-symbols { display: flex; gap: 8px; }
+.speetto-result-symbols span { width: 76px; height: 76px; border-radius: 22px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.speetto-result-symbols img { width: 92px; height: 92px; max-width: none; }
+.speetto-result-dialog.won h2 { color: #c9533e; }
+.speetto-result-dialog.lost h2 { color: #7c7383; }
+
+/* Lotto history: one closed row per purchase day. */
+details.shop-history-group > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: 36px; }
+details.shop-history-group > summary::-webkit-details-marker { display: none; }
+details.shop-history-group > summary::after { content: ""; flex: none; width: 8px; height: 8px; margin: 0 4px 3px 2px; border-right: 2px solid #ada4b3; border-bottom: 2px solid #ada4b3; transform: rotate(45deg); transition: transform .2s; }
+details.shop-history-group[open] > summary::after { transform: rotate(225deg); margin-bottom: -3px; }
+details.shop-history-group > summary .shop-history-heading { flex: 1; margin: 0; }
+details.shop-history-group > summary .shop-history-heading h3 { font-size: 14px; }
+details.shop-history-group + details.shop-history-group { padding-top: 8px; }
+.speetto-history .shop-history-heading h2 { margin: 0; font-size: var(--fs-card-title); }
+.speetto-history .shop-history-heading { margin: 0; }
+.balls button[aria-pressed="true"] { box-shadow: 0 4px 10px rgba(120, 90, 60, .22); }
+
+/* Prediction games rest on weekends. */
+.prediction-dayoff { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.prediction-dayoff h2 { margin: 0; }
+.prediction-dayoff p { margin: 6px 0 0; font-size: 13px; color: #7c7383; }
+.prediction-dayoff small { font-size: 12px; color: #ada4b3; }
+.dayoff-chip { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px; background: #f3eee8; color: #8a8190; font-size: 13px; font-weight: 800; }
+.dayoff-countdown { color: var(--text); }
+.dayoff-countdown span { font-size: 24px; letter-spacing: 0; }

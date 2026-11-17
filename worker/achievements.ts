@@ -22,6 +22,7 @@ interface Facts {
   kuji_first: number; kuji_a: number; kuji_last: number;
   lotto_first: number; lotto_win: number; speetto_win: number; slot_jackpot: number;
   tag_first: number; tag_s: number; tag_equip: number;
+  tag_evolve_success: number; tag_evolve_fail: number; tag_evolve_lost: number; tag_evolve_s: number;
   claw_first: number; claw_clear: number; rank_month: number;
   rank_weeks: string; games: string; lotto_zero: string; slots: string; catchmind: string;
   freethrow_join: number; freethrow_zero: number; freethrow: string;
@@ -68,6 +69,10 @@ const FACTS_SQL = `SELECT
     EXISTS (SELECT 1 FROM nickname_tags WHERE user_id = u.id) AS tag_first,
     EXISTS (SELECT 1 FROM nickname_tags WHERE user_id = u.id AND grade = 'S') AS tag_s,
     EXISTS (SELECT 1 FROM nickname_tags WHERE user_id = u.id AND equipped = 1) AS tag_equip,
+    EXISTS (SELECT 1 FROM nickname_tag_evolutions WHERE user_id = u.id AND success = 1) AS tag_evolve_success,
+    EXISTS (SELECT 1 FROM nickname_tag_evolutions WHERE user_id = u.id AND success = 0) AS tag_evolve_fail,
+    EXISTS (SELECT 1 FROM nickname_tag_evolutions WHERE user_id = u.id AND success = 0 AND material_lost = 1) AS tag_evolve_lost,
+    EXISTS (SELECT 1 FROM nickname_tag_evolutions WHERE user_id = u.id AND success = 1 AND to_grade = 'S') AS tag_evolve_s,
     EXISTS (SELECT 1 FROM claw_plays WHERE user_id = u.id AND caught > 0) AS claw_first,
     EXISTS (SELECT 1 FROM claw_plays WHERE user_id = u.id AND clear_bonus > 0) AS claw_clear,
     EXISTS (SELECT 1 FROM notifications WHERE user_id = u.id AND kind = 'rank'
@@ -119,6 +124,8 @@ export function unlockedAchievements(facts: Facts, events: ReadonlySet<string>):
     ...once('lotto_first', facts.lotto_first), ...once('lotto_win', facts.lotto_win), ...once('speetto_win', facts.speetto_win),
     ...once('slot_jackpot', facts.slot_jackpot),
     ...once('tag_first', facts.tag_first), ...once('tag_s', facts.tag_s), ...once('tag_equip', facts.tag_equip),
+    ...once('tag_evolve_success', facts.tag_evolve_success), ...once('tag_evolve_fail', facts.tag_evolve_fail),
+    ...once('tag_evolve_lost', facts.tag_evolve_lost), ...once('tag_evolve_s', facts.tag_evolve_s),
     ...once('freethrow_join', facts.freethrow_join), ...once('freethrow_zero', facts.freethrow_zero),
     ...once('claw_first', facts.claw_first), ...once('claw_clear', facts.claw_clear), ...once('rank_month', facts.rank_month),
     ...once('stock_buy', facts.stock_buy), ...once('stock_sell', facts.stock_sell), ...once('stock_delisted', facts.stock_delisted),

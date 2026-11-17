@@ -12,7 +12,7 @@ export class ShopError extends Error {
 }
 interface PurchaseRow {
   id: string; user_id: string; request_id: string; kind: ShopKind; request_payload: string;
-  payment: ShopPayment; cost: number; date: string; created_at: string; outcome: string; last_one: number; free?: number;
+  payment: ShopPayment; cost: number; date: string; created_at: string; outcome: string; last_one: number; free?: number; revealed_at?: string | null;
 }
 interface BoardRow { id: number; grades: string }
 interface LottoRow extends PurchaseRow {
@@ -369,7 +369,17 @@ export async function readLottoNotice(db: D1Database, userId: string, now: Date)
 
 function speettoTicket(row: PurchaseRow): SpeettoTicket {
   const result = JSON.parse(row.outcome) as { cells: SpeettoSymbol[]; won: boolean; prize: number };
-  return { ...result, id: row.id, requestId: row.request_id, payment: row.free ? 'free' : row.payment, cost: row.cost, purchaseDate: row.date, createdAt: row.created_at };
+  return { ...result, id: row.id, requestId: row.request_id, payment: row.free ? 'free' : row.payment, cost: row.cost, purchaseDate: row.date, createdAt: row.created_at,
+    revealed: row.revealed_at != null };
+}
+/** POST /api/shop/speetto/reveal { ticketId }: remember that my ticket was
+ * scratched, so no device covers it again. Nothing is paid here (the prize was
+ * paid at purchase) and scratching twice changes nothing. */
+async function revealSpeetto(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<void> {
+  if (typeof input.ticketId !== 'string' || !input.ticketId || input.ticketId.length > 128) throw new ShopError(400, 'INVALID_TICKET', '긁을 스피또를 확인해 주세요.');
+  const result = await db.prepare(`UPDATE shop_purchases SET revealed_at = COALESCE(revealed_at, ?) WHERE id = ? AND user_id = ? AND kind = 'speetto'`)
+    .bind(now.toISOString(), input.ticketId, user.id).run();
+  if (!result.meta.changes) throw new ShopError(404, 'TICKET_NOT_FOUND', '내가 산 스피또가 아니에요.');
 }
 async function buySpeetto(db: D1Database, user: ShopUser, input: Record<string, unknown>, now: Date): Promise<PurchaseRow> {
   const id = requestId(input); const method = payment(input); const payload = JSON.stringify({ payment: method });
@@ -444,7 +454,10 @@ export async function shopRoute(db: D1Database, user: ShopUser, path: string, me
   if (method !== 'GET' && method !== 'POST') throw new ShopError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
   if (method === 'POST' && user.role !== 'player') throw new ShopError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');
   // Kuji, lotto, speetto and the slot are games: they close with the rest at 23:50.
-  if (method === 'POST' && playClosed(now.getTime())) throw new ShopError(409, 'PLAY_CLOSED', PLAY_RULES.closedMessage);
+  // Scratching a ticket already bought is not play: it stays possible after 23:50.
+  const reveal = path === '/api/shop/speetto/reveal';
+  if (reveal && method !== 'POST') throw new ShopError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+  if (method === 'POST' && !reveal && playClosed(now.getTime())) throw new ShopError(409, 'PLAY_CLOSED', PLAY_RULES.closedMessage);
   await settleDueLotto(db, now);
   if (path === '/api/shop' && method === 'GET') return readShopState(db, user, now);
   if (path === '/api/shop/kuji') {
@@ -464,10 +477,12 @@ export async function shopRoute(db: D1Database, user: ShopUser, path: string, me
     return { ...await readShopState(db, user, now), lotto: { targetDrawDate: targetDrawDate(now), todayDraw: { date: today, numbers: draw ? JSON.parse(draw.numbers) as number[] : null }, tickets },
       ...(receipt ? { purchase: receipt } : {}) };
   }
-  if (path === '/api/shop/speetto') {
-    const purchase = method === 'POST' ? await buySpeetto(db, user, input!, now) : undefined;
-    const rows = (await db.prepare("SELECT * FROM shop_purchases WHERE user_id = ? AND date >= ? AND kind = 'speetto' ORDER BY created_at DESC, id")
-      .bind(user.id, recentPurchaseDate(now)).all<PurchaseRow>()).results;
+  if (path === '/api/shop/speetto' || reveal) {
+    if (reveal) await revealSpeetto(db, user, input!, now);
+    const purchase = method === 'POST' && !reveal ? await buySpeetto(db, user, input!, now) : undefined;
+    // Only today's tickets are listed; older ones are finished business.
+    const rows = (await db.prepare("SELECT * FROM shop_purchases WHERE user_id = ? AND date = ? AND kind = 'speetto' ORDER BY created_at DESC, id")
+      .bind(user.id, kstDate(now)).all<PurchaseRow>()).results;
     return { ...await readShopState(db, user, now), speetto: { tickets: rows.map(speettoTicket) }, ...(purchase ? { purchase: speettoTicket(purchase) } : {}) };
   }
   if (path === '/api/shop/slot') {

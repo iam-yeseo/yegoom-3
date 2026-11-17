@@ -1,3 +1,4 @@
+import { predictionDayOff } from '../shared/balance';
 import { GAME_RULES } from '../shared/balance';
 import { LUCK_PHOTO } from '../shared/profile';
 import type { LuckPhotoResponse, PhotoMetadata } from '../shared/types';
@@ -26,6 +27,7 @@ export async function uploadLuckPhoto(db: D1Database, user: Actor, input: Record
   if (!isAuthor(user)) throw new LuckPhotoError(403, 'NOT_AUTHOR', '출제자만 증거 사진을 올릴 수 있어요.');
   if (!validDate(input.roundDate)) throw new LuckPhotoError(400, 'INVALID_DATE', '사진을 올릴 날짜를 확인해 주세요.');
   if (input.roundDate !== kstDate(now)) throw new LuckPhotoError(409, 'STALE_ROUND', '오늘의 행운 점수 화면에서 다시 올려 주세요.');
+  if (predictionDayOff(input.roundDate)) throw new LuckPhotoError(409, 'GAME_OFF', '주말에는 이 게임을 쉬어요. 월요일에 다시 만나요.');
   if (!(await rulesForRound(db, 'luck', input.roundDate)).enabled) throw new LuckPhotoError(409, 'GAME_OFF', '오늘은 이 게임을 쉬어요.');
   const image = validatePhoto(input.image, LUCK_PHOTO);
   const start = kstTimestamp(input.roundDate, '00:00:00');
