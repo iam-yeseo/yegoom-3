@@ -9,7 +9,7 @@ import { kstTimestamp } from '../shared/market-calendar';
 import { readStockMarket } from '../worker/stocks';
 import type { AdminState } from '../shared/admin';
 import type { AchievementsResponse } from '../shared/achievements';
-import type { StockDetailView, StockMarketView, StockNewsPage, StockTradeResponse, StockUnchanged } from '../shared/stock-types';
+import { STOCK_ORDER_UNFILLED_CODES, type StockDetailView, type StockMarketView, type StockNewsPage, type StockTradeResponse, type StockUnchanged } from '../shared/stock-types';
 
 const ORIGIN = 'http://localhost';
 const PASSWORD = 'test-only-password-42!';
@@ -190,6 +190,74 @@ describe('stock market API', () => {
     const later = kst('2026-11-05', '10:11');
     expect((await market.request<{ error: { code: string } }>(later, 'min', '/api/stock/trade', 'POST',
       { requestId: 'late', ticker: 'YKHX', side: 'buy', quantity: 1, expectedVersion: ykhx.version })).data.error.code).toBe('PRICE_CHANGED');
+  });
+
+  it('answers every retry of a filled order with its one trade, whatever the market has become since', async () => {
+    const market = await Market.create(yesterdayClose);
+    const now = kst('2026-11-05', '10:03');
+    const ykhx = (await market.request<StockMarketView>(now, 'min', '/api/stock')).data.stocks.find(stock => stock.ticker === 'YKHX')!;
+    const order = { requestId: 'lost-answer', ticker: 'YKHX', side: 'buy', quantity: 10, expectedVersion: ykhx.version, expectedUserId: 'min' };
+    // Twins of one request (a retry racing its original): one trade, and neither is told "not filled".
+    const twins = await Promise.all([1, 2, 3, 4].map(() => market.request<StockTradeResponse>(now, 'min', '/api/stock/trade', 'POST', order)));
+    expect(twins.map(twin => twin.status)).toEqual([200, 200, 200, 200]);
+    expect(twins.filter(twin => !twin.data.replayed)).toHaveLength(1);
+    expect(new Set(twins.map(twin => twin.data.trade.id)).size).toBe(1);
+    // The id belongs to that order: other input is refused, and another player's same id is their own order.
+    const other = await market.request<{ error: { code: string } }>(now, 'min', '/api/stock/trade', 'POST', { ...order, side: 'sell' });
+    expect([other.status, other.data.error.code]).toEqual([409, 'REQUEST_CONFLICT']);
+    const siwon = await market.request<{ error: { code: string } }>(now, 'siwon', '/api/stock/trade', 'POST', { ...order, expectedUserId: 'siwon', quantity: 80 });
+    expect([siwon.status, siwon.data.error.code]).toEqual([409, 'NOT_ENOUGH_GOLD']);
+    // The same order after the price moved, after the close and on the next day: still its receipt.
+    for (const later of [kst('2026-11-05', '10:11'), kst('2026-11-05', '18:30'), kst('2026-11-06', '09:20')]) {
+      const retry = await market.request<StockTradeResponse>(later, 'min', '/api/stock/trade', 'POST', order);
+      expect(retry.status, String(later)).toBe(200);
+      expect(retry.data).toMatchObject({ replayed: true, trade: { id: twins[0]!.data.trade.id, requestId: 'lost-answer', quantity: 10, price: ykhx.price } });
+    }
+    expect((await market.db.prepare("SELECT COUNT(*) AS n FROM stock_trades WHERE user_id = 'min'").first('n'))).toBe(1);
+    expect((await market.db.prepare("SELECT COUNT(*) AS n FROM ledger WHERE reference LIKE 'stock:%'").first('n'))).toBe(1);
+    expect(await market.db.prepare("SELECT quantity FROM stock_holdings WHERE user_id = 'min' AND ticker = 'YKHX'").first('quantity')).toBe(10);
+    await market.expectBalanced();
+  });
+
+  it('never fills a saved order for another account, and only refuses with a confirmed-unfilled code once no trade is stored', async () => {
+    const market = await Market.create(yesterdayClose);
+    const now = kst('2026-11-05', '10:03');
+    const ykhx = (await market.request<StockMarketView>(now, 'min', '/api/stock')).data.stocks.find(stock => stock.ticker === 'YKHX')!;
+    const order = { requestId: 'mins-order', ticker: 'YKHX', side: 'buy', quantity: 1, expectedVersion: ykhx.version, expectedUserId: 'min' };
+    // min's browser is now signed in as siwon: the saved order must not become siwon's.
+    await market.db.prepare("INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('fixture-siwon', 'siwon', 'gold', 100000, '테스트 골드', 'fixture:siwon', '2026-11-01T00:00:00.000Z')").run();
+    const switched = await market.request<{ error: { code: string } }>(now, 'siwon', '/api/stock/trade', 'POST', order);
+    expect([switched.status, switched.data.error.code]).toEqual([409, 'ACCOUNT_CHANGED']);
+    expect(STOCK_ORDER_UNFILLED_CODES).not.toContain('ACCOUNT_CHANGED');
+    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_trades').first('n')).toBe(0);
+    expect(await market.gold('siwon')).toBe(100000);
+
+    // Each refusal below leaves no trade under its id, and its code tells the browser so.
+    const refused = async (timestamp: number, user: string, body: Record<string, unknown>) => {
+      const requestId = crypto.randomUUID();
+      const response = await market.request<{ error: { code: string } }>(timestamp, user, '/api/stock/trade', 'POST',
+        { requestId, ticker: 'YKHX', side: 'buy', quantity: 1, expectedVersion: ykhx.version, expectedUserId: user, ...body });
+      expect(response.status, JSON.stringify(response.data)).toBeGreaterThanOrEqual(400);
+      expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_trades WHERE request_id = ?').bind(requestId).first('n')).toBe(0);
+      return response.data.error.code;
+    };
+    const codes = [
+      await refused(now, 'min', { expectedVersion: ykhx.version + 1 }),
+      await refused(now, 'min', { side: 'sell' }),
+      await refused(now, 'min', { quantity: 80 }),
+      await refused(now, 'siwon', { ticker: 'SIWN' }),
+      await refused(now, 'min', { ticker: 'NOPE' }),
+      await refused(now, 'min', { side: 'hold' }),
+      await refused(now, 'min', { quantity: 0 }),
+      await refused(now, 'min', { expectedVersion: -1 }),
+    ];
+    expect(codes).toEqual(['PRICE_CHANGED', 'NOT_ENOUGH_SHARES', 'NOT_ENOUGH_GOLD', 'AUTHOR_LOCKED', 'UNKNOWN_STOCK', 'INVALID_SIDE', 'INVALID_QUANTITY', 'INVALID_VERSION']);
+    // The order itself, sent by its owner, still fills exactly once.
+    expect((await market.request<StockTradeResponse>(now, 'min', '/api/stock/trade', 'POST', order)).data).toMatchObject({ replayed: false, stock: { held: 1 } });
+    expect((await market.request<StockTradeResponse>(now, 'min', '/api/stock/trade', 'POST', order)).data).toMatchObject({ replayed: true, stock: { held: 1 } });
+    codes.push(await refused(kst('2026-11-05', '18:30'), 'min', {}));
+    expect(codes[codes.length - 1]).toBe('MARKET_CLOSED');
+    for (const code of codes) expect(STOCK_ORDER_UNFILLED_CODES, code).toContain(code);
   });
 
   it('rejects trades outside market hours, on weekends and on administrator holidays', async () => {

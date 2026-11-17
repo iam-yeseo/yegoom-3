@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Character, Coin, Segmented, Toolbar } from "../components/UI";
 import { anim, openSheet, pop, toast, useCountUp, useMountMotion, useOnChange } from "../motion";
 import { formatDate, formatDateTime, formatTime } from "../format";
-import { ApiFailure } from "../api";
 import { STOCK_RULES, stockInfo, tradeFee, type StockInfo } from "../../shared/stocks";
 import { isLimitDown, isLimitUp } from "../../shared/stock-engine";
 import type { Candle, MarketClock, StockDetailView, StockMarketView, StockNewsItem, StockQuote, StockTradeResponse } from "../../shared/stock-types";
 import type { StockClient } from "../stock-preview";
+import type { PendingStockOrder, StockOrderOutcome, StockOrders } from "../stock-orders";
 import "../stock.css";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -180,7 +180,91 @@ function useNewsToasts() {
   }, []);
 }
 
-export function StockMarket({ client, gold, onBack, go }: { client: StockClient; gold: number; onBack: () => void; go: (path: string) => void }) {
+/** Automatic re-checks of an order whose result is unknown: at once for one
+ * found on arrival, then after these waits. The button asks at any time. */
+const RECHECK_DELAYS = [0, 5_000, 15_000, 45_000];
+/** This account's order awaiting its result. The order was saved before it was
+ * sent, so it is still here after leaving the screen or reloading; asking again
+ * sends the same requestId and input, which the server fills at most once. */
+function usePendingOrder(orders: StockOrders, account: string, client: StockClient,
+  onOutcome: (outcome: StockOrderOutcome, order: PendingStockOrder) => void) {
+  const pending = useSyncExternalStore(orders.subscribe, () => orders.pending(account));
+  const checking = useSyncExternalStore(orders.subscribe, () => orders.checking(account));
+  const [notice, setNotice] = useState("");
+  const latest = useRef({ account, onOutcome });
+  latest.current = { account, onOutcome };
+  const automatic = useRef({ id: "", count: 0 });
+  /** An answer for another account (the sign-in changed meanwhile) is not shown here. */
+  const settle = useCallback((outcome: StockOrderOutcome | null, order: PendingStockOrder) => {
+    if (!outcome || latest.current.account !== account) return outcome;
+    setNotice(outcome.status === "unknown" ? outcome.message : "");
+    if (outcome.status !== "blocked") latest.current.onOutcome(outcome, order);
+    return outcome;
+  }, [account]);
+  const recheck = useCallback(async () => {
+    const order = orders.pending(account);
+    if (order) settle(await orders.recheck(account, client.trade), order);
+  }, [orders, account, client, settle]);
+  const submit = useCallback(async (input: PendingStockOrder["input"]) => {
+    // The send itself was the first try; the first automatic re-check waits.
+    automatic.current = { id: input.requestId, count: 1 };
+    return settle(await orders.submit(account, input, client.trade), { input, createdAt: new Date().toISOString() });
+  }, [orders, account, client, settle]);
+  useEffect(() => { setNotice(""); }, [account]);
+  const pendingId = pending?.input.requestId;
+  useEffect(() => {
+    if (!pendingId || checking) return;
+    const tried = automatic.current.id === pendingId ? automatic.current.count : 0;
+    const delay = RECHECK_DELAYS[tried];
+    if (delay === undefined) return;
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      automatic.current = { id: pendingId, count: tried + 1 };
+      void recheck();
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [pendingId, checking, recheck]);
+  useEffect(() => {
+    // Back online or back on this tab: ask now. Another tab settled it: read again.
+    const again = () => { if (document.visibilityState === "visible" && navigator.onLine) void recheck(); };
+    const stored = () => orders.reload(account);
+    window.addEventListener("online", again);
+    document.addEventListener("visibilitychange", again);
+    window.addEventListener("storage", stored);
+    return () => {
+      window.removeEventListener("online", again);
+      document.removeEventListener("visibilitychange", again);
+      window.removeEventListener("storage", stored);
+    };
+  }, [orders, account, recheck]);
+  return { pending, checking, notice, recheck, submit };
+}
+function orderLabel(order: PendingStockOrder) {
+  return `${info(order.input.ticker).name} ${won(order.input.quantity)}주 ${order.input.side === "buy" ? "사기" : "팔기"}`;
+}
+/** Says so while an order's result is unknown, and offers to ask again. */
+function PendingOrderNotice({ order, checking, notice, onRecheck }: { order: PendingStockOrder; checking: boolean; notice: string; onRecheck: () => void }) {
+  return (
+    <section className="card stock-pending" role="status" aria-label="결과를 확인 중인 주문">
+      <strong>{checking ? "주문 결과를 확인하고 있어요" : "주문 결과를 아직 확인하지 못했어요"}</strong>
+      <p>{orderLabel(order)} · {formatTime(order.createdAt)} 주문</p>
+      <p className="stock-pending-note">{!checking && notice ? notice : "같은 주문으로 다시 확인해요. 이미 체결됐다면 한 번만 체결돼요."}</p>
+      <button className="secondary-button" disabled={checking} onClick={onRecheck}>{checking ? "확인 중…" : "주문 결과 다시 확인"}</button>
+    </section>
+  );
+}
+function outcomeToast(outcome: StockOrderOutcome) {
+  if (outcome.status === "filled") {
+    const { trade } = outcome.result;
+    toast(`${info(trade.ticker).name} ${won(trade.quantity)}주를 ${won(trade.price)}G에 ${trade.side === "buy" ? "샀어요" : "팔았어요"}`);
+  } else if (outcome.status === "rejected") toast(outcome.message || "주문하지 못했어요.", { wrap: true });
+}
+const accountLost = (outcome: StockOrderOutcome) => outcome.status === "unknown" && (outcome.code === "ACCOUNT_CHANGED" || outcome.code === "UNAUTHENTICATED");
+
+export function StockMarket({ client, orders, account, gold, onBack, go, onTraded, onAccountChanged }: {
+  client: StockClient; orders: StockOrders; account: string; gold: number; onBack: () => void; go: (path: string) => void;
+  onTraded?: (result: StockTradeResponse) => void; onAccountChanged?: () => void;
+}) {
   const [view, setView] = useState<StockMarketView | null>(null);
   const [error, setError] = useState("");
   const versionRef = useRef<string | undefined>(undefined);
@@ -203,6 +287,17 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
     }
   }, [client, announce]);
   useTickPolling(load);
+  // An order left unconfirmed on a stock's page is settled from here as well.
+  const order = usePendingOrder(orders, account, client, (outcome) => {
+    outcomeToast(outcome);
+    if (accountLost(outcome)) { onAccountChanged?.(); return; }
+    if (outcome.status === "unknown") return;
+    if (outcome.status === "filled") onTraded?.(outcome.result);
+    // Holdings and gold changed without a price move: read everything again.
+    versionRef.current = undefined;
+    void load();
+  });
+  const pendingNotice = order.pending && <PendingOrderNotice order={order.pending} checking={order.checking} notice={order.notice} onRecheck={() => void order.recheck()} />;
   const [mode, setMode] = useListMode();
   const totals = holdingsTotal(view?.stocks ?? []);
   const value = useCountUp(totals.value);
@@ -211,6 +306,7 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
       <div className="stock">
         <div className="stock-hero"><Toolbar title="주식 시장" onBack={onBack} gold={gold} /></div>
         <div className="screen-body stack">
+          {pendingNotice}
           <p className="stock-loading" role={error ? "alert" : "status"}>{error || "시장을 불러오는 중…"}</p>
           {error && <button className="secondary-button" onClick={() => void load()}>다시 시도</button>}
         </div>
@@ -262,6 +358,7 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
           </div>
         </div>
         <div className="screen-body stack">
+          {pendingNotice}
           {view.closing?.summary && (
             <section className="card stock-closing">
               <span className="closing-label">오늘의 시황</span>
@@ -304,6 +401,7 @@ export function StockMarket({ client, gold, onBack, go }: { client: StockClient;
       </div>
       <div className="screen-body stack">
         {error && <p className="form-message error" role="alert">{error}</p>}
+        {pendingNotice}
         {toggle}
         {list}
         {newsCard}
@@ -400,8 +498,9 @@ function ConfirmSheet({ stock, side, qty, onCancel, onConfirm, busy }: {
   );
 }
 
-export function StockDetail({ client, ticker, onBack, onTraded }: {
-  client: StockClient; ticker: string; onBack: () => void; onTraded: (result: StockTradeResponse) => void;
+export function StockDetail({ client, orders, account, ticker, onBack, onTraded, onAccountChanged }: {
+  client: StockClient; orders: StockOrders; account: string; ticker: string; onBack: () => void;
+  onTraded: (result: StockTradeResponse) => void; onAccountChanged?: () => void;
 }) {
   const [detail, setDetail] = useState<StockDetailView | null>(null);
   const [error, setError] = useState("");
@@ -424,6 +523,21 @@ export function StockDetail({ client, ticker, onBack, onTraded }: {
     }
   }, [client, ticker, announce]);
   useTickPolling(load);
+  // Every result of an order lands here, whether it answered at once or was
+  // asked again later (after a lost response, another screen or a reload).
+  const order = usePendingOrder(orders, account, client, (outcome) => {
+    outcomeToast(outcome);
+    if (accountLost(outcome)) { onAccountChanged?.(); return; }
+    if (outcome.status === "unknown") return;
+    if (outcome.status === "filled") {
+      const result = outcome.result;
+      if (result.trade.ticker === ticker) setDetail((current) => current && { ...current, stock: result.stock, gold: result.gold, trades: [result.trade, ...current.trades.filter((trade) => trade.id !== result.trade.id)].slice(0, 10) });
+      onTraded(result);
+      if (result.trade.ticker === ticker) return;
+    }
+    // Refused (the price moved, say) or filled on another stock: show what is true now.
+    void load();
+  });
   const price = useCountUp(detail?.stock.price ?? 0, 320);
   const shownGold = useCountUp(detail?.gold ?? 0);
   const company = stockInfo(ticker);
@@ -433,6 +547,7 @@ export function StockDetail({ client, ticker, onBack, onTraded }: {
       <div className="stock">
         <Toolbar title={company.name} onBack={onBack} />
         <div className="screen-body stack">
+          {order.pending && <PendingOrderNotice order={order.pending} checking={order.checking} notice={order.notice} onRecheck={() => void order.recheck()} />}
           <p className="stock-loading" role={error ? "alert" : "status"}>{error || "불러오는 중…"}</p>
           {error && <button className="secondary-button" onClick={() => void load()}>다시 시도</button>}
         </div>
@@ -460,6 +575,7 @@ export function StockDetail({ client, ticker, onBack, onTraded }: {
           <StockBadge stock={company} size="detail" gray />
         </div>
         <div className="screen-body stack">
+          {order.pending && <PendingOrderNotice order={order.pending} checking={order.checking} notice={order.notice} onRecheck={() => void order.recheck()} />}
           {lost && (
             <section className="card loss-card">
               <div><span>보유했던 {won(lost.quantity)}주</span><strong>−{won(lost.costBasis)}G</strong></div>
@@ -483,27 +599,23 @@ export function StockDetail({ client, ticker, onBack, onTraded }: {
   const amount = quantity * stock.price;
   const fee = tradeFee(amount);
   const set = (next: number, dir = 0) => { setQtyDir(dir); setQty(Math.min(max, Math.max(1, next))); };
+  // No second order while the first one's result is unknown.
+  const awaiting = order.pending && !busy ? "이전 주문 결과를 먼저 확인해 주세요" : null;
   const blocked = !detail.canTrade ? "운영자는 거래할 수 없어요"
-    : detail.tradeBlock ?? (!market.open ? closedLabel(market, detail.serverTime) : stock.halted ? "거래 정지 · 겨울 근무 중" : null);
+    : awaiting ?? detail.tradeBlock ?? (!market.open ? closedLabel(market, detail.serverTime) : stock.halted ? "거래 정지 · 겨울 근무 중" : null);
   const cannotSell = side === "sell" && !stock.held;
   const full = side === "buy" && stock.held >= STOCK_RULES.maxHolding;
   const poor = side === "buy" && detail.gold < amount + fee;
   const submit = async () => {
+    if (busy || order.pending) return;
     setBusy(true);
-    try {
-      const result = await client.trade({ requestId: crypto.randomUUID(), ticker: stock.ticker, side, quantity, expectedVersion: stock.version });
-      setDetail((current) => current && { ...current, stock: result.stock, gold: result.gold, trades: [result.trade, ...current.trades.filter((trade) => trade.id !== result.trade.id)].slice(0, 10) });
-      onTraded(result);
-      toast(`${company.name} ${won(result.trade.quantity)}주를 ${won(result.trade.price)}G에 ${side === "buy" ? "샀어요" : "팔았어요"}`);
-      setConfirm(false);
-      setQty(1);
-    } catch (failure) {
-      setConfirm(false);
-      toast(failure instanceof Error ? failure.message : "주문하지 못했어요.", { wrap: true });
-      if (failure instanceof ApiFailure && failure.status === 409) void load();
-    } finally {
-      setBusy(false);
-    }
+    // The order id and its whole input are saved before the request leaves. If
+    // the answer is lost, the same order is asked again; a new id is only made
+    // once this one has been answered.
+    const outcome = await order.submit({ requestId: crypto.randomUUID(), ticker: stock.ticker, side, quantity, expectedVersion: stock.version });
+    setBusy(false);
+    setConfirm(false);
+    if (outcome?.status === "filled") setQty(1);
   };
   const avg = stock.held ? Math.round(stock.costBasis / stock.held) : 0;
   const pnl = stock.held * stock.price - stock.costBasis;
@@ -521,6 +633,7 @@ export function StockDetail({ client, ticker, onBack, onTraded }: {
         <StockBadge stock={company} size="detail" />
       </div>
       <div className="screen-body stack">
+        {order.pending && !busy && <PendingOrderNotice order={order.pending} checking={order.checking} notice={order.notice} onRecheck={() => void order.recheck()} />}
         {stock.status === "warning" && <p className="stock-warning" role="note">관리종목이에요. 다음 종가도 {won(Math.ceil(company.listingPrice * STOCK_RULES.delistRatio))}G 아래면 상장폐지돼요.</p>}
         <ChartCard detail={detail} />
         <section className="card holding">

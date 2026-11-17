@@ -291,20 +291,44 @@ async function tradeResponse(db: D1Database, user: StockUser, trade: TradeRow, r
 
 /** Buy or sell at the current server price. Balance, holding, market hours, stock
  * status and price version are checked inside the same conditional batch that
- * writes the trade, the ledger and the holding. A repeated requestId replays. */
+ * writes the trade, the ledger and the holding. A repeated requestId replays:
+ * the stored trade is looked up before any market rule, so an order that filled
+ * is answered with its receipt whatever has happened to the market since. */
 export async function tradeStock(db: D1Database, secret: string, user: StockUser, input: Record<string, unknown>, now: number): Promise<StockTradeResponse> {
+  // A saved order is retried by the browser that sent it; it must never fill
+  // for an account that signed in on that browser afterwards.
+  if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) {
+    throw new StockError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
+  }
   if (user.role !== 'player') throw new StockError(403, 'CANNOT_TRADE', '플레이어만 주식을 거래할 수 있어요.');
   const order = tradeInput(input);
-  const previous = await db.prepare('SELECT * FROM stock_trades WHERE user_id = ? AND request_id = ?').bind(user.id, order.requestId).first<TradeRow>();
+  const stored = () => db.prepare('SELECT * FROM stock_trades WHERE user_id = ? AND request_id = ?').bind(user.id, order.requestId).first<TradeRow>();
+  const previous = await stored();
   const { rows, holidays } = await advanceStocks(db, secret, now);
   const date = kstDateOf(now);
   const row = rows.find(item => item.ticker === order.ticker)!;
-  if (previous) {
-    if (previous.ticker !== order.ticker || previous.side !== order.side || previous.quantity !== order.quantity) {
+  const replay = (trade: TradeRow) => {
+    if (trade.ticker !== order.ticker || trade.side !== order.side || trade.quantity !== order.quantity) {
       throw new StockError(409, 'REQUEST_CONFLICT', '이미 다른 주문에 사용한 주문 번호예요.');
     }
-    return tradeResponse(db, user, previous, row, date, true);
+    return tradeResponse(db, user, trade, row, date, true);
+  };
+  if (previous) return replay(previous);
+  try {
+    return await placeOrder(db, user, order, row, holidays, date, now);
+  } catch (error) {
+    if (!(error instanceof StockError)) throw error;
+    // A refusal says "this order did not fill" (STOCK_ORDER_UNFILLED_CODES), so
+    // it is only given once no twin of the request (a retry racing its
+    // original) has stored the trade since the first lookup.
+    const committed = await stored();
+    if (committed) return replay(committed);
+    throw error;
   }
+}
+
+async function placeOrder(db: D1Database, user: StockUser, order: ReturnType<typeof tradeInput>, row: StockRow,
+  holidays: Map<string, string>, date: string, now: number): Promise<StockTradeResponse> {
   const status = marketStatus(now, holidays);
   if (!status.open) throw new StockError(409, 'MARKET_CLOSED', status.holiday ? `오늘은 ${status.holiday} 휴장이에요.` : '지금은 장이 닫혀 있어요.');
   if (!tradesOn(order.ticker, date)) throw new StockError(409, 'TRADING_HALTED', '겨울 근무 중이라 오늘은 거래할 수 없어요.');
@@ -378,14 +402,14 @@ export async function tradeStock(db: D1Database, secret: string, user: StockUser
   return rejectTrade(db, user, order, row);
 }
 
+/** Why the conditional write stored nothing. A trade stored by a twin of this
+ * request is not looked for here: tradeStock checks that before any refusal. */
 async function rejectTrade(db: D1Database, user: StockUser, order: ReturnType<typeof tradeInput>, row: StockRow): Promise<never> {
-  const [replay, state, holding, gold] = await db.batch([
-    db.prepare('SELECT * FROM stock_trades WHERE user_id = ? AND request_id = ?').bind(user.id, order.requestId),
+  const [state, holding, gold] = await db.batch([
     db.prepare('SELECT * FROM stock_state WHERE ticker = ?').bind(order.ticker),
     db.prepare('SELECT ticker, quantity, cost_basis FROM stock_holdings WHERE user_id = ? AND ticker = ?').bind(user.id, order.ticker),
     db.prepare('SELECT gold FROM user_balances WHERE user_id = ?').bind(user.id),
   ]);
-  if (replay!.results.length) throw new StockError(409, 'REQUEST_IN_PROGRESS', '같은 주문을 처리하고 있어요. 잠시 뒤 다시 확인해 주세요.');
   const current = state!.results[0] as StateRow | undefined;
   if (!current || current.version !== order.expectedVersion || current.price !== row.price) {
     throw new StockError(409, 'PRICE_CHANGED', '가격이 바뀌었어요. 확인하고 다시 주문해 주세요.');

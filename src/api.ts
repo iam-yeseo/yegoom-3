@@ -29,11 +29,20 @@ export class ApiFailure extends Error {
     super(message);
   }
 }
+/** The request never left this device (it was offline), so nothing was saved. */
+export const notSent = (error: unknown): boolean => error instanceof ApiFailure && error.code === "OFFLINE";
+/** The server evaluated the request and refused it: nothing was saved. A lost
+ * response, a server error or a missing session (the request may have been
+ * saved before the session ended) proves nothing, so a write that can be asked
+ * again by its request id is kept until one of these answers. */
+export const refusedByServer = (error: unknown): boolean =>
+  error instanceof ApiFailure && error.status >= 400 && error.status < 500 && ![401, 408, 429].includes(error.status);
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!navigator.onLine)
     throw new ApiFailure(
       0,
       "인터넷 연결을 확인해 주세요. 입력한 내용은 아직 저장되지 않았어요.",
+      "OFFLINE",
     );
   let response: Response;
   try {

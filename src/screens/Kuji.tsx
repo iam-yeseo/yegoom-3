@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { KUJI_RULES, kujiCost } from "../../shared/balance";
 import type { KujiDraw, KujiGrade, KujiPurchase } from "../../shared/types";
-import { ApiFailure } from "../api";
+import { refusedByServer } from "../api";
 import { Avatar, PersonName, Toolbar, artSrc, honorific, useDisplayNameByIdLookup, useUsernameByIdLookup } from "../components/UI";
 import { formatTime } from "../format";
 import { anim, confetti, flipY, hop, openSheet, pop, reduced, sparkle } from "../motion";
@@ -151,7 +151,7 @@ export function Kuji({ onBack }: { onBack: () => void }) {
       setSelected([]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "쿠지를 뽑지 못했어요. 다시 시도해 주세요.");
-      if (active.current && caught instanceof ApiFailure && caught.status >= 400 && caught.status < 500) await shop.refresh("kuji");
+      if (active.current && refusedByServer(caught)) await shop.refresh("kuji");
     } finally {
       inFlight.current = false;
       setBusy(false);

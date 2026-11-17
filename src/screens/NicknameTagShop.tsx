@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { DAILY_FREE, NICKNAME_TAG_RULES, TAG_EVOLUTION_RULES } from "../../shared/balance";
 import { TAG_GRADES, evolutionChance, gradeLabel, nextTagGrade, type NicknameTagGrade } from "../../shared/nickname-tags";
 import type { NicknameTag, TagDrawInput, TagEvolution, TagEvolveInput } from "../../shared/types";
-import { ApiFailure } from "../api";
+import { refusedByServer } from "../api";
 import { NickTag, Segmented, Toolbar, honorific, useNameParts } from "../components/UI";
 import { BuyBar, ResultDialog } from "../components/BuyBar";
 import { confetti, flipY, openSheet, reduced, toast, useCountUp } from "../motion";
@@ -253,7 +253,7 @@ export function NicknameTagShop({ username, displayName, onBack, inventory = fal
       if (!mounted.current) return;
       setEvolving(null);
       // A refusal spent nothing; anything else may have gone through, so the same request can ask again.
-      const rejected = cause instanceof ApiFailure && cause.status >= 400 && cause.status < 500;
+      const rejected = refusedByServer(cause);
       setUnresolved(rejected ? null : { input, tag });
       setError(cause instanceof Error ? cause.message : "진화 결과를 확인하지 못했어요.");
       if (rejected) void latest.current.refresh("tag").catch(() => {});

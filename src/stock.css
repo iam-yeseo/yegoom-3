@@ -215,6 +215,30 @@ em.warning {
   color: #ada4b3;
 }
 
+.stock-pending {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #fff9ee;
+}
+.stock-pending strong {
+  font-size: 15px;
+  font-weight: 800;
+}
+.stock-pending p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #5c5162;
+  word-break: keep-all;
+}
+.stock-pending .stock-pending-note {
+  font-size: 13px;
+  color: #7c7383;
+}
+.stock-pending .secondary-button {
+  margin-top: 6px;
+}
 .stock-closing {
   padding: 18px;
   display: flex;

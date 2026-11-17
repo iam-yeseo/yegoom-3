@@ -1277,7 +1277,11 @@ describe('Worker and D1 integration', () => {
           expect((await response.json() as { error: { code: string } }).error.code, path).toBe('PLAY_CLOSED');
         };
         await closed('/api/shop/lotto', { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'gold' });
-        await closed('/api/shop/kuji', { requestId: crypto.randomUUID(), count: 1 });
+        // The close applies to a well-formed new purchase (malformed input is refused as such, before it).
+        const board = (await (await request('/api/shop/kuji', { cookie, instance })).json() as KujiResponse).kuji.boardId;
+        await closed('/api/shop/kuji', { requestId: crypto.randomUUID(), boardId: board, positions: [0] });
+        await closed('/api/shop/speetto', { requestId: crypto.randomUUID(), payment: 'gold' });
+        await closed('/api/shop/slot', { requestId: crypto.randomUUID() });
         await closed('/api/claw/play', { requestId: crypto.randomUUID(), version: (await getClaw(cookie, instance)).version, x: .05, stop: null });
         await closed('/api/freethrow/sets', { requestId: 'req-closed-0123456789abcdef' });
         // Drawing may start; only publishing and guessing are closed.
@@ -1286,6 +1290,70 @@ describe('Worker and D1 integration', () => {
         await closed('/api/catchmind/publish', { requestId: crypto.randomUUID(), roundId: claimed.catchmind.round!.id,
           word: CATCHMIND_TEST_WORD, image: DRAWING_PNG });
       } finally { await instance.dispose(); }
+    });
+
+    it('answers a purchase stored before 23:50 with its receipt after the close and past midnight, refusing only new purchases', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-close-receipt-'));
+      let instance = runtime(await workerAt(`${TODAY}T14:49:59Z`), persistence); // 23:49:59 KST
+      try {
+        let database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await fund(20000, 'min', database);
+        await fund(20000, 'siwon', database);
+        let min = (await login('min', instance)).cookie;
+        const board = (await (await request('/api/shop/kuji', { cookie: min, instance })).json() as KujiResponse).kuji.boardId;
+        const orders: Record<string, Record<string, unknown>> = {
+          '/api/shop/kuji': { requestId: 'before-close-kuji', boardId: board, positions: [3] },
+          '/api/shop/lotto': { requestId: 'before-close-lotto', numbers: [1, 2, 3, 4, 5], payment: 'gold' },
+          '/api/shop/speetto': { requestId: 'before-close-speetto', payment: 'gold' },
+          '/api/shop/slot': { requestId: 'before-close-slot' },
+        };
+        const receipt = async (path: string, cookie: string, body: Record<string, unknown>) => {
+          const response = await request(path, { method: 'POST', cookie, instance, body });
+          const data = await response.json() as { purchase?: unknown; spin?: unknown; error?: { code: string } };
+          return { status: response.status, code: data.error?.code, receipt: data.purchase ?? data.spin };
+        };
+        // Everything the four purchases charged, drew and paid.
+        const stored = async () => Object.fromEntries(await Promise.all(['ledger', 'inventory_ledger', 'shop_purchases', 'slot_spins', 'kuji_claims', 'lotto_tickets', 'user_balances']
+          .map(async table => [table, (await database.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all()).results])));
+        const first: Record<string, unknown> = {};
+        for (const [path, body] of Object.entries(orders)) {
+          const bought = await receipt(path, min, body);
+          expect(bought.status, path).toBe(200);
+          expect(bought.receipt, path).toBeTruthy();
+          first[path] = bought.receipt;
+        }
+        const saved = await stored();
+        expect(saved.shop_purchases).toHaveLength(3);
+        expect(saved.slot_spins).toHaveLength(1);
+
+        // 23:50:00 and 23:59:59 (closed), then past midnight (open again; the lotto draw is still ahead).
+        for (const [instant, isClosed] of [[`${TODAY}T14:50:00Z`, true], [`${TODAY}T14:59:59Z`, true], [`${TODAY}T15:00:05Z`, false]] as const) {
+          await instance.dispose();
+          instance = runtime(await workerAt(instant), persistence);
+          database = await instance.getD1Database('DB');
+          min = (await login('min', instance)).cookie;
+          const siwon = (await login('siwon', instance)).cookie;
+          for (const [path, body] of Object.entries(orders)) {
+            // The response to the 23:49:59 purchase was lost: the same request asks again.
+            const retried = await receipt(path, min, body);
+            expect([retried.status, retried.code], `${instant} ${path}`).toEqual([200, undefined]);
+            expect(retried.receipt, `${instant} ${path}`).toEqual(first[path]);
+            if (isClosed) {
+              // A new request, and another player's request under the same id, are new purchases: closed.
+              expect(await receipt(path, min, { ...body, requestId: crypto.randomUUID() }), `${instant} ${path}`).toMatchObject({ status: 409, code: 'PLAY_CLOSED' });
+              expect(await receipt(path, siwon, body), `${instant} ${path}`).toMatchObject({ status: 409, code: 'PLAY_CLOSED' });
+            }
+          }
+          // The same id with other input stays refused, as before.
+          expect(await receipt('/api/shop/kuji', min, { ...orders['/api/shop/kuji'], positions: [4] }), instant).toMatchObject({ status: 409, code: 'REQUEST_CONFLICT' });
+          expect(await receipt('/api/shop/lotto', min, { ...orders['/api/shop/lotto'], numbers: [6, 7, 8, 9, 10] }), instant).toMatchObject({ status: 409, code: 'REQUEST_CONFLICT' });
+          expect(await receipt('/api/shop/speetto', min, { ...orders['/api/shop/speetto'], payment: 'ticket' }), instant).toMatchObject({ status: 409, code: 'REQUEST_CONFLICT' });
+          expect(await receipt('/api/shop/kuji', min, { requestId: 'before-close-kuji', count: 1 }), instant).toMatchObject({ status: 400, code: 'INVALID_KUJI_SELECTION' });
+          // Nothing was charged, drawn or paid again.
+          expect(await stored(), instant).toEqual(saved);
+        }
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
     });
 
     it('scores a Catchmind round solved on its own day', async () => {

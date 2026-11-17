@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DAILY_FREE, SHOP_HISTORY_DAYS, SLOT_RULES } from "../../shared/balance";
 import type { SlotSpin, SlotSpinInput, SlotSymbol } from "../../shared/types";
-import { ApiFailure } from "../api";
+import { refusedByServer } from "../api";
 import { Toolbar } from "../components/UI";
 import { BuyBar } from "../components/BuyBar";
 import { formatDate, formatTime } from "../format";
@@ -206,7 +206,9 @@ export function Slot({ onBack }: { onBack: () => void }) {
       setWorking(false);
       setSpinning([false, false, false]);
       setAnticipating(false);
-      const rejected = cause instanceof ApiFailure && cause.status >= 400 && cause.status < 500;
+      // The same test as the provider's, so this screen's own retry id is kept
+      // exactly as long as the provider keeps the pending spin.
+      const rejected = refusedByServer(cause);
       setPhase(rejected ? "idle" : "checking");
       setError(cause instanceof Error ? cause.message : "결과를 확인하지 못했어요. 같은 요청으로 다시 확인해 주세요.");
       if (rejected) { unresolved.current = null; void latestShop.current.refresh("slot").catch(() => {}); }

@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { pbkdf2Sync, randomBytes } from 'node:crypto';
 import { build } from 'esbuild';
 
@@ -14,7 +15,19 @@ mkdirSync('.test-build', { recursive: true });
 // Every run gets a fresh local database. Keep the append-only ledger triggers
 // intact instead of deleting accounting rows between browser test runs.
 const state = mkdtempSync(`.test-build/e2e-${port}-`);
-const cleanup = () => rmSync(state, { recursive: true, force: true });
+// Time-boundary suites serve ONE database from several Workers, each frozen at
+// its own instant (23:49, 23:50, 00:00 ...). E2E_PERSIST_DIR names that shared
+// database directory: the first server creates, migrates and seeds it, and a
+// server started with E2E_ATTACH=1 only serves what is already there. Every
+// server keeps its own build files (its clock is compiled into worker.js).
+const persist = process.env.E2E_PERSIST_DIR ? resolve(process.env.E2E_PERSIST_DIR) : state;
+const attach = process.env.E2E_ATTACH === '1';
+if (attach && !process.env.E2E_PERSIST_DIR) throw new Error('E2E_ATTACH needs E2E_PERSIST_DIR');
+mkdirSync(persist, { recursive: true });
+const cleanup = () => {
+  rmSync(state, { recursive: true, force: true });
+  if (!attach) rmSync(persist, { recursive: true, force: true });
+};
 process.once('exit', cleanup);
 const configPath = `${state}/wrangler.json`;
 const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
@@ -52,7 +65,7 @@ const run = (args) => {
   const result = spawnSync(process.execPath, [wrangler, ...args, '--config', configPath], { env, stdio: 'inherit' });
   if (result.status !== 0) { cleanup(); process.exit(result.status || 1); }
 };
-run(['d1', 'migrations', 'apply', 'DB', '--local', '--persist-to', state]);
+if (!attach) run(['d1', 'migrations', 'apply', 'DB', '--local', '--persist-to', persist]);
 // This fixed password exists exclusively in an isolated local browser-test database.
 const salt = randomBytes(16);
 const passwordHash = `pbkdf2-sha256$100000$${salt.toString('hex')}$${pbkdf2Sync('e2e-only-password-2026', salt, 100000, 32, 'sha256').toString('hex')}`;
@@ -178,9 +191,11 @@ if (process.env.E2E_PROFILE === 'attendance-catchmind') {
   statements.push(`UPDATE catchmind_turn SET drawer_id = 'e2e-min', round_id = 'fixture-gallery-13' WHERE id = 1;`);
 }
 const seedPath = `${state}/users.sql`;
-writeFileSync(seedPath, statements.join('\n'), { mode: 0o600 });
-try { run(['d1', 'execute', 'DB', '--local', '--persist-to', state, '--file', seedPath, '--yes']); }
-finally { unlinkSync(seedPath); }
-const child = spawn(process.execPath, [wrangler, 'dev', '--local', '--port', String(port), '--inspector-port', String(port + 10000), '--persist-to', state, '--config', configPath], { env, stdio: 'inherit' });
+if (!attach) {
+  writeFileSync(seedPath, statements.join('\n'), { mode: 0o600 });
+  try { run(['d1', 'execute', 'DB', '--local', '--persist-to', persist, '--file', seedPath, '--yes']); }
+  finally { unlinkSync(seedPath); }
+}
+const child = spawn(process.execPath, [wrangler, 'dev', '--local', '--port', String(port), '--inspector-port', String(port + 10000), '--persist-to', persist, '--config', configPath], { env, stdio: 'inherit' });
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
 child.on('exit', code => { cleanup(); process.exit(code ?? 0); });
