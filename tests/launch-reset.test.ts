@@ -19,7 +19,7 @@ const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventor
   'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts', 'announcements', 'luck_photos'];
 // The launch-era reset does not cover the later slot-machine receipts.
 // Post-launch records (slot receipts, nickname tags) are outside the launch-era reset.
-const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins', 'nickname_tags',
+const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins', 'nickname_tags', 'nickname_tag_evolutions',
   // Nickname draw tickets (0018) are granted after launch, so the launch-era reset leaves them alone.
   'tag_ticket_ledger',
   // Ranking payouts (0019) start after launch too; their settlement markers stay.
