@@ -75,15 +75,68 @@ test('preview draws a tag, wears it and shows it before the nickname without API
   await expect(page.locator('.ranking-preview-row').filter({ hasText: 'yeseo' }).locator('.nick-tag')).toHaveText(text);
   await capture(page, 'preview-home', info);
   await navigate(page, '/preview/profile');
+  // 내 정보 only shows the tag worn now; wearing and removing live in the inventory.
   const collection = page.locator('section[aria-label="내 별명 태그"]');
-  await expect(collection.locator('button[aria-pressed="true"] .nick-tag')).toHaveText(text);
+  await expect(collection.locator('.nick-tag')).toHaveText(text);
+  await expect(collection.getByRole('button')).toHaveCount(0);
+  await expect(collection).toContainText('모은 태그 1개');
   await collection.scrollIntoViewIfNeeded();
   await capture(page, 'preview-profile', info);
   await page.setViewportSize({ width: 390, height: 900 });
-  await collection.getByRole('button', { name: '별명 떼기' }).click();
-  await expect(collection.locator('button[aria-pressed="true"]')).toHaveCount(0);
+  const inventoryLink = collection.getByRole('link', { name: '별명 태그 인벤토리 열기', exact: true });
+  await expect(inventoryLink).toHaveAttribute('href', '#/preview/shop/tag/inventory');
+  await inventoryLink.click();
+  await expect(page).toHaveURL(/#\/preview\/shop\/tag\/inventory$/);
+  await expect(page.getByRole('tab', { name: '인벤토리 1', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab', { name: '뽑기', exact: true })).toHaveAttribute('aria-selected', 'false');
+  // The draw button belongs to the 뽑기 tab only.
+  await expect(page.locator('.shop-buy-bar')).toHaveCount(0);
+  const now = page.locator('section[aria-label="지금 내 별명"]');
+  await expect(now.locator('.nick-tag')).toHaveText(text);
+  const grade = (await page.locator('.tag-collection button[aria-pressed="true"]').getAttribute('aria-label'))!.slice(0, 1);
+  expect(grade).toMatch(/^[SABC]$/);
+  // Tags are grouped by grade; the worn one is pressed.
+  const owned = page.locator(`section[aria-label="${grade}등급 별명 태그"] ul.tag-collection button`);
+  await expect(page.locator('ul.tag-collection button')).toHaveCount(1);
+  await expect(owned).toHaveCount(1);
+  await expect(owned).toHaveAttribute('aria-pressed', 'true');
+  await expect(owned.locator('.nick-tag')).toHaveText(text);
+  const tagSheet = page.locator('dialog.tag-draw-dialog');
+  await owned.click();
+  await expect(tagSheet.locator('.nick-tag')).toHaveText(text);
+  // One tag has no twin to evolve with, and a worn tag cannot be thrown away.
+  await expect(tagSheet.getByRole('button', { name: '진화 도전', exact: true })).toBeDisabled();
+  await expect(tagSheet.getByRole('button', { name: '버리기', exact: true })).toBeDisabled();
+  await tagSheet.getByRole('button', { name: '별명 떼기', exact: true }).click();
+  await expect(tagSheet).toHaveCount(0);
+  await expect(owned).toHaveAttribute('aria-pressed', 'false');
+  await expect(now).toContainText('별명 없음');
+  await expect(now.getByRole('button', { name: '별명 떼기', exact: true })).toBeDisabled();
+  await owned.click();
+  await expect(tagSheet.getByRole('button', { name: '버리기', exact: true })).toBeEnabled();
+  await tagSheet.getByRole('button', { name: '이 별명 달기', exact: true }).click();
+  await expect(tagSheet).toHaveCount(0);
+  await expect(owned).toHaveAttribute('aria-pressed', 'true');
+  await expect(now.locator('.nick-tag')).toHaveText(text);
+  await navigate(page, '/preview');
+  await expect(page.locator('.room-name .nick-tag')).toHaveText(text);
+  await navigate(page, '/preview/shop/tag/inventory');
+  await now.getByRole('button', { name: '별명 떼기', exact: true }).click();
+  await expect(page.locator('.tag-collection button[aria-pressed="true"]')).toHaveCount(0);
+  await expect(owned).toHaveCount(1);
   await navigate(page, '/preview');
   await expect(page.locator('.room-name .nick-tag')).toHaveCount(0);
+  await navigate(page, '/preview/profile');
+  await expect(collection.locator('.nick-tag')).toHaveCount(0);
+  await expect(collection).toContainText('지금은 별명 태그를 달고 있지 않아요.');
+  // A tag that is not worn can be thrown away from its sheet.
+  await navigate(page, '/preview/shop/tag/inventory');
+  await owned.click();
+  await tagSheet.getByRole('button', { name: '버리기', exact: true }).click();
+  await expect(tagSheet).toHaveCount(0);
+  await expect(page.locator('ul.tag-collection button')).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: '인벤토리 0', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.tag-shop')).toContainText('아직 모은 별명 태그가 없어요');
   expect(apiCalls).toEqual([]);
 });
 
@@ -125,6 +178,15 @@ test('a signed-in player draws and wears a tag that other players then see', asy
   await expect(page.locator('.room-name .nick-tag')).toHaveText(text);
   await navigate(page, '/profile');
   await expect(page.locator('.profile-summary h1 .nick-tag')).toHaveText(text);
+  // 내 정보 links to the inventory, where the worn tag is the pressed one.
+  const collection = page.locator('section[aria-label="내 별명 태그"]');
+  await expect(collection.locator('.nick-tag')).toHaveText(text);
+  await expect(collection.getByRole('link', { name: '별명 태그 인벤토리 열기', exact: true })).toHaveAttribute('href', '#/shop/tag/inventory');
+  await collection.getByRole('link', { name: '별명 태그 인벤토리 열기', exact: true }).click();
+  await expect(page).toHaveURL(/#\/shop\/tag\/inventory$/);
+  await expect(page.getByRole('tab', { name: /^인벤토리 \d+$/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('section[aria-label="지금 내 별명"] .nick-tag')).toHaveText(text);
+  await expect(page.locator('ul.tag-collection button[aria-pressed="true"] .nick-tag')).toHaveText(text);
 
   const other = await browser.newContext({ reducedMotion: 'reduce', viewport: { width: 390, height: 900 }, serviceWorkers: 'block' });
   try {
@@ -142,7 +204,13 @@ test('a signed-in player draws and wears a tag that other players then see', asy
     await capture(viewer, 'authenticated-ranking', info);
   } finally { await other.close(); }
 
-  // Take it off again so later suites see the untagged fixture names.
+  // Take it off again in the inventory, so later suites see the untagged fixture names.
+  const removed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/me/nickname-tag' && response.request().method() === 'PUT');
+  await page.locator('section[aria-label="지금 내 별명"]').getByRole('button', { name: '별명 떼기', exact: true }).click();
+  expect((await removed).status()).toBe(200);
+  await expect(page.locator('ul.tag-collection button[aria-pressed="true"]')).toHaveCount(0);
+  await navigate(page, '/');
+  await expect(page.locator('.room-name .nick-tag')).toHaveCount(0);
   const off = await page.request.put('/api/me/nickname-tag', { headers: { Origin: ORIGIN }, data: { tagId: null } });
   expect(off.status()).toBe(200);
 });

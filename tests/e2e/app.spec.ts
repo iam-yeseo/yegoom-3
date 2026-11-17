@@ -552,6 +552,62 @@ async function chooseLottoNumbers(page: Page, numbers: number[]) {
   for (const number of numbers) await page.getByRole('button', { name: `번호 ${number}`, exact: true }).click();
   await expect(page.locator('.balls button[aria-pressed="true"]')).toHaveCount(5);
 }
+/** Lotto and speetto show one pay button: an 이용권 while any is held (today's
+ * free ones and owned ones together), the gold button only once none is left. */
+const ticketPayButton = (page: Page) => page.getByRole('button', { name: /^이용권으로 사기 · 1장 · 보유 \d+장$/ });
+async function heldTickets(page: Page) {
+  return Number((await ticketPayButton(page).getAttribute('aria-label'))!.match(/보유 (\d+)장$/)![1]);
+}
+/** Buys lotto tickets with every 이용권 held, through the screen (previews have
+ * no API). Returns how many were used; the gold button is showing afterwards. */
+async function useUpLottoTickets(page: Page, goldSelector = '.game-toolbar .gold') {
+  const gold = await displayedGold(page, goldSelector);
+  const goldButton = page.getByRole('button', { name: '골드로 사기 · 500G', exact: true });
+  let used = 0;
+  for (;;) {
+    await expect(ticketPayButton(page).or(goldButton)).toBeVisible();
+    if (await goldButton.isVisible()) break;
+    const held = await heldTickets(page);
+    // A different line each time; any five numbers will do.
+    await chooseLottoNumbers(page, [1, 2, 3, 4, 5].map(number => number + (used % 5) * 5));
+    await ticketPayButton(page).click();
+    await confirmPurchase(page);
+    await expect(page.locator('.balls button[aria-pressed="true"]')).toHaveCount(0);
+    if (held > 1) await expect(ticketPayButton(page)).toHaveAccessibleName(new RegExp(`보유 ${held - 1}장$`));
+    used++;
+    expect(used, 'lotto 이용권 never ran out').toBeLessThan(40);
+  }
+  await expect(ticketPayButton(page)).toHaveCount(0);
+  // An 이용권 purchase never costs gold.
+  await expect(page.locator(goldSelector)).toContainText(gold.toLocaleString('ko-KR'));
+  return used;
+}
+/** Signed-in only: spends every 이용권 held through the API, as another client
+ * would, so the next purchase on screen is a gold one. Returns the last state. */
+async function drainTickets(page: Page, kind: 'lotto' | 'speetto') {
+  let state = await shopSnapshot<ShopState>(page, kind);
+  const held = () => (state.free?.[kind] ?? 0) + (kind === 'lotto' ? state.inventory.lottoTickets : state.inventory.speettoTickets);
+  for (let spent = 0; held() > 0; spent++) {
+    expect(spent, `${kind} 이용권 never ran out`).toBeLessThan(40);
+    const response = await page.request.post(`/api/shop/${kind}`, {
+      data: { requestId: crypto.randomUUID(), payment: 'ticket', ...(kind === 'lotto' ? { numbers: [21, 22, 23, 24, 25] } : {}) },
+      headers: { Origin: new URL(page.url()).origin },
+    });
+    expect(response.status()).toBe(200);
+    state = await response.json();
+  }
+  return state;
+}
+/** The scratch result is announced in a modal; closes it after reading it. */
+async function confirmSpeettoResult(page: Page, text: string | RegExp) {
+  const dialog = page.locator('dialog.speetto-result-dialog');
+  await expect(dialog).toHaveAccessibleName('스피또 결과');
+  await expect(dialog.locator('h2')).toHaveText(text);
+  const announced = await dialog.locator('h2').innerText();
+  await dialog.getByRole('button', { name: '확인', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  return announced;
+}
 function purchaseResponse(page: Page, kind: string) {
   return page.waitForResponse(response => new URL(response.url()).pathname === `/api/shop/${kind}` && response.request().method() === 'POST');
 }
@@ -581,8 +637,24 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await page.getByRole('dialog', { name: '뽑은 쿠지', exact: true }).getByRole('button', { name: '닫기', exact: true }).click();
   await page.goto('/#/preview/shop/lotto');
   await expect(page.getByRole('heading', { name: '데일리 로또', exact: true })).toBeVisible();
+  // While an 이용권 is held it is the only way to pay, and it costs no gold.
+  await expect(page.locator('.shop-buy-bar .shop-purchase-actions button')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /^골드로 사기/ })).toHaveCount(0);
+  const startGold = await displayedGold(page, '.game-toolbar .gold');
+  const heldBefore = await heldTickets(page);
+  await chooseLottoNumbers(page, [11, 12, 13, 14, 15]);
+  await ticketPayButton(page).click();
+  await confirmPurchase(page);
+  // The purchase day unfolds by itself to show the new ticket.
+  await expect(page.locator('.lotto-tickets details.shop-history-group[open] .ticket').first()).toContainText('추첨 대기');
+  await expect(ticketPayButton(page)).toHaveAccessibleName(`이용권으로 사기 · 1장 · 보유 ${heldBefore - 1}장`);
+  await expect(page.locator('.game-toolbar .gold')).toContainText(startGold.toLocaleString('ko-KR'));
+  // With no 이용권 left the same place holds the gold button.
+  expect(await useUpLottoTickets(page)).toBe(heldBefore - 1);
+  await expect(page.locator('.shop-buy-bar .shop-purchase-actions button')).toHaveCount(1);
   await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
   const beforeGold = await displayedGold(page, '.game-toolbar .gold');
+  expect(beforeGold).toBe(startGold);
   await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
   await confirmPurchase(page);
   await expect(page.locator('.lotto-tickets .ticket').first()).toContainText('추첨 대기');
@@ -594,6 +666,8 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await expect(attendance.locator('.attendance-summary')).toHaveAttribute('aria-expanded', 'false');
   await page.goto('/#/preview/shop/lotto');
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold - 500 + reward).toLocaleString('ko-KR'));
+  // Attendance may hand out 이용권 again; they are spent before gold is asked for.
+  await useUpLottoTickets(page);
   await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
   await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
   await confirmPurchase(page);
@@ -607,11 +681,22 @@ test('shop previews run purchases and grade dialogs without API access at both t
   await expect(attendanceLedger).toHaveCount(1);
   await expect(attendanceLedger).toContainText(`+${reward}G`);
   await page.goto('/#/preview/shop/speetto');
-  await page.getByRole('button', { name: '골드로 사기 · 300G', exact: true }).click();
+  // The preview still holds speetto 이용권, so that is the one pay button; it costs no gold.
+  await expect(page.locator('.shop-buy-bar .shop-purchase-actions button')).toHaveCount(1);
+  const speettoGold = await displayedGold(page, '.game-toolbar .gold');
+  await ticketPayButton(page).click();
   await confirmPurchase(page);
   await expect(page.locator('.scratch-card')).toBeVisible();
+  await expect(page.locator('.scratch-area canvas')).not.toHaveClass(/revealed/);
+  const speettoHistory = page.getByRole('region', { name: '오늘의 스피또', exact: true });
+  await expect(speettoHistory.locator('.speetto-ticket-row')).toHaveText(/긁기 전/);
   await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
-  await expect(page.locator('.scratch-result')).not.toHaveText('?');
+  const speettoWon = (await confirmSpeettoResult(page, /^(당첨! \+1,500G|아쉽지만 낙첨이에요)$/)).startsWith('당첨');
+  await expect(page.locator('.scratch-area canvas')).toHaveClass(/revealed/);
+  await expect(speettoHistory.locator('.speetto-ticket-row')).toHaveText(speettoWon ? /\+1,500G/ : /낙첨/);
+  // No gold was spent; a win was paid at purchase.
+  await expect(page.locator('.game-toolbar .gold')).toContainText((speettoGold + (speettoWon ? 1500 : 0)).toLocaleString('ko-KR'));
+  await expect(page.getByRole('button', { name: '한 번에 긁기', exact: true })).toHaveCount(0);
   expect(await page.locator('.scratch-symbols').evaluate(element => element.getAnimations({ subtree: true }).some(animation => animation.effect?.getTiming().iterations === Infinity))).toBe(false);
   await captureWidths(page, 'preview-speetto', info, 3);
   expect(requests).toEqual([]);
@@ -683,7 +768,12 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   await login(page, 'yeseo');
   await page.goto('/#/shop/lotto');
   await expect(page.getByRole('heading', { name: '데일리 로또', exact: true })).toBeVisible();
+  // A purchase day is folded until its row is pressed.
   const history = page.locator(`.ticket[data-ticket-id="${SAVED_LOTTO_ID}"]`);
+  const savedDay = page.locator('details.shop-history-group[data-purchase-date="2026-10-29"]');
+  await expect(savedDay.locator('.shop-history-heading')).toContainText('당첨 +5,000G');
+  await expect(history).toHaveCount(0);
+  await savedDay.locator('summary').click();
   await expect(history.locator('.ticket-result')).toContainText('1등');
   await expect(history.locator('.ticket-balls i[style]')).toHaveCount(5);
   await expect(history).toContainText('+5,000G');
@@ -730,7 +820,19 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   expect(afterRetry.inventory.lottoTickets).toBe(before.inventory.lottoTickets);
   expect(afterRetry.free?.lotto).toBe((before.free?.lotto ?? 0) - 1);
   expect(afterRetry.lotto.tickets).toHaveLength(before.lotto.tickets.length + 1);
+  // While any 이용권 is held there is no gold button at all.
+  await expect(page.getByRole('button', { name: /^골드로 사기/ })).toHaveCount(0);
+  await expect(page.locator('.shop-buy-bar .shop-purchase-actions button')).toHaveCount(1);
+  // Spend the rest elsewhere; this screen then offers gold instead.
+  const drained = await drainTickets(page, 'lotto');
+  expect(drained.gold).toBe(before.gold);
+  expect(drained.inventory.lottoTickets).toBe(0);
+  expect(drained.free?.lotto).toBe(0);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '데일리 로또', exact: true })).toBeVisible();
   await chooseLottoNumbers(page, [6, 7, 8, 9, 10]);
+  await expect(ticketPayButton(page)).toHaveCount(0);
+  await expect(page.locator('.shop-buy-bar .shop-purchase-actions button')).toHaveCount(1);
   const paid = purchaseResponse(page, 'lotto');
   await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
   await confirmPurchase(page);
@@ -738,6 +840,8 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
   expect(paidResponse.status()).toBe(200);
   const paidData = await paidResponse.json() as LottoResponse;
   expect(paidData.purchase).toMatchObject({ payment: 'gold', cost: 500, drawDate: '2026-10-30', numbers: [6, 7, 8, 9, 10] });
+  // Today's purchases unfold by themselves after buying here.
+  await expect(page.locator('details.shop-history-group[data-purchase-date="2026-10-30"]')).toHaveAttribute('open', '');
   await expect(page.locator(`.ticket[data-ticket-id="${paidData.purchase!.id}"]`)).toContainText('추첨 대기');
   expect((await snapshot(page)).user.gold).toBe(before.gold - 500);
   await captureWidths(page, 'authenticated-lotto', info, 3);
@@ -747,20 +851,76 @@ test('daily lotto shows past winnings and retries a lost purchase response once 
 });
 
 test('speetto pays at purchase, restores owned tickets after leaving and scratching never changes the balance', async ({ page }, info) => {
+  test.setTimeout(60000);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await login(page, 'siwon');
   await page.goto('/#/shop/speetto');
-  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', SAVED_SPEETTO_ID);
-  await expect(page.locator('.scratch-result')).toHaveText('?');
+  await expect(page.getByRole('heading', { name: '스피또', exact: true })).toBeVisible();
+  const card = page.locator('.scratch-card');
+  const cover = page.locator('.scratch-area canvas');
+  const scratchAll = page.getByRole('button', { name: '한 번에 긁기', exact: true });
+  const resultDialog = page.locator('dialog.speetto-result-dialog');
+  const history = page.getByRole('region', { name: '오늘의 스피또', exact: true });
   const restored = await shopSnapshot<SpeettoResponse>(page, 'speetto');
-  expect(restored.speetto.tickets[0]).toMatchObject({ id: SAVED_SPEETTO_ID, won: true, prize: 1500 });
+  // Only today's tickets are listed: yesterday's fixture ticket is finished business.
+  expect(restored.speetto.tickets).toEqual([]);
+  await expect(card).toHaveCount(0);
+  await expect(history).toContainText('오늘 산 표가 아직 없어요.');
+  await expect(history.locator(`[data-ticket-id="${SAVED_SPEETTO_ID}"]`)).toHaveCount(0);
+  const result = (won: boolean) => won ? '당첨! +1,500G' : '아쉽지만 낙첨이에요';
+  const revealResponse = () => page.waitForResponse(response => new URL(response.url()).pathname === '/api/shop/speetto/reveal' && response.request().method() === 'POST');
+
+  // An 이용권 is the only pay button while any is held; today's free one goes first.
+  await expect(page.locator('.shop-buy-bar .shop-purchase-actions button')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /^골드로 사기/ })).toHaveCount(0);
+  const coupon = purchaseResponse(page, 'speetto');
+  await ticketPayButton(page).click();
+  await confirmPurchase(page);
+  const couponData = await (await coupon).json() as SpeettoResponse;
+  const first = couponData.purchase!;
+  expect(first).toMatchObject({ payment: 'free', cost: 0, revealed: false });
+  expect(first.cells).toHaveLength(3);
+  expect(first.prize).toBe(first.won ? 1500 : 0);
+  expect(new Set(first.cells).size === 1).toBe(first.won);
+  expect(couponData.inventory.speettoTickets).toBe(restored.inventory.speettoTickets);
+  expect(couponData.free?.speetto).toBe((restored.free?.speetto ?? 0) - 1);
+  // The prize is paid at purchase, before anything is scratched.
+  const afterCoupon = restored.gold + first.prize;
+  expect((await snapshot(page)).user.gold).toBe(afterCoupon);
+  await expect(card).toHaveAttribute('data-ticket-id', first.id);
+  await expect(cover).not.toHaveClass(/revealed/);
+  await expect(history.locator('.speetto-ticket-row')).toHaveText(/긁기 전/);
+  // Leaving and coming back restores the ticket, still covered.
   await page.goto('/#/shop');
   await page.goto('/#/shop/speetto');
-  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', SAVED_SPEETTO_ID);
-  await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
-  await expect(page.locator('.scratch-result')).toHaveText('당첨! +1,500G');
-  expect((await snapshot(page)).user.gold).toBe(restored.gold);
+  await expect(card).toHaveAttribute('data-ticket-id', first.id);
+  await expect(cover).not.toHaveClass(/revealed/);
+  await expect(resultDialog).toHaveCount(0);
+  const firstSaved = revealResponse();
+  await scratchAll.click();
+  await confirmSpeettoResult(page, result(first.won));
+  expect((await firstSaved).status()).toBe(200);
+  await expect(cover).toHaveClass(/revealed/);
+  await expect(history.locator(`[data-ticket-id="${first.id}"]`)).toContainText(first.won ? '+1,500G' : '낙첨');
+  expect((await snapshot(page)).user.gold).toBe(afterCoupon);
   await captureWidths(page, 'authenticated-speetto', info, 3);
+  // Scratching is remembered by the server: a reload shows it open, with no modal.
+  expect((await shopSnapshot<SpeettoResponse>(page, 'speetto')).speetto.tickets.map(ticket => [ticket.id, ticket.revealed])).toEqual([[first.id, true]]);
+  await page.reload();
+  await expect(card).toHaveAttribute('data-ticket-id', first.id);
+  await expect(cover).toHaveClass(/revealed/);
+  await expect(scratchAll).toHaveCount(0);
+  await expect(resultDialog).toHaveCount(0);
+
+  // With no 이용권 left the pay button is the gold one.
+  const drained = await drainTickets(page, 'speetto');
+  expect(drained.inventory.speettoTickets).toBe(0);
+  expect(drained.free?.speetto).toBe(0);
+  const beforePaid = (await snapshot(page)).user.gold;
+  expect(beforePaid).toBe(drained.gold);
+  await page.reload();
+  await expect(ticketPayButton(page)).toHaveCount(0);
+  await expect(page.locator('.shop-buy-bar .shop-purchase-actions button')).toHaveCount(1);
   const paid = purchaseResponse(page, 'speetto');
   await page.getByRole('button', { name: '골드로 사기 · 300G', exact: true }).click();
   await confirmPurchase(page);
@@ -768,29 +928,33 @@ test('speetto pays at purchase, restores owned tickets after leaving and scratch
   expect(response.status()).toBe(200);
   const data = await response.json() as SpeettoResponse;
   const ticket = data.purchase!;
-  expect(ticket).toMatchObject({ payment: 'gold', cost: 300 });
+  expect(ticket).toMatchObject({ payment: 'gold', cost: 300, revealed: false });
   expect(ticket.cells).toHaveLength(3);
   expect(ticket.prize).toBe(ticket.won ? 1500 : 0);
   expect(new Set(ticket.cells).size === 1).toBe(ticket.won);
-  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', ticket.id);
-  await expect(page.locator('.scratch-result')).toHaveText('?');
-  expect((await snapshot(page)).user.gold).toBe(restored.gold - 300 + ticket.prize);
+  await expect(card).toHaveAttribute('data-ticket-id', ticket.id);
+  await expect(cover).not.toHaveClass(/revealed/);
+  expect((await snapshot(page)).user.gold).toBe(beforePaid - 300 + ticket.prize);
   await page.goto('/#/shop');
   await page.goto('/#/shop/speetto');
   await page.reload();
-  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', ticket.id);
+  // The newest ticket still covered is the one offered.
+  await expect(card).toHaveAttribute('data-ticket-id', ticket.id);
   const afterPurchase = (await snapshot(page)).user.gold;
-  await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
-  await expect(page.locator('.scratch-result')).toHaveText(ticket.won ? '당첨! +1,500G' : '아쉽지만 낙첨이에요');
+  const saved = revealResponse();
+  await scratchAll.click();
+  await confirmSpeettoResult(page, result(ticket.won));
+  expect((await saved).status()).toBe(200);
   expect((await snapshot(page)).user.gold).toBe(afterPurchase);
-  const coupon = purchaseResponse(page, 'speetto');
-  await page.getByRole('button', { name: /^이용권으로 사기 · 1장/ }).click();
-  await confirmPurchase(page);
-  const couponData = await (await coupon).json() as SpeettoResponse;
-  // Today's free 이용권 goes first; owned tickets stay.
-  expect(couponData.purchase).toMatchObject({ payment: 'free', cost: 0 });
-  expect(couponData.inventory.speettoTickets).toBe(restored.inventory.speettoTickets);
-  expect((await snapshot(page)).user.gold).toBe(afterPurchase + couponData.purchase!.prize);
+  // Rows are numbered from the oldest; the newest is on top.
+  const rows = history.locator('.speetto-ticket-row');
+  const count = data.speetto.tickets.length;
+  await expect(rows).toHaveCount(count);
+  await expect(rows.first()).toHaveAttribute('data-ticket-id', ticket.id);
+  await expect(rows.first().locator('.shop-ticket-order')).toHaveText(String(count));
+  await expect(rows.last()).toHaveAttribute('data-ticket-id', first.id);
+  await expect(rows.last().locator('.shop-ticket-order')).toHaveText('1');
+  await expect(rows.last()).toContainText(first.won ? '+1,500G' : '낙첨');
 });
 
 test('administrators cannot purchase any shop item through UI or API', async ({ page }) => {
@@ -845,7 +1009,8 @@ for (const outcome of ['success', 'conflict'] as const) {
       await expect.poll(() => held).toBe(true);
       await page.goto('/#/shop/speetto');
       await expect(page.getByRole('heading', { name: '스피또', exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: '골드로 사기 · 300G', exact: true })).toBeDisabled();
+      // min still holds speetto 이용권, so the one pay button is the 이용권 one.
+      await expect(ticketPayButton(page)).toBeDisabled();
       if (outcome === 'conflict') {
         // A second HTTP client takes the selected cell while the browser's
         // original purchase is in flight. Its later response is a real 409.
@@ -859,7 +1024,7 @@ for (const outcome of ['success', 'conflict'] as const) {
       release();
       expect((await completed).status()).toBe(outcome === 'success' ? 200 : 409);
       expect((await loaded).status()).toBe(200);
-      await expect(page.getByRole('button', { name: '골드로 사기 · 300G', exact: true })).toBeEnabled();
+      await expect(ticketPayButton(page)).toBeEnabled();
       await expect(page.locator('.inventory-card')).toContainText('스피또 이용권');
     } finally { release(); }
   });
@@ -987,6 +1152,8 @@ test('catchmind preview keeps hints, rewards, drawing tools and color selection 
   await expect(rewardRows).toContainText('+3점');
   await page.goto('/#/preview/shop/lotto');
   await expect(page.locator('.game-toolbar .gold')).toContainText((beforeGold + 5).toLocaleString('ko-KR'));
+  // 이용권 come first and cost nothing; once they are gone the purchase is a gold one.
+  expect(await useUpLottoTickets(page)).toBeGreaterThan(0);
   await chooseLottoNumbers(page, [1, 2, 3, 4, 5]);
   await page.getByRole('button', { name: '골드로 사기 · 500G', exact: true }).click();
   await confirmPurchase(page);
