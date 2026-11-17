@@ -1,8 +1,7 @@
 # 별명 태그 진화 — 이미지 프롬프트
 
 별명 태그 진화 화면(진화 중 → 성공/실패 모달)에 넣을 전용 그림입니다.
-그림을 받기 전까지는 **내 캐릭터 스프라이트**(진화 중·성공은 `happy`, 실패는 `sleepy`)와 CSS 무지개 링으로 대신 보여 주고 있어요.
-아래 그림을 받으면 `src/screens/NicknameTagShop.tsx`의 `EvolvingOverlay`·`EvolutionResult`에서 캐릭터 스프라이트 자리에 바꿔 넣습니다.
+그림 4장은 2026-11-17에 받아 `scripts/prepare-tag-evolution-art.py`로 다듬어 `public/tags/*.webp`에 넣었습니다. 다시 만들 때 아래 프롬프트를 씁니다.
 
 ## 먼저 할 일
 

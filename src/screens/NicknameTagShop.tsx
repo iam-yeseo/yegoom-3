@@ -3,7 +3,7 @@ import { DAILY_FREE, NICKNAME_TAG_RULES, TAG_EVOLUTION_RULES } from "../../share
 import { TAG_GRADES, evolutionChance, gradeLabel, nextTagGrade, type NicknameTagGrade } from "../../shared/nickname-tags";
 import type { NicknameTag, TagDrawInput, TagEvolution, TagEvolveInput } from "../../shared/types";
 import { ApiFailure } from "../api";
-import { CharacterSprite, NickTag, Segmented, Toolbar, honorific, useNameParts } from "../components/UI";
+import { NickTag, Segmented, Toolbar, honorific, useNameParts } from "../components/UI";
 import { BuyBar, ResultDialog } from "../components/BuyBar";
 import { confetti, flipY, openSheet, reduced, toast, useCountUp } from "../motion";
 import { ticketCount, useShop } from "../shop";
@@ -122,16 +122,16 @@ function EvolveSheet({ tag, materials, freeLeft, gold, onStart, onClose }: {
   </dialog>;
 }
 
-/** While the attempt runs: my character bounces inside the spinning glow. It
+/** While the attempt runs: the two tags swirl into the pot inside the spinning glow. It
  * cannot be dismissed; the result modal replaces it. */
-function EvolvingOverlay({ username, tag }: { username: string; tag: NicknameTag }) {
+function EvolvingOverlay({ tag }: { tag: NicknameTag }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => openSheet(dialog.current!), []);
   return <dialog ref={dialog} className="launch-dialog result-dialog tag-evolving" aria-label="별명 태그 진화 중" onCancel={event => event.preventDefault()}>
     <div className="tag-evolving-stage" aria-hidden="true">
       <span className="tag-evolving-ring" /><span className="tag-evolving-ring second" />
       {Array.from({ length: 6 }, (_, index) => <b key={index} style={{ "--i": index } as React.CSSProperties} />)}
-      <CharacterSprite username={username} state="happy" className="tag-evolving-character" />
+      <img className="tag-evolving-art" src="/tags/evolve-working.webp" alt="" width="150" height="150" />
     </div>
     <div className="tag-evolving-chip"><NickTag tag={tag} /></div>
     <h2 role="status">진화 중…</h2>
@@ -139,7 +139,7 @@ function EvolvingOverlay({ username, tag }: { username: string; tag: NicknameTag
   </dialog>;
 }
 
-function EvolutionResult({ result, username, onClose }: { result: TagEvolution; username: string; onClose: () => void }) {
+function EvolutionResult({ result, onClose }: { result: TagEvolution; onClose: () => void }) {
   const chip = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!result.success) return;
@@ -147,7 +147,7 @@ function EvolutionResult({ result, username, onClose }: { result: TagEvolution; 
     confetti(chip.current, { n: 36, spread: 150 });
   }, [result.success]);
   return <ResultDialog label="별명 태그 진화 결과" className={`tag-evolve-result ${result.success ? "won" : "lost"} ${gradeClass(result.tag.grade)}`} onClose={onClose}>
-    <CharacterSprite username={username} state={result.success ? "happy" : "sleepy"} className="tag-evolve-result-character" />
+    <img className="tag-evolve-result-art" src={`/tags/evolve-${result.success ? "success" : result.materialLost ? "lost" : "fail"}.webp`} alt="" width="150" height="150" />
     <h2 role="status">{result.success ? "진화 성공!" : "진화 실패…"}</h2>
     <div className="tag-draw-card" ref={chip}><NickTag tag={result.tag} /></div>
     <p>{result.success
@@ -336,8 +336,8 @@ export function NicknameTagShop({ username, displayName, onBack, inventory = fal
       onDiscard={() => void discard(opened).then(done => { if (done) setOpenId(null); })} onClose={() => setOpenId(null)} />}
     {evolveTarget && <EvolveSheet tag={evolveTarget} materials={materialsFor(evolveTarget, list)} freeLeft={freeEvolves} gold={shop.gold}
       onStart={material => void evolve({ requestId: crypto.randomUUID(), tagId: evolveTarget.id, materialId: material.id }, evolveTarget)} onClose={() => setEvolveId(null)} />}
-    {evolving && <EvolvingOverlay username={username} tag={evolving} />}
-    {evolution && !evolving && <EvolutionResult result={evolution} username={username} onClose={() => setEvolution(null)} />}
+    {evolving && <EvolvingOverlay tag={evolving} />}
+    {evolution && !evolving && <EvolutionResult result={evolution} onClose={() => setEvolution(null)} />}
     {confirmSheet}
   </div>;
 }

@@ -68,5 +68,5 @@ python3 scripts/prepare-santa-art.py /path/to/santa-images
 
 ## 별명 태그 진화 그림
 
-- 아직 전용 그림이 없다. 진화 중·성공·실패 화면은 플레이어의 캐릭터 스프라이트(`public/characters/sprites/*`)와 CSS만으로 그린다.
-- 전용 그림 4장은 [이미지 프롬프트](tag-evolution-image-prompts.md)로 만들어 받을 예정이다. 받으면 `public/tags/`에 WebP로 넣고 이 절을 갱신한다.
+- `public/tags/evolve-{working,success,fail,lost}.webp` 4장은 사용자가 2026-11-17에 제공한 이미지다. 사용자가 [이미지 프롬프트](tag-evolution-image-prompts.md)로 이미지 생성기에서 만들었다(원본 1254×1254 PNG).
+- `scripts/prepare-tag-evolution-art.py`가 알파 24 이하의 옅은 잡티를 지우고 투명 여백을 자른 뒤 정사각형 가운데에 두어 360px WebP(quality 85, 알파 무손실)로 줄였다. 각 20~28KB.

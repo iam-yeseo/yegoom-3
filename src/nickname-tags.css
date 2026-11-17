@@ -130,9 +130,9 @@
 .tag-evolving-stage b { position: absolute; left: 50%; bottom: 30px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: #ffd866;
   transform: translateX(calc((var(--i) - 2.5) * 24px)); animation: tag-evolve-spark 1.2s ease-out infinite; animation-delay: calc(var(--i) * -.2s); }
 .tag-evolving-stage b:nth-child(odd) { background: #b9a3f0; }
-.tag-evolving-stage .tag-evolving-character { position: relative; width: 112px; height: 112px; animation: tag-evolve-pulse .8s ease-in-out infinite alternate; }
+.tag-evolving-stage .tag-evolving-art { position: relative; width: 132px; height: 132px; animation: tag-evolve-pulse .8s ease-in-out infinite alternate; }
 .tag-evolving-chip { font-size: 20px; animation: tag-evolve-shake .5s ease-in-out infinite; }
-.result-dialog .tag-evolve-result-character { flex: none; width: 120px; height: 120px; }
+.result-dialog .tag-evolve-result-art { flex: none; width: 150px; height: 150px; }
 .tag-evolve-cost { margin: 0; font-size: 12px; font-weight: 700; color: #ada4b3; }
 .tag-evolve-sheet .tag-draw-actions .primary-button { flex: 1.6; white-space: nowrap; }
 .tag-evolve-result .tag-draw-card { padding: 16px 22px; }
@@ -143,5 +143,5 @@
 @keyframes tag-evolve-pulse { from { scale: .94; filter: brightness(1); } to { scale: 1.06; filter: brightness(1.12); } }
 @keyframes tag-evolve-shake { 0%, 100% { rotate: -3deg; } 50% { rotate: 3deg; } }
 @media (prefers-reduced-motion: reduce) {
-  .tag-evolving-ring, .tag-evolving-stage b, .tag-evolving-character, .tag-evolving-chip { animation: none; }
+  .tag-evolving-ring, .tag-evolving-stage b, .tag-evolving-art, .tag-evolving-chip { animation: none; }
 }
