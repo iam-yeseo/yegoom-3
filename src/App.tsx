@@ -945,7 +945,7 @@ export default function App() {
         weeklyScore={me.weeklyScore}
         ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewFreeThrow.ledger, ...previewSanta.ledger, ...previewStock.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
         others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
-        tagShopHref={demo ? "#/preview/shop/tag" : "#/shop/tag"}
+        tagShopHref={demo ? "#/preview/shop/tag/inventory" : "#/shop/tag/inventory"}
         onBack={home}
         onDisplayNameChange={async displayName => {
           if (demo) {
@@ -1006,13 +1006,14 @@ export default function App() {
     content = <Speetto gold={me.gold} onBack={() => go("/shop")} />;
   else if (path === "/shop/slot")
     content = <Slot onBack={() => go("/shop")} />;
-  else if (path === "/shop/tag")
-    content = <NicknameTagShop username={view.username} displayName={view.displayName} onBack={() => go("/shop")} go={go} />;
+  else if (path === "/shop/tag" || path === "/shop/tag/inventory")
+    content = <NicknameTagShop key={path} username={view.username} displayName={view.displayName} inventory={path === "/shop/tag/inventory"}
+      onBack={() => go(path === "/shop/tag/inventory" ? "/profile" : "/shop")} />;
   else content = <Home data={view} go={go} />;
   // Sub-pages have their own back button instead of the tab bar.
   const subPage =
  !!play || !!gameId || !!stockId ||
-    ["/attendance", "/stock", "/stock/news", "/shop/lotto", "/shop/speetto", "/shop/slot", "/shop/tag"].includes(path);
+    ["/attendance", "/stock", "/stock/news", "/shop/lotto", "/shop/speetto", "/shop/slot", "/shop/tag", "/shop/tag/inventory"].includes(path);
   const showTabs = !!view && !!me && !subPage;
   const screenRef = useScreenTransition(path);
   useStatusBarColor(screenRef, `${path}|${loading}|${!!data}`);

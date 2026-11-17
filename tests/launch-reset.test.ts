@@ -19,7 +19,7 @@ const cleared = ['ledger', 'attendance', 'game_rounds', 'predictions', 'inventor
   'catchmind_rounds', 'claw_plays', 'claw_coin_purchases', 'claw_accounts', 'login_attempts', 'announcements', 'luck_photos'];
 // The launch-era reset does not cover the later slot-machine receipts.
 // Post-launch records (slot receipts, nickname tags) are outside the launch-era reset.
-const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins', 'nickname_tags',
+const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_photos', 'game_settings', 'admin_changes', 'slot_spins', 'nickname_tags', 'nickname_tag_evolutions',
   // Nickname draw tickets (0018) are granted after launch, so the launch-era reset leaves them alone.
   'tag_ticket_ledger',
   // Ranking payouts (0019) start after launch too; their settlement markers stay.
@@ -115,6 +115,8 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO claw_coin_purchases (id, user_id, request_id, quantity, cost, created_at) VALUES ('old-coins', 'min', 'old-coins-request', 5, 500, '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO slot_spins (id, user_id, request_id, cost, reels, prize, date, created_at) VALUES ('retained-slot', 'min', 'retained-slot-request', 500, '[\"banana\",\"apple\",\"seven\"]', 0, '2026-11-01', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at) VALUES ('retained-tag', 'min', 'retained-tag-request', 'A', '반짝이는', 1, '2026-11-01', '2026-11-01T00:00:00Z')"),
+      db.prepare("INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at) VALUES ('retained-material', 'min', 'retained-material-request', 'B', '반짝이는', 0, '2026-11-01', '2026-11-01T00:00:00Z')"),
+      db.prepare("INSERT INTO nickname_tag_evolutions (id, user_id, request_id, base_id, material_id, text, from_grade, to_grade, material_grade, chance, success, material_lost, cost, date, created_at) VALUES ('retained-evolution', 'min', 'retained-evolution-request', 'retained-tag', 'retained-material', '반짝이는', 'B', 'A', 'B', 15, 1, 1, 0, '2026-11-01', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO tag_ticket_ledger (id, user_id, amount, reason, reference, created_at) VALUES ('retained-tag-ticket', 'min', 5, '별명 뽑기권 지급', 'tag:grant:welcome:min', '2026-11-01T00:00:00Z')"),
       db.prepare("INSERT INTO ranking_settlements (period, key, settled_at) VALUES ('week', '2026-10-26', '2026-11-02T00:01:00Z')"),
       db.prepare("INSERT INTO ranking_results (period, key, user_id, place, score, gold, players) VALUES ('week', '2026-10-26', 'min', 1, 10, 300, 3)"),

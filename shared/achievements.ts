@@ -93,6 +93,10 @@ export const ACHIEVEMENTS: readonly AchievementDefinition[] = [
   once('tag_first', 'shop', '이름값 하러 왔습니다', '별명 태그 첫 뽑기', 50),
   once('tag_s', 'shop', 'S급 뽑음 ㅇㅈ?', 'S등급 별명 태그 획득', 500),
   once('tag_equip', 'shop', '닉네임 풀착장 완료', '별명 태그 달기', 50),
+  once('tag_evolve_success', 'shop', '성공은 실패의 아버지', '별명 태그 진화 성공', 100),
+  once('tag_evolve_fail', 'shop', '실패는 성공의 어머니', '별명 태그 진화 실패', 100),
+  once('tag_evolve_lost', 'shop', '거기 분실물센터죠?', '별명 태그 진화 실패 후 태그 사라짐', 100),
+  once('tag_evolve_s', 'shop', '나 이런 사람이야', '별명 태그 진화로 S등급 태그 달성', 500),
   // 캐릭터 뽑기
   once('claw_first', 'claw', '집게도 하면 된다', '인형 첫 획득', 50),
   once('claw_clear', 'claw', '기계 거덜 낸 사람', '뽑기 기계 클리어(인형 전부 획득)', 500),

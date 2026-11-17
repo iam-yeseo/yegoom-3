@@ -3,6 +3,7 @@ import { DAILY_FREE, SHOP_HISTORY_DAYS, SLOT_RULES } from "../../shared/balance"
 import type { SlotSpin, SlotSpinInput, SlotSymbol } from "../../shared/types";
 import { ApiFailure } from "../api";
 import { Toolbar } from "../components/UI";
+import { BuyBar } from "../components/BuyBar";
 import { formatDate, formatTime } from "../format";
 import { anim, coinFly, confetti, reduced, shake, useCountUp } from "../motion";
 import { useShop } from "../shop";
@@ -220,7 +221,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
   const buttonLabel = pending && phase !== "spinning" ? "같은 요청으로 다시 확인"
     : freeSpins > 0 ? `돌리기 · 이용권 1장 (보유 ${freeSpins}장)` : `돌리기 · ${SLOT_RULES.price.toLocaleString("ko-KR")}G`;
   const message = error || shop.error || (missingRequest ? "이전 요청 번호를 확인할 수 없어요. 최근 기록을 다시 불러와 확인해 주세요." : "");
-  return <div className="slot">
+  return <div className="slot with-buy-bar">
     <SlotToolbar gold={gold} onBack={onBack} />
     <div className="screen-body stack">
       <p className="slot-intro">과일 사이에 숨어 있는 오늘의 행운</p>
@@ -250,9 +251,6 @@ export function Slot({ onBack }: { onBack: () => void }) {
             : "레버를 당겨 행운을 만나 보세요"}
         </div>
       </section>
-      <button type="button" className="primary-button slot-spin-button" onClick={() => void spin()} disabled={disabled} aria-label={buttonLabel}>
-        {busy ? phase === "checking" ? "결과 확인 중…" : "돌아가는 중…" : buttonLabel}
-      </button>
       <p className="slot-rule"><strong>7 7 7이 나오면 {SLOT_RULES.jackpotPrize.toLocaleString("ko-KR")}G</strong><span>당첨 확률 {SLOT_RULES.jackpotPercent}% · 1회 {SLOT_RULES.price.toLocaleString("ko-KR")}G{SLOT_RULES.dailyLimit === null ? " · 횟수 제한 없음" : ""}</span></p>
       {!shop.canPurchase && !shop.loading && <p className="subtle-note">운영자 계정은 구매에 참여하지 않아요.</p>}
       {!pending && freeSpins <= 0 && shop.gold < SLOT_RULES.price && shop.canPurchase && <p className="subtle-note">이용권과 골드가 부족해요</p>}
@@ -264,5 +262,10 @@ export function Slot({ onBack }: { onBack: () => void }) {
       {pending && !busy && <p className="subtle-note">같은 요청으로 다시 확인하면 처음 결과를 불러와요.</p>}
       <SlotHistory spins={shownRecent} loading={shop.loading} />
     </div>
+    <BuyBar label="슬롯머신 돌리기">
+      <button type="button" className="primary-button slot-spin-button" onClick={() => void spin()} disabled={disabled} aria-label={buttonLabel}>
+        {busy ? phase === "checking" ? "결과 확인 중…" : "돌아가는 중…" : buttonLabel}
+      </button>
+    </BuyBar>
   </div>;
 }

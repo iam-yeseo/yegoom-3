@@ -45,6 +45,16 @@ export const GAME_RULES = {
   luck: { title: '행운 점수 맞히기', author: 'yeseo', deadline: '17:00:00', revealTime: '18:00:00' },
 } as const satisfies Record<GameId, { title: string; author: string; deadline: string; revealTime?: string }>;
 
+/** The three prediction games rest on Saturday and Sunday (KST): no round opens
+ * on those dates, whatever the administrator's ON/OFF setting says. */
+export const predictionDayOff = (date: string): boolean => [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay());
+/** When the next round after a rest day opens: 00:00 KST of the next weekday. */
+export function nextPredictionOpenAt(date: string): number {
+  let next = Date.parse(`${date}T00:00:00+09:00`);
+  do next += 86_400_000; while (predictionDayOff(new Date(next + 9 * 3_600_000).toISOString().slice(0, 10)));
+  return next;
+}
+
 export const PREDICTION_REWARDS = { participationGold: 100, firstGold: 100 } as const;
 export const ATTENDANCE_RULES = {
   cycleLength: 7, dailyGold: 100, cycleGold: 500,
@@ -143,6 +153,14 @@ export const SHOP_HISTORY_DAYS = 7;
 /** `welcomeTickets` is the one-off grant every active player received in
  * migration 0018; a draw spends a ticket first and only then gold. */
 export const NICKNAME_TAG_RULES = { price: 300, dailyLimit: 5, welcomeTickets: 5 } as const;
+/** Evolution: two of my tags with the same phrase. The one being evolved rises a
+ * grade on success; the other (the material) is always spent on success and
+ * half the time on failure. `chance` is the percent to reach each grade; every
+ * grade step between the two tags adds `bonusPerStep`, up to `maxBonusSteps`.
+ * The first `dailyFree` attempts of a KST day cost nothing, later ones `price`. */
+export const TAG_EVOLUTION_RULES = {
+  dailyFree: 3, price: 100, chance: { B: 30, A: 15, S: 5 }, bonusPerStep: 3, maxBonusSteps: 2, loseOnFailPercent: 50,
+} as const;
 export const SLOT_RULES = {
   price: 500, jackpotPercent: 7, jackpotPrize: 2000,
   symbols: ['banana', 'apple', 'strawberry', 'grape', 'watermelon', 'chamoe', 'seven'],

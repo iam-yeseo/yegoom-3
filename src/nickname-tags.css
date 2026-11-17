@@ -86,3 +86,62 @@
 .tag-tile-icon i { display: flex; align-items: center; width: 36px; height: 17px; padding-left: 7px; box-sizing: border-box; border-radius: 6px; background: linear-gradient(90deg, #ffd3e6, #cdf3e2 50%, #e6d6ff); }
 .tag-tile-icon i::after { content: ""; width: 16px; height: 4px; border-radius: 2px; background: #6a4fb8; opacity: .55; }
 
+
+/* 별명 태그 인벤토리 · 진화 (2026-11) */
+.tag-shop .segmented { margin-top: 4px; }
+.tag-inventory-now, .tag-evolve-info, .tag-grade-group { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.tag-inventory-preview { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 64px; padding: 12px; border-radius: 18px; background: #fbf8f4; font-size: 20px; }
+.tag-inventory-preview strong { font-weight: 800; }
+.tag-inventory-none { font-size: 13px; font-weight: 700; color: #ada4b3; }
+.tag-inventory-now .tag-untag { height: 44px; border-radius: 15px; font-size: 15px; color: #7c7383; background: #f3eee8; box-shadow: none; }
+.tag-grade-group h2 span { margin-left: 4px; font-size: 12px; font-weight: 700; color: #ada4b3; }
+.tag-grade-group.grade-s h2 { color: #6a4fb8; }
+.tag-grade-group.grade-a h2 { color: #94700a; }
+.tag-grade-group.grade-b h2 { color: #5c5162; }
+.tag-collection button small.tag-evolvable { padding: 2px 6px; border-radius: 999px; color: #2e8c6e; background: #e3f6ee; }
+.tag-collection-current { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 15px; }
+.tag-evolve-rules summary { cursor: pointer; font-size: 13px; font-weight: 800; color: #7c7383; }
+.tag-evolve-rules table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 13px; text-align: left; }
+.tag-evolve-rules td, .tag-evolve-rules th { padding: 7px 0; border-bottom: 1px solid #f3eee8; }
+.tag-note-evolve { color: #2e8c6e; font-weight: 700; }
+.tag-sheet-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
+.tag-sheet-actions .primary-button { grid-column: 1 / -1; }
+.tag-sheet-actions .secondary-button { box-shadow: none; }
+.tag-sheet-actions .tag-evolve-button:not(:disabled) { color: #2e8c6e; background: #e3f6ee; }
+.tag-evolve-sheet h2 { margin: 0; font-size: var(--fs-sheet-title); }
+.tag-evolve-path { display: flex; align-items: center; justify-content: center; gap: 14px; font-size: 20px; }
+.tag-evolve-path > span { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.tag-evolve-path small, .tag-evolve-materials small { font-size: 12px; font-weight: 700; color: #ada4b3; }
+.tag-evolve-path i { font-style: normal; font-weight: 800; color: #ada4b3; }
+.tag-evolve-materials { display: flex; flex-direction: column; gap: 8px; width: 100%; margin: 0; padding: 0; border: 0; text-align: left; }
+.tag-evolve-materials legend { padding: 0 2px 6px; font-size: 13px; font-weight: 800; color: #7c7383; }
+.tag-evolve-materials label { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 12px; border-radius: 14px; background: #fff; box-shadow: inset 0 0 0 1.5px #f1e8de; font-size: 16px; cursor: pointer; }
+.tag-evolve-materials label.on { background: #fff0ea; box-shadow: 0 0 0 2px #ff8e7a; }
+.tag-evolve-materials b { margin-left: auto; font-size: 12px; color: #2e8c6e; white-space: nowrap; }
+.tag-evolve-chance { margin: 0; font-size: 15px; font-weight: 700; }
+.tag-evolve-chance strong { font-size: 22px; color: #d9604a; }
+.tag-evolve-chance small { font-size: 12px; font-weight: 600; color: #ada4b3; }
+/* 진화 중: my character jumps inside two counter-rotating rings while sparks rise. */
+.tag-evolving { overflow: hidden; }
+.tag-evolving-stage { position: relative; width: 190px; height: 190px; display: grid; place-items: center; }
+.tag-evolving-ring { position: absolute; inset: 6px; border-radius: 50%; background: conic-gradient(#ffd3e6, #fff0b8, #cdf3e2, #cfe0ff, #e6d6ff, #ffd3e6); animation: tag-evolve-spin 1.6s linear infinite;
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 12px), #000 calc(100% - 11px)); mask: radial-gradient(farthest-side, transparent calc(100% - 12px), #000 calc(100% - 11px)); }
+.tag-evolving-ring.second { inset: 26px; opacity: .7; animation-duration: 2.3s; animation-direction: reverse; }
+.tag-evolving-stage b { position: absolute; left: 50%; bottom: 30px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: #ffd866;
+  transform: translateX(calc((var(--i) - 2.5) * 24px)); animation: tag-evolve-spark 1.2s ease-out infinite; animation-delay: calc(var(--i) * -.2s); }
+.tag-evolving-stage b:nth-child(odd) { background: #b9a3f0; }
+.tag-evolving-stage .tag-evolving-art { position: relative; width: 132px; height: 132px; animation: tag-evolve-pulse .8s ease-in-out infinite alternate; }
+.tag-evolving-chip { font-size: 20px; animation: tag-evolve-shake .5s ease-in-out infinite; }
+.result-dialog .tag-evolve-result-art { flex: none; width: 150px; height: 150px; }
+.tag-evolve-cost { margin: 0; font-size: 12px; font-weight: 700; color: #ada4b3; }
+.tag-evolve-sheet .tag-draw-actions .primary-button { flex: 1.6; white-space: nowrap; }
+.tag-evolve-result .tag-draw-card { padding: 16px 22px; }
+.tag-evolve-result.won h2 { color: #6a4fb8; }
+.tag-evolve-result.lost h2 { color: #7c7383; }
+@keyframes tag-evolve-spin { to { transform: rotate(360deg); } }
+@keyframes tag-evolve-spark { 0% { translate: 0 0; opacity: 0; scale: .6; } 25% { opacity: 1; } 100% { translate: 0 -120px; opacity: 0; scale: 1.2; } }
+@keyframes tag-evolve-pulse { from { scale: .94; filter: brightness(1); } to { scale: 1.06; filter: brightness(1.12); } }
+@keyframes tag-evolve-shake { 0%, 100% { rotate: -3deg; } 50% { rotate: 3deg; } }
+@media (prefers-reduced-motion: reduce) {
+  .tag-evolving-ring, .tag-evolving-stage b, .tag-evolving-art, .tag-evolving-chip { animation: none; }
+}

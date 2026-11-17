@@ -57,3 +57,17 @@ export function drawNicknameTag(randomInt: (max: number) => number): { grade: Ni
   const pool = TAG_POOLS[grade];
   return { grade, text: pool[randomInt(pool.length)]! };
 }
+
+/** C → B → A → S. S is the top: it cannot evolve. */
+const GRADE_STEPS: readonly NicknameTagGrade[] = ['C', 'B', 'A', 'S'];
+export const nextTagGrade = (grade: NicknameTagGrade): Exclude<NicknameTagGrade, 'C'> | null =>
+  (GRADE_STEPS[GRADE_STEPS.indexOf(grade) + 1] as Exclude<NicknameTagGrade, 'C'> | undefined) ?? null;
+/** Percent chance that `base` evolves with `material` (null for an S tag). */
+export function evolutionChance(base: NicknameTagGrade, material: NicknameTagGrade,
+  rules: { chance: Record<'B' | 'A' | 'S', number>; bonusPerStep: number; maxBonusSteps: number }): { base: number; bonus: number; total: number } | null {
+  const target = nextTagGrade(base);
+  if (!target) return null;
+  const steps = Math.min(rules.maxBonusSteps, Math.abs(GRADE_STEPS.indexOf(base) - GRADE_STEPS.indexOf(material)));
+  const bonus = steps * rules.bonusPerStep;
+  return { base: rules.chance[target], bonus, total: rules.chance[target] + bonus };
+}

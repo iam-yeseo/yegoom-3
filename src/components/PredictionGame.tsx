@@ -338,7 +338,31 @@ function GameHelp({ id, authorName, rules }: { id: GameId; authorName: string; r
     </div>
   </details></div>;
 }
+/** A rest day (weekend): no round today, only the time left until the next one. */
+function DayOffGame({ game, user, serverTime, onBack }: Props) {
+  const offset = useServerOffset(serverTime);
+  const opensAt = Date.parse(game.dayOff!.nextOpenAt);
+  const [now, setNow] = useState(() => Date.now() + offset);
+  useEffect(() => {
+    setNow(Date.now() + offset);
+    const timer = window.setInterval(() => setNow(Date.now() + offset), 1000);
+    return () => window.clearInterval(timer);
+  }, [offset]);
+  const left = Math.max(0, Math.ceil((opensAt - now) / 1000));
+  const days = Math.floor(left / 86_400);
+  return <div className={`prediction-page ${game.id}`}>
+    <Toolbar title={game.title} onBack={onBack} gold={user.gold} />
+    <div className="screen-body"><section className="card empty-state prediction-off prediction-dayoff" aria-label="휴무">
+      <span className="dayoff-chip">휴무</span>
+      <h2>주말에는 이 게임을 쉬어요</h2>
+      <p>다음 게임까지 남은 시간</p>
+      <strong className="dayoff-countdown countdown-number" role="timer" aria-live="off">{days > 0 && <span>{days}일 </span>}{clock(left % 86_400)}</strong>
+      <small>{formatDate(new Date(opensAt + 9 * 3_600_000).toISOString().slice(0, 10))}에 다시 열려요</small>
+    </section></div>
+  </div>;
+}
 export function PredictionGame(props: Props) {
+  if (props.game.dayOff) return <DayOffGame {...props} />;
   if (!props.game.rules.enabled) return <div className={`prediction-page ${props.game.id}`}>
     <Toolbar title={props.game.title} onBack={props.onBack} gold={props.user.gold} />
     <div className="screen-body"><section className="card empty-state prediction-off" aria-label="오늘은 쉬어요">

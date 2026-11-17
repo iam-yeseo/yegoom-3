@@ -52,7 +52,8 @@ describe('shop preview draw and recent purchase rules', () => {
     inclusiveBoundary.buySpeetto(speetto);
     at('2026-11-07T09:00:00+09:00');
     expect(inclusiveBoundary.read('lotto').lotto.tickets[0]).toMatchObject({ purchaseDate: '2026-11-01' });
-    expect(inclusiveBoundary.read('speetto').speetto.tickets).toHaveLength(1);
+    // Speetto lists only the day's own tickets.
+    expect(inclusiveBoundary.read('speetto').speetto.tickets).toEqual([]);
     at('2026-11-08T09:00:00+09:00');
     expect(preview.read('lotto').lotto.tickets).toEqual([]);
     expect(preview.read('speetto').speetto.tickets).toEqual([]);

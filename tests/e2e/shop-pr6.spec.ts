@@ -36,11 +36,11 @@ const lottoTickets = () => [
 ];
 function speetto(id: string, date: string, hour: number, won: boolean): SpeettoTicket {
   return { id, requestId: id, purchaseDate: date, createdAt: `${date}T${String(hour).padStart(2, '0')}:00:00+09:00`,
-    cells: won ? ['cat', 'cat', 'cat'] : ['cat', 'drop', 'bread'], won, prize: won ? 1500 : 0, payment: 'gold', cost: 300 };
+    cells: won ? ['cat', 'cat', 'cat'] : ['cat', 'drop', 'bread'], won, prize: won ? 1500 : 0, payment: 'gold', cost: 300, revealed: false };
 }
+// The server lists only today's speetto tickets, newest first.
 const speettoTickets = () => [
   speetto('00000000-0000-4000-8000-000000000101', TODAY, 16, true), speetto('00000000-0000-4000-8000-000000000102', TODAY, 12, false),
-  speetto('00000000-0000-4000-8000-000000000103', '2026-11-03', 14, true), speetto('00000000-0000-4000-8000-000000000104', '2026-11-02', 9, false),
 ];
 async function fixture(page: Page, tickets: { lotto?: LottoTicket[]; speetto?: SpeettoTicket[] } = {}) {
   const initial = await signIn(page);
@@ -48,6 +48,11 @@ async function fixture(page: Page, tickets: { lotto?: LottoTicket[]; speetto?: S
     user: { ...initial.user, gold: 12000 }, inventory: { lottoTickets: 3, speettoTickets: 3, tagTickets: 0 },
     lottoNotice: { drawDate: TODAY, tickets: 3, winners: 2, prize: 10000 } };
   const writes: string[] = [];
+  /** Tickets scratched open, in order: the one write scratching makes. */
+  const reveals: string[] = [];
+  const speettoList = tickets.speetto ?? speettoTickets();
+  const speettoResponse = (): SpeettoResponse => ({ gold: snapshot.user.gold, inventory: snapshot.inventory, canPurchase: true, serverTime: snapshot.serverTime,
+    speetto: { tickets: speettoList } });
   await page.route('**/api/bootstrap', route => route.fulfill({ json: snapshot }));
   await page.route('**/api/shop/lotto', route => {
     if (route.request().method() !== 'GET') { writes.push(route.request().url()); return route.abort(); }
@@ -58,12 +63,19 @@ async function fixture(page: Page, tickets: { lotto?: LottoTicket[]; speetto?: S
   });
   await page.route('**/api/shop/speetto', route => {
     if (route.request().method() !== 'GET') { writes.push(route.request().url()); return route.abort(); }
-    const response: SpeettoResponse = { gold: snapshot.user.gold, inventory: snapshot.inventory, canPurchase: true, serverTime: snapshot.serverTime,
-      speetto: { tickets: tickets.speetto ?? speettoTickets() } };
-    return route.fulfill({ json: response });
+    return route.fulfill({ json: speettoResponse() });
+  });
+  // Scratching is saved on the server; the fixture keeps it like the Worker does.
+  await page.route('**/api/shop/speetto/reveal', route => {
+    const { ticketId } = route.request().postDataJSON() as { ticketId: string };
+    const ticket = speettoList.find(entry => entry.id === ticketId);
+    if (route.request().method() !== 'POST' || !ticket) { writes.push(route.request().url()); return route.abort(); }
+    reveals.push(ticketId);
+    ticket.revealed = true;
+    return route.fulfill({ json: speettoResponse() });
   });
   return {
-    get snapshot() { return snapshot; }, writes,
+    get snapshot() { return snapshot; }, writes, reveals,
     replace(next: Partial<BootstrapResponse>) { snapshot = { ...snapshot, ...next }; },
     async switchAccount(username: string) {
       const next = await signIn(page, username);
@@ -92,20 +104,37 @@ async function capture(page: Page, name: string, width: number, info: TestInfo) 
   await page.screenshot({ path, fullPage: true, scale: 'css', animations: 'disabled' });
   await info.attach(`${name}-${width}`, { path, contentType: 'image/png' });
 }
-async function twoButtons(page: Page) {
-  const actions = page.locator('.shop-purchase-actions');
-  await expect(actions.getByRole('button')).toHaveCount(2);
-  const buttons = await actions.getByRole('button').evaluateAll(nodes => nodes.map(node => {
-    const box = node.getBoundingClientRect();
-    return { top: box.top, left: box.left, width: box.width, height: box.height, overflow: node.scrollWidth > node.clientWidth,
-      lineHeight: getComputedStyle(node).lineHeight };
-  }));
-  expect(Math.abs(buttons[0].top - buttons[1].top)).toBeLessThan(1);
-  expect(Math.abs(buttons[0].height - buttons[1].height)).toBeLessThan(1);
-  expect(buttons[0].left).toBeLessThan(buttons[1].left);
-  expect(buttons.every(button => !button.overflow)).toBe(true);
-  await expect(actions.getByRole('button', { name: /^골드로 사기/ })).toBeVisible();
-  await expect(actions.getByRole('button', { name: /^이용권으로 사기/ })).toBeVisible();
+const drawDialog = (page: Page) => page.locator('dialog.lotto-draw-dialog');
+const resultDialog = (page: Page) => page.locator('dialog.speetto-result-dialog');
+const drawShownKey = (accountKey: string, date = TODAY) => `yegoom3:lotto-draw-shown:${accountKey}:${date}`;
+/** Closes the scratch result modal after checking what it announces. */
+async function confirmResult(page: Page, text: string) {
+  await expect(resultDialog(page)).toHaveAccessibleName('스피또 결과');
+  await expect(resultDialog(page).locator('h2')).toHaveText(text);
+  await resultDialog(page).getByRole('button', { name: '확인', exact: true }).click();
+  await expect(resultDialog(page)).toHaveCount(0);
+}
+/** One pay button, in the bar pinned to the bottom of the viewport: an 이용권
+ * while any is held, so no gold button next to it. */
+async function oneTicketButton(page: Page) {
+  const bar = page.locator('body > .shop-buy-bar');
+  const actions = bar.locator('.shop-purchase-actions');
+  await expect(actions.getByRole('button')).toHaveCount(1);
+  await expect(page.locator('.shop-purchase-actions')).toHaveCount(1);
+  await expect(actions.getByRole('button', { name: /^이용권으로 사기 · 1장 · 보유 \d+장$/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^골드로 사기/ })).toHaveCount(0);
+  const layout = await bar.evaluate(node => {
+    const box = node.getBoundingClientRect(), button = node.querySelector('button')!, inner = button.getBoundingClientRect();
+    return { position: getComputedStyle(node).position, bottom: box.bottom, left: box.left, right: box.right, viewportHeight: innerHeight, viewportWidth: innerWidth,
+      buttonInside: inner.top >= box.top && inner.bottom <= box.bottom && inner.left >= box.left && inner.right <= box.right,
+      overflow: button.scrollWidth > button.clientWidth };
+  });
+  expect(layout.position).toBe('fixed');
+  expect(Math.abs(layout.bottom - layout.viewportHeight)).toBeLessThan(1);
+  expect(layout.left).toBeGreaterThanOrEqual(0);
+  expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth);
+  expect(layout.buttonInside).toBe(true);
+  expect(layout.overflow).toBe(false);
 }
 async function scratchLine(page: Page, from: [number, number], to: [number, number], steps = 5) {
   await cover(page).scrollIntoViewIfNeeded();
@@ -116,7 +145,7 @@ async function scratchLine(page: Page, from: [number, number], to: [number, numb
   await page.mouse.up();
 }
 
-for (const width of [390, 560]) test(`home notice, two-column purchases and compact purchase-day histories at ${width}px`, async ({ page }, info) => {
+for (const width of [390, 560]) test(`home notice, one pinned pay button, folded lotto days and today's speetto at ${width}px`, async ({ page }, info) => {
   test.setTimeout(90000);
   await page.setViewportSize({ width, height: 900 });
   const data = await fixture(page);
@@ -130,56 +159,141 @@ for (const width of [390, 560]) test(`home notice, two-column purchases and comp
   await capture(page, 'home-lotto-notice', width, info);
   await notice(page).getByRole('button', { name: /^오늘 산/ }).click();
   await expect(page).toHaveURL(/#\/shop\/lotto$/);
+  // The first visit after the draw opens today's numbers in a modal, once.
+  await expect(drawDialog(page)).toBeVisible();
+  await expect(drawDialog(page)).toHaveAccessibleName('데일리 로또 당첨 번호');
+  await expect(drawDialog(page).locator('.draw-balls i')).toHaveText(WINNING.map(String));
+  await expect(drawDialog(page).locator('.lotto-draw-summary')).toContainText('1등 당첨! +10,000G');
+  await expect(drawDialog(page).locator('.lotto-draw-summary')).toContainText('내 표 3장 중 2장이 당첨됐어요.');
+  expect(await page.evaluate(key => localStorage.getItem(key), drawShownKey(data.snapshot.user.id))).toBe('1');
+  await drawDialog(page).getByRole('button', { name: '확인', exact: true }).click();
+  await expect(drawDialog(page)).toHaveCount(0);
   await expect(page.locator('.lotto-meta')).toContainText('17시 30분');
+  // The same numbers stay on the page, above the picker.
+  const drawCard = page.locator('.lotto-draw');
+  await expect(drawCard.locator('.draw-balls i')).toHaveText(WINNING.map(String));
+  expect(await drawCard.evaluate(node => Boolean(node.compareDocumentPosition(document.querySelector('.lotto-picker')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   for (const number of [6, 7, 8, 9, 10]) await page.getByRole('button', { name: `번호 ${number}`, exact: true }).click();
-  await twoButtons(page);
-  await expect(page.getByRole('button', { name: '골드로 사기 · 500G', exact: true })).toBeEnabled();
+  await expect(page.locator('.balls button[aria-pressed="true"][style]')).toHaveCount(5);
+  await oneTicketButton(page);
   await expect(page.getByRole('button', { name: /^이용권으로 사기 · 1장/ })).toBeEnabled();
   await capture(page, 'lotto-buttons', width, info);
   const lottoHistory = page.locator('.lotto-tickets.shop-ticket-history');
+  const day = (date: string) => lottoHistory.locator(`details.shop-history-group[data-purchase-date="${date}"]`);
   await expect(lottoHistory.locator('.shop-history-group')).toHaveCount(3);
+  // Every purchase day starts folded: its heading only, no ticket rows.
+  await expect(lottoHistory.locator('details.shop-history-group[open]')).toHaveCount(0);
+  await expect(lottoHistory.locator('.ticket')).toHaveCount(0);
+  await expect(day('2026-11-04')).toContainText('3장');
+  await expect(day('2026-11-04').locator('.shop-history-heading strong')).toHaveText('당첨 +5,000G');
+  await expect(day('2026-11-03').locator('.shop-history-heading strong')).toHaveText('당첨 +5,000G');
+  await day('2026-11-04').locator('summary').click();
+  await expect(day('2026-11-04').locator('.ticket')).toHaveCount(3);
+  await expect(lottoHistory.locator('.ticket')).toHaveCount(3);
+  await day('2026-11-03').locator('summary').click();
+  await day('2026-11-02').locator('summary').click();
   await expect(lottoHistory.locator('.ticket')).toHaveCount(5);
   await expect(lottoHistory.locator('.ticket.card')).toHaveCount(0);
-  await expect(lottoHistory.locator('[data-purchase-date="2026-11-04"]')).toContainText('3장');
-  await expect(lottoHistory.locator('[data-purchase-date="2026-11-04"] .shop-history-heading strong')).toHaveText('당첨 +5,000G');
-  await expect(lottoHistory.locator('[data-purchase-date="2026-11-03"] .shop-history-heading strong')).toHaveText('당첨 +5,000G');
   await expect(lottoHistory.locator('[data-ticket-id="lotto-tomorrow"] .ticket-date')).toContainText('11월 05일 추첨');
   await expect(lottoHistory.locator('[data-ticket-id="lotto-yesterday-late"] .ticket-result')).toContainText('1등 · +5,000G');
   await expect(lottoHistory.locator('[data-ticket-id="lotto-yesterday-late"] .ticket-date')).toContainText('11월 04일 추첨');
   await expect(lottoHistory).toContainText('최근 7일 기록만 보여요');
   await capture(page, 'lotto-history', width, info);
+  // Folding a day again takes its rows away.
+  await day('2026-11-02').locator('summary').click();
+  await expect(lottoHistory.locator('.ticket')).toHaveCount(4);
+  // A second visit does not open the draw modal again; the card can replay it.
+  await page.reload();
+  await expect(drawCard).toBeVisible();
+  await expect(drawDialog(page)).toHaveCount(0);
+  await drawCard.getByRole('button', { name: '추첨 다시 보기', exact: true }).click();
+  await expect(drawDialog(page)).toBeVisible();
+  await drawDialog(page).getByRole('button', { name: '확인', exact: true }).click();
+  await expect(drawDialog(page)).toHaveCount(0);
+
   await go(page, '/shop/speetto');
   await readyCover(page);
-  await twoButtons(page);
+  await oneTicketButton(page);
   await capture(page, 'speetto-buttons', width, info);
-  const history = page.locator('.speetto-history.shop-ticket-history');
-  await expect(history.locator('.shop-history-group')).toHaveCount(3);
-  await expect(history.locator('.speetto-ticket-row')).toHaveCount(4);
-  await expect(history.getByText('긁기 전', { exact: true })).toHaveCount(4);
-  await expect(history.locator('.shop-history-heading strong')).toHaveCount(0);
+  const first = '00000000-0000-4000-8000-000000000101', second = '00000000-0000-4000-8000-000000000102';
+  const history = page.getByRole('region', { name: '오늘의 스피또', exact: true });
+  const total = history.locator('.shop-history-heading strong');
+  await expect(history).toHaveClass(/speetto-history/);
+  await expect(history.locator('.shop-history-group')).toHaveCount(0);
+  await expect(history.locator('h2')).toHaveText('오늘의 스피또 2장');
+  await expect(history.locator('.speetto-ticket-row')).toHaveCount(2);
+  // Newest first, numbered from the oldest.
+  await expect(history.locator('.speetto-ticket-row .shop-ticket-order')).toHaveText(['2', '1']);
+  await expect(history.getByText('긁기 전', { exact: true })).toHaveCount(2);
+  await expect(total).toHaveCount(0);
+  // The newest ticket still covered is the one offered.
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
+  await expect(page.locator('.scratch-result')).toHaveCount(0);
+  // Chosen by hand from here on, so the card stays on this ticket once it is scratched.
+  await history.locator(`[data-ticket-id="${first}"]`).click();
+  await expect(history.locator(`[data-ticket-id="${first}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await readyCover(page);
   await capture(page, 'scratch-before', width, info);
   await scratchLine(page, [.15, .48], [.55, .48]);
-  await expect(page.locator('.scratch-result')).toHaveText('?');
+  // A partial scratch reveals nothing yet: still covered, no result, nothing saved.
+  await expect(cover(page)).not.toHaveClass(/revealed/);
+  await expect(resultDialog(page)).toHaveCount(0);
+  await expect(history.locator(`[data-ticket-id="${first}"]`)).toContainText('긁기 전');
+  expect(data.reveals).toEqual([]);
   await capture(page, 'scratch-partial', width, info);
   await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
-  await expect(page.locator('.scratch-result')).toHaveText('당첨! +1,500G');
-  await expect(history.locator('[data-ticket-id="00000000-0000-4000-8000-000000000101"]')).toContainText('1,500G');
-  await expect(history.locator('[data-purchase-date="2026-11-04"] .shop-history-heading strong')).toHaveText('당첨 +1,500G');
-  await expect(history.locator('[data-purchase-date="2026-11-03"] .shop-history-heading strong')).toHaveCount(0);
-  await history.locator('[data-ticket-id="00000000-0000-4000-8000-000000000102"]').click();
+  await expect(cover(page)).toHaveClass(/revealed/);
+  await confirmResult(page, '당첨! +1,500G');
+  await expect(page.getByRole('button', { name: '한 번에 긁기', exact: true })).toHaveCount(0);
+  await expect(history.locator(`[data-ticket-id="${first}"]`)).toContainText('+1,500G');
+  await expect(total).toHaveText('당첨 +1,500G');
+  await history.locator(`[data-ticket-id="${second}"]`).click();
   await readyCover(page);
-  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', '00000000-0000-4000-8000-000000000102');
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', second);
+  await expect(cover(page)).not.toHaveClass(/revealed/);
   await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
-  await expect(page.locator('.scratch-result')).toHaveText('아쉽지만 낙첨이에요');
-  await history.locator('[data-ticket-id="00000000-0000-4000-8000-000000000101"]').click();
-  await expect(page.locator('.scratch-result')).toHaveText('당첨! +1,500G');
-  await expect(history.locator('[data-purchase-date="2026-11-04"] .shop-history-heading strong')).toHaveText('당첨 +1,500G');
-  await expect(history.locator('[data-purchase-date="2026-11-03"] .speetto-ticket-row')).toContainText('긁기 전');
-  await expect(history.locator('[data-purchase-date="2026-11-03"] .shop-history-heading strong')).toHaveCount(0);
-  await expect(history.locator('[data-purchase-date="2026-11-02"] .shop-history-heading strong')).toHaveCount(0);
-  await expect(history).toContainText('최근 7일 기록만 보여요');
+  await confirmResult(page, '아쉽지만 낙첨이에요');
+  await expect(history.locator(`[data-ticket-id="${second}"]`)).toContainText('낙첨');
+  // Going back to a scratched ticket shows it open and announces nothing again.
+  await history.locator(`[data-ticket-id="${first}"]`).click();
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
+  await expect(cover(page)).toHaveClass(/revealed/);
+  await expect(page.getByRole('button', { name: '한 번에 긁기', exact: true })).toHaveCount(0);
+  await expect(resultDialog(page)).toHaveCount(0);
+  await expect(total).toHaveText('당첨 +1,500G');
+  await expect(history).toContainText('오늘 산 표만 보여요');
   await capture(page, 'speetto-history', width, info);
   await expect(page.locator('.game-toolbar .gold')).toContainText(data.snapshot.user.gold.toLocaleString('ko-KR'));
+  // Scratching saved each ticket once and bought nothing.
+  await expect.poll(() => data.reveals).toEqual([first, second]);
+  // The server remembers: after a reload both stay scratched, with no modal.
+  await page.reload();
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
+  await expect(cover(page)).toHaveClass(/revealed/);
+  await expect(history.locator('.speetto-ticket-row strong')).toHaveText(['+1,500G', '낙첨']);
+  await expect(total).toHaveText('당첨 +1,500G');
+  await expect(page.getByRole('button', { name: '한 번에 긁기', exact: true })).toHaveCount(0);
+  await expect(resultDialog(page)).toHaveCount(0);
+  expect(data.reveals).toEqual([first, second]);
+  expect(data.writes).toEqual([]);
+});
+
+test('a speetto offered by default stays on screen while its result is announced', async ({ page }) => {
+  const first = '00000000-0000-4000-8000-000000000101';
+  const data = await fixture(page);
+  await page.goto('/#/shop/speetto');
+  await readyCover(page);
+  // Nothing was picked in the list: the newest covered ticket is offered.
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
+  await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
+  await expect(resultDialog(page).locator('h2')).toHaveText('당첨! +1,500G');
+  await expect.poll(() => data.reveals).toEqual([first]);
+  // The card under the modal is still the ticket just scratched, now open,
+  // not the next covered one.
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
+  await expect(cover(page)).toHaveClass(/revealed/);
+  await confirmResult(page, '당첨! +1,500G');
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', first);
   expect(data.writes).toEqual([]);
 });
 
@@ -187,56 +301,64 @@ test('history headings hide zero totals and count only revealed speetto wins', a
   const firstWin = '00000000-0000-4000-8000-000000000101';
   const loss = '00000000-0000-4000-8000-000000000102';
   const secondWin = '00000000-0000-4000-8000-000000000105';
-  const olderLoss = '00000000-0000-4000-8000-000000000104';
   const data = await fixture(page, {
     lotto: [
       lotto('lotto-pending', TODAY, '2026-11-05', 18, [21, 22, 23, 24, 25], null, null, null),
       lotto('lotto-lost', '2026-11-03', '2026-11-03', 15, [11, 12, 13, 14, 15], 0, null, 0),
     ],
-    speetto: [speetto(firstWin, TODAY, 16, true), speetto(loss, TODAY, 12, false), speetto(secondWin, TODAY, 10, true),
-      speetto(olderLoss, '2026-11-03', 9, false)],
+    speetto: [speetto(firstWin, TODAY, 16, true), speetto(loss, TODAY, 12, false), speetto(secondWin, TODAY, 10, true)],
   });
+  // This device already saw today's draw: no modal covers the page.
+  await page.addInitScript(key => { localStorage.setItem(key, '1'); }, drawShownKey(data.snapshot.user.id));
   await page.goto('/#/shop/lotto');
   const lottoHistory = page.locator('.lotto-tickets.shop-ticket-history');
   await expect(lottoHistory.locator('.shop-history-group')).toHaveCount(2);
+  await expect(drawDialog(page)).toHaveCount(0);
   await expect(lottoHistory.locator('.shop-history-heading strong')).toHaveCount(0);
+  await expect(lottoHistory.locator('.ticket')).toHaveCount(0);
+  for (const date of [TODAY, '2026-11-03']) await lottoHistory.locator(`[data-purchase-date="${date}"] summary`).click();
   await expect(lottoHistory.locator('[data-ticket-id="lotto-pending"] .ticket-result')).toHaveText('추첨 대기');
   await expect(lottoHistory.locator('[data-ticket-id="lotto-lost"] .ticket-result')).toHaveText('낙첨');
 
   await go(page, '/shop/speetto');
   await readyCover(page);
   const history = page.locator('.speetto-history.shop-ticket-history');
-  const todayTotal = history.locator(`[data-purchase-date="${TODAY}"] .shop-history-heading strong`);
+  const todayTotal = history.locator('.shop-history-heading strong');
   const row = (id: string) => history.locator(`[data-ticket-id="${id}"]`);
-  const reveal = async (id: string) => {
+  const reveal = async (id: string, text: string) => {
     await row(id).click();
     await readyCover(page);
+    await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', id);
     await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
+    await confirmResult(page, text);
   };
-  await expect(history.getByText('긁기 전', { exact: true })).toHaveCount(4);
-  await expect(history.locator('.shop-history-heading strong')).toHaveCount(0);
-  await reveal(loss);
+  await expect(history.locator('.speetto-ticket-row .shop-ticket-order')).toHaveText(['3', '2', '1']);
+  await expect(history.getByText('긁기 전', { exact: true })).toHaveCount(3);
+  await expect(todayTotal).toHaveCount(0);
+  await reveal(loss, '아쉽지만 낙첨이에요');
   await expect(row(loss)).toContainText('낙첨');
   await expect(todayTotal).toHaveCount(0);
   await expect(row(firstWin)).toContainText('긁기 전');
   await expect(row(secondWin)).toContainText('긁기 전');
 
-  await reveal(firstWin);
+  await reveal(firstWin, '당첨! +1,500G');
   await expect(todayTotal).toHaveText('당첨 +1,500G');
   await expect(row(secondWin)).toContainText('긁기 전');
   await row(secondWin).click();
   await readyCover(page);
-  await expect(page.locator('.scratch-result')).toHaveText('?');
+  await expect(cover(page)).not.toHaveClass(/revealed/);
+  await expect(resultDialog(page)).toHaveCount(0);
   await expect(todayTotal).toHaveText('당첨 +1,500G');
   await page.getByRole('button', { name: '한 번에 긁기', exact: true }).click();
+  await confirmResult(page, '당첨! +1,500G');
   await expect(todayTotal).toHaveText('당첨 +3,000G');
   await row(firstWin).click();
-  await expect(page.locator('.scratch-result')).toHaveText('당첨! +1,500G');
+  await expect(page.locator('.scratch-card')).toHaveAttribute('data-ticket-id', firstWin);
+  await expect(cover(page)).toHaveClass(/revealed/);
+  await expect(resultDialog(page)).toHaveCount(0);
   await expect(todayTotal).toHaveText('당첨 +3,000G');
-
-  await reveal(olderLoss);
-  await expect(row(olderLoss)).toContainText('낙첨');
-  await expect(history.locator('[data-purchase-date="2026-11-03"] .shop-history-heading strong')).toHaveCount(0);
+  // Each scratch was saved once; nothing was bought.
+  await expect.poll(() => data.reveals).toEqual([loss, firstWin, secondWin]);
   expect(data.writes).toEqual([]);
 });
 
