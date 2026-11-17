@@ -366,8 +366,16 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
     setError("");
     try {
       const next = await shop.buySpeetto(pending ?? { requestId: crypto.randomUUID(), payment });
-      if (next.purchase) select(next.purchase.id);
-      toast("스피또를 샀어요");
+      // A purchase confirmed after midnight is no longer among today's tickets
+      // (the list above), so its stored result is shown directly instead.
+      if (next.purchase && !next.speetto.tickets.some(entry => entry.id === next.purchase!.id)) {
+        setResult(next.purchase);
+        void shop.revealSpeetto(next.purchase.id);
+        toast("지난 구매 결과를 확인했어요");
+      } else {
+        if (next.purchase) select(next.purchase.id);
+        toast("스피또를 샀어요");
+      }
     } catch (e) { setError(e instanceof Error ? e.message : "구매를 확인하지 못했어요. 같은 결제 버튼으로 다시 시도해 주세요."); }
     finally { pendingClick.current = false; setBusy(false); }
   }

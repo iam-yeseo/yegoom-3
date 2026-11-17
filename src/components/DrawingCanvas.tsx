@@ -36,7 +36,8 @@ function imageBytes(url: string) {
 function exportImage(canvas: HTMLCanvasElement): string {
   const output = document.createElement("canvas");
   for (const scale of [1, .8, .6, .5]) {
-    output.width = output.height = Math.round(canvas.width * scale);
+    // Never larger than the shared rule the Worker enforces on uploads.
+    output.width = output.height = Math.min(CATCHMIND_RULES.maxImageSide, Math.round(canvas.width * scale));
     const context = output.getContext("2d")!;
     context.fillStyle = CANVAS_BACKGROUND;
     context.fillRect(0, 0, output.width, output.height);
@@ -260,11 +261,11 @@ export const DrawingCanvas = memo(function DrawingCanvas({ disabled = false, pub
   }
 
   return <div className="drawing-workspace">
-    <div className="pg-card pg-canvas-card"><div style={{ position: "relative" }}><canvas width="680" height="680" ref={canvas} data-notouchfx
+    <div className="pg-card pg-canvas-card"><div style={{ position: "relative" }}><canvas width={CATCHMIND_RULES.canvasSide} height={CATCHMIND_RULES.canvasSide} ref={canvas} data-notouchfx
       aria-label="그림 그리는 캔버스" aria-disabled={busy} onPointerDown={down} onPointerMove={move}
       onPointerUp={event => { if (stroke.current?.pointerId === event.pointerId) { move(event); stop(); } }}
       onPointerCancel={event => { if (stroke.current?.pointerId === event.pointerId) stop(); }} onLostPointerCapture={stop} />
-      <canvas width="680" height="680" ref={overlay} className="drawing-stroke-overlay" aria-hidden="true"
+      <canvas width={CATCHMIND_RULES.canvasSide} height={CATCHMIND_RULES.canvasSide} ref={overlay} className="drawing-stroke-overlay" aria-hidden="true"
         style={{ position: "absolute", inset: 0, background: "transparent", pointerEvents: "none", opacity: tool === "pen" ? color.alpha : 1 }} /></div></div>
     <div className="pg-card drawing-tools" data-notouchfx>
       <div className="drawing-tool-row" role="group" aria-label="그리기 도구">

@@ -6,10 +6,12 @@ import { Miniflare } from 'miniflare';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { hashPassword } from '../worker/crypto';
 import { kstTimestamp } from '../shared/market-calendar';
-import { readStockMarket } from '../worker/stocks';
+import { advanceStocks, readStockMarket, runStockCron } from '../worker/stocks';
+import { writeCloseNews } from '../worker/stock-ai';
+import { marketVersion, type StockRow } from '../shared/stock-market';
 import type { AdminState } from '../shared/admin';
 import type { AchievementsResponse } from '../shared/achievements';
-import type { StockDetailView, StockMarketView, StockNewsPage, StockTradeResponse, StockUnchanged } from '../shared/stock-types';
+import { STOCK_ORDER_UNFILLED_CODES, type StockDetailView, type StockMarketView, type StockNewsPage, type StockTradeResponse, type StockUnchanged } from '../shared/stock-types';
 
 const ORIGIN = 'http://localhost';
 const PASSWORD = 'test-only-password-42!';
@@ -192,6 +194,74 @@ describe('stock market API', () => {
       { requestId: 'late', ticker: 'YKHX', side: 'buy', quantity: 1, expectedVersion: ykhx.version })).data.error.code).toBe('PRICE_CHANGED');
   });
 
+  it('answers every retry of a filled order with its one trade, whatever the market has become since', async () => {
+    const market = await Market.create(yesterdayClose);
+    const now = kst('2026-11-05', '10:03');
+    const ykhx = (await market.request<StockMarketView>(now, 'min', '/api/stock')).data.stocks.find(stock => stock.ticker === 'YKHX')!;
+    const order = { requestId: 'lost-answer', ticker: 'YKHX', side: 'buy', quantity: 10, expectedVersion: ykhx.version, expectedUserId: 'min' };
+    // Twins of one request (a retry racing its original): one trade, and neither is told "not filled".
+    const twins = await Promise.all([1, 2, 3, 4].map(() => market.request<StockTradeResponse>(now, 'min', '/api/stock/trade', 'POST', order)));
+    expect(twins.map(twin => twin.status)).toEqual([200, 200, 200, 200]);
+    expect(twins.filter(twin => !twin.data.replayed)).toHaveLength(1);
+    expect(new Set(twins.map(twin => twin.data.trade.id)).size).toBe(1);
+    // The id belongs to that order: other input is refused, and another player's same id is their own order.
+    const other = await market.request<{ error: { code: string } }>(now, 'min', '/api/stock/trade', 'POST', { ...order, side: 'sell' });
+    expect([other.status, other.data.error.code]).toEqual([409, 'REQUEST_CONFLICT']);
+    const siwon = await market.request<{ error: { code: string } }>(now, 'siwon', '/api/stock/trade', 'POST', { ...order, expectedUserId: 'siwon', quantity: 80 });
+    expect([siwon.status, siwon.data.error.code]).toEqual([409, 'NOT_ENOUGH_GOLD']);
+    // The same order after the price moved, after the close and on the next day: still its receipt.
+    for (const later of [kst('2026-11-05', '10:11'), kst('2026-11-05', '18:30'), kst('2026-11-06', '09:20')]) {
+      const retry = await market.request<StockTradeResponse>(later, 'min', '/api/stock/trade', 'POST', order);
+      expect(retry.status, String(later)).toBe(200);
+      expect(retry.data).toMatchObject({ replayed: true, trade: { id: twins[0]!.data.trade.id, requestId: 'lost-answer', quantity: 10, price: ykhx.price } });
+    }
+    expect((await market.db.prepare("SELECT COUNT(*) AS n FROM stock_trades WHERE user_id = 'min'").first('n'))).toBe(1);
+    expect((await market.db.prepare("SELECT COUNT(*) AS n FROM ledger WHERE reference LIKE 'stock:%'").first('n'))).toBe(1);
+    expect(await market.db.prepare("SELECT quantity FROM stock_holdings WHERE user_id = 'min' AND ticker = 'YKHX'").first('quantity')).toBe(10);
+    await market.expectBalanced();
+  });
+
+  it('never fills a saved order for another account, and only refuses with a confirmed-unfilled code once no trade is stored', async () => {
+    const market = await Market.create(yesterdayClose);
+    const now = kst('2026-11-05', '10:03');
+    const ykhx = (await market.request<StockMarketView>(now, 'min', '/api/stock')).data.stocks.find(stock => stock.ticker === 'YKHX')!;
+    const order = { requestId: 'mins-order', ticker: 'YKHX', side: 'buy', quantity: 1, expectedVersion: ykhx.version, expectedUserId: 'min' };
+    // min's browser is now signed in as siwon: the saved order must not become siwon's.
+    await market.db.prepare("INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('fixture-siwon', 'siwon', 'gold', 100000, '테스트 골드', 'fixture:siwon', '2026-11-01T00:00:00.000Z')").run();
+    const switched = await market.request<{ error: { code: string } }>(now, 'siwon', '/api/stock/trade', 'POST', order);
+    expect([switched.status, switched.data.error.code]).toEqual([409, 'ACCOUNT_CHANGED']);
+    expect(STOCK_ORDER_UNFILLED_CODES).not.toContain('ACCOUNT_CHANGED');
+    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_trades').first('n')).toBe(0);
+    expect(await market.gold('siwon')).toBe(100000);
+
+    // Each refusal below leaves no trade under its id, and its code tells the browser so.
+    const refused = async (timestamp: number, user: string, body: Record<string, unknown>) => {
+      const requestId = crypto.randomUUID();
+      const response = await market.request<{ error: { code: string } }>(timestamp, user, '/api/stock/trade', 'POST',
+        { requestId, ticker: 'YKHX', side: 'buy', quantity: 1, expectedVersion: ykhx.version, expectedUserId: user, ...body });
+      expect(response.status, JSON.stringify(response.data)).toBeGreaterThanOrEqual(400);
+      expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_trades WHERE request_id = ?').bind(requestId).first('n')).toBe(0);
+      return response.data.error.code;
+    };
+    const codes = [
+      await refused(now, 'min', { expectedVersion: ykhx.version + 1 }),
+      await refused(now, 'min', { side: 'sell' }),
+      await refused(now, 'min', { quantity: 80 }),
+      await refused(now, 'siwon', { ticker: 'SIWN' }),
+      await refused(now, 'min', { ticker: 'NOPE' }),
+      await refused(now, 'min', { side: 'hold' }),
+      await refused(now, 'min', { quantity: 0 }),
+      await refused(now, 'min', { expectedVersion: -1 }),
+    ];
+    expect(codes).toEqual(['PRICE_CHANGED', 'NOT_ENOUGH_SHARES', 'NOT_ENOUGH_GOLD', 'AUTHOR_LOCKED', 'UNKNOWN_STOCK', 'INVALID_SIDE', 'INVALID_QUANTITY', 'INVALID_VERSION']);
+    // The order itself, sent by its owner, still fills exactly once.
+    expect((await market.request<StockTradeResponse>(now, 'min', '/api/stock/trade', 'POST', order)).data).toMatchObject({ replayed: false, stock: { held: 1 } });
+    expect((await market.request<StockTradeResponse>(now, 'min', '/api/stock/trade', 'POST', order)).data).toMatchObject({ replayed: true, stock: { held: 1 } });
+    codes.push(await refused(kst('2026-11-05', '18:30'), 'min', {}));
+    expect(codes[codes.length - 1]).toBe('MARKET_CLOSED');
+    for (const code of codes) expect(STOCK_ORDER_UNFILLED_CODES, code).toContain(code);
+  });
+
   it('rejects trades outside market hours, on weekends and on administrator holidays', async () => {
     const market = await Market.create(yesterdayClose);
     const trade = async (timestamp: number) => {
@@ -255,7 +325,96 @@ describe('stock market API', () => {
     expect(statements).toBe(8); // state + holidays + new game results + pending events, then holdings + news + gold + closing
     statements = 0;
     expect(await readStockMarket(counted, SECRET, { id: 'min', role: 'player', username: 'min' }, now, view.version)).toMatchObject({ unchanged: true });
-    expect(statements).toBe(4);
+    // "Unchanged" now also vouches for the news, the gold and the holdings, so the
+    // same four shown-row statements run; the answer is still the short one.
+    expect(statements).toBe(8);
+  });
+
+  it('never answers "unchanged" for a market read whose news, gold or holdings changed while prices stood still', async () => {
+    const market = await Market.create(kst('2026-11-05', '17:50'));
+    const user = { id: 'min', role: 'player' as const, username: 'min' };
+    // The close tick ran; the 18:00 Cron has not written the closing article yet.
+    const closed = kst('2026-11-05', '18:00') + 5_000;
+    const first = (await market.request<StockMarketView>(closed, 'min', '/api/stock')).data;
+    expect(first.market.open).toBe(false);
+    expect(first.closing).toEqual({ summary: null, comment: null, weekly: null });
+    const poll = async (timestamp: number, since: string, username = 'min') =>
+      (await market.request<StockMarketView & Partial<StockUnchanged>>(timestamp, username, `/api/stock?since=${encodeURIComponent(since)}`)).data;
+    expect(await poll(closed, first.version)).toMatchObject({ unchanged: true, version: first.version });
+
+    // The article is stored a little later: same prices, same tick.
+    const rows = (await market.db.prepare('SELECT ticker, price, prev_close AS prevClose, day_open AS dayOpen, status, last_tick_at AS lastTickAt, version FROM stock_state ORDER BY rowid').all<StockRow>()).results;
+    await writeCloseNews(market.db as unknown as D1Database, {}, '2026-11-05', rows, closed + 20_000);
+    const later = closed + 30_000;
+    const withArticle = await poll(later, first.version);
+    expect(withArticle.unchanged).toBeUndefined();
+    expect(withArticle.closing!.summary).toMatchObject({ id: 'close:2026-11-05', kind: 'close' });
+    expect(withArticle.stocks.map(stock => [stock.ticker, stock.price, stock.version])).toEqual(first.stocks.map(stock => [stock.ticker, stock.price, stock.version]));
+    // The price part of the version did not move; only the content stamp did.
+    expect(withArticle.version.split('.').slice(0, 2)).toEqual(first.version.split('.').slice(0, 2));
+    expect(withArticle.version).not.toBe(first.version);
+    expect(withArticle.version.startsWith(`${marketVersion(rows)}.`)).toBe(true);
+    expect(await poll(later, withArticle.version)).toMatchObject({ unchanged: true, version: withArticle.version });
+
+    // The administrator hides the article, then shows it again.
+    expect((await market.request(later, 'admin', '/api/admin/stock/news/close%3A2026-11-05', 'PUT', { hidden: true })).status).toBe(200);
+    const hidden = await poll(later, withArticle.version);
+    expect(hidden.unchanged).toBeUndefined();
+    expect(hidden.closing!.summary).toBeNull();
+    expect(await poll(later, hidden.version)).toMatchObject({ unchanged: true });
+    expect((await market.request(later, 'admin', '/api/admin/stock/news/close%3A2026-11-05', 'PUT', { hidden: false })).status).toBe(200);
+    const shown = await poll(later, hidden.version);
+    expect(shown.closing!.summary).toMatchObject({ id: 'close:2026-11-05' });
+    expect(shown.version).toBe(withArticle.version);
+
+    // A public article with no price effect (a whale), the player's gold, and their holdings.
+    await market.db.prepare("INSERT INTO stock_news (id, ticker, kind, publish_at, headline, body, source, created_at) VALUES ('whale:test', 'YKHX', 'whale', ?, '익명의 큰손, YK하이커스 100주 매수', '본문', 'template', 'x')").bind(closed).run();
+    const whale = await poll(later, shown.version);
+    expect(whale.news[0]).toMatchObject({ id: 'whale:test' });
+    await market.db.prepare("INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at) VALUES ('gift', 'min', 'gold', 77, '선물', 'fixture:gift', '2026-11-05T09:00:00.000Z')").run();
+    const richer = await poll(later, whale.version);
+    expect(richer.gold).toBe(whale.gold + 77);
+    await market.db.prepare("INSERT INTO stock_holdings (user_id, ticker, quantity, cost_basis) VALUES ('min', 'YKHX', 3, 4500)").run();
+    const holding = await poll(later, richer.version);
+    expect(holding.stocks.find(stock => stock.ticker === 'YKHX')).toMatchObject({ held: 3, costBasis: 4500 });
+    // Another player's private comment or holdings are not this player's change.
+    await market.db.prepare("INSERT INTO stock_holdings (user_id, ticker, quantity, cost_basis) VALUES ('siwon', 'YKHX', 1, 1500)").run();
+    expect(await poll(later, holding.version)).toMatchObject({ unchanged: true });
+    // A version from before the content stamp (prices only) is never "unchanged".
+    expect((await poll(later, marketVersion(rows))).unchanged).toBeUndefined();
+
+    // The cost of a quiet poll does not grow with the news history: 3,000 older articles change nothing.
+    const measure = async (since?: string) => {
+      let rowsRead = 0;
+      const metered = new Proxy(market.db, { get(target, key) {
+        const value = Reflect.get(target, key);
+        if (key === 'prepare') return (sql: string) => target.prepare(sql.replaceAll("unixepoch('now') * 1000", String(later)));
+        if (key === 'batch') return async (statements: never[]) => {
+          const results = await target.batch(statements);
+          for (const result of results) rowsRead += result.meta.rows_read ?? 0;
+          return results;
+        };
+        return typeof value === 'function' ? value.bind(target) : value;
+      } }) as unknown as D1Database;
+      const answer = await readStockMarket(metered, SECRET, user, later, since);
+      return { rowsRead, version: answer.version, unchanged: 'unchanged' in answer };
+    };
+    // Enough recent articles to fill the list, so older ones can never enter it.
+    await market.db.prepare(`INSERT INTO stock_news (id, ticker, kind, publish_at, headline, body, source, created_at)
+      SELECT 'recent:' || value, 'YEGM', 'news', ? - 60000 - value, '오늘 기사', '본문', 'template', 'x' FROM json_each('[1,2,3,4,5,6]')`).bind(closed).run();
+    const current = await measure();
+    const quiet = await measure(current.version);
+    expect(quiet.unchanged).toBe(true);
+    for (let offset = 0; offset < 3000; offset += 500) {
+      await market.db.prepare(`INSERT INTO stock_news (id, ticker, kind, publish_at, headline, body, source, created_at)
+        SELECT 'old:' || value, 'YEGM', 'news', ? - 86400000 - value, '지난 기사', '본문', 'template', 'x' FROM json_each(?)`)
+        .bind(closed, JSON.stringify(Array.from({ length: 500 }, (_, index) => offset + index))).run();
+    }
+    const afterHistory = await measure(current.version);
+    expect(afterHistory.unchanged).toBe(true);
+    expect(afterHistory.rowsRead).toBe(quiet.rowsRead);
+    console.info(`Stock market poll D1 rows_read: full ${current.rowsRead}, unchanged ${quiet.rowsRead}, unchanged after 3,000 older articles ${afterHistory.rowsRead}`);
+    expect(quiet.rowsRead).toBeLessThanOrEqual(80);
   });
 
   it('turns a result published in market hours into an immediate move with a news item, once', async () => {
@@ -282,6 +441,65 @@ describe('stock market API', () => {
     await market.request(now + 1000, 'siwon', '/api/stock');
     expect(await market.db.prepare('SELECT COUNT(*) AS n FROM stock_events').first('n')).toBe(4);
     expect(await market.db.prepare("SELECT COUNT(*) AS n FROM stock_news WHERE kind = 'game'").first('n')).toBe(4);
+  });
+
+  it('finds recently published game results by date, however many older rounds exist, settled ones included', async () => {
+    const market = await Market.create(yesterdayClose);
+    const now = kst('2026-11-05', '10:05');
+    // Three recent rounds inside the look-back: two already settled, one not; one of them already has its event.
+    for (const [game, date, answer, settled] of [['wake', '2026-11-04', '07:50:00', 1], ['offwork', '2026-11-04', '17:40:00', 0], ['luck', '2026-11-03', '90', 1]] as const) {
+      await market.db.prepare('INSERT INTO game_rounds (game_id, round_date, answer, revealed_at, settled_at, updated_at) VALUES (?, ?, ?, ?, ?, 0)')
+        .bind(game, date, answer, kst(date, '19:00'), settled ? kst(date, '19:01') : null).run();
+    }
+    const ROUNDS_SQL = `SELECT r.game_id, r.round_date, r.answer, COALESCE(r.revealed_at, r.reveal_at) AS published_at FROM game_rounds r
+      WHERE r.answer IS NOT NULL AND (r.revealed_at IS NOT NULL OR r.reveal_at <= ?) AND r.round_date >= ?
+        AND NOT EXISTS (SELECT 1 FROM stock_events e WHERE e.id = 'game:' || r.game_id || ':' || r.round_date)`;
+    const lookback = '2026-11-01';
+    const plan = async () => (await market.db.prepare(`EXPLAIN QUERY PLAN ${ROUNDS_SQL}`).bind(now, lookback).all<{ detail: string }>()).results.map(row => row.detail).join(' | ');
+    const rowsRead = async () => (await market.db.prepare(ROUNDS_SQL).bind(now, lookback).all()).meta.rows_read;
+    expect(await plan()).toContain('game_rounds_answered_date_idx');
+    const recent = (await market.db.prepare(ROUNDS_SQL).bind(now, lookback).all<{ game_id: string; round_date: string }>()).results;
+    expect(recent.map(round => `${round.game_id}:${round.round_date}`).sort()).toEqual(['luck:2026-11-03', 'offwork:2026-11-04', 'wake:2026-11-04']);
+    const few = await rowsRead();
+
+    // 10,000 settled rounds from the years before (every one answered and published).
+    for (let offset = 0; offset < 3334; offset += 500) {
+      await market.db.prepare(`INSERT INTO game_rounds (game_id, round_date, answer, revealed_at, settled_at, updated_at)
+        SELECT g.value, date('2026-10-01', '-' || d.value || ' days'), CASE g.value WHEN 'luck' THEN '50' ELSE '08:00:00' END, 1, 2, 0
+        FROM json_each('["wake","offwork","luck"]') g, json_each(?) d`)
+        .bind(JSON.stringify(Array.from({ length: Math.min(500, 3334 - offset) }, (_, index) => offset + index))).run();
+    }
+    expect(await market.db.prepare('SELECT COUNT(*) AS n FROM game_rounds').first('n')).toBe(10_005);
+    expect(await plan()).toContain('game_rounds_answered_date_idx');
+    const many = await rowsRead();
+    // What the same statement costs without the index: every answered round.
+    const scan = (await market.db.prepare(ROUNDS_SQL.replace('FROM game_rounds r', 'FROM game_rounds r NOT INDEXED')).bind(now, lookback).all()).meta.rows_read;
+    console.info(`Stock game-result lookup D1 rows_read: ${few} with 3 rounds, ${many} with 10,005 rounds (full scan of the same query: ${scan})`);
+    expect(many).toBe(few);
+    expect(many).toBeLessThanOrEqual(12);
+    expect(scan).toBeGreaterThanOrEqual(10_005);
+
+    // The advance itself (as a stock read runs it) creates exactly the recent rounds' events, settled or not, once.
+    let lookup = 0;
+    const metered = new Proxy(market.db, { get(target, key) {
+      const value = Reflect.get(target, key);
+      if (key === 'prepare') return (sql: string) => target.prepare(sql.replaceAll("unixepoch('now') * 1000", String(now)));
+      if (key === 'batch') return async (statements: never[]) => {
+        const results = await target.batch(statements);
+        // The first batch of an advance is: state, holidays, new game results, pending events.
+        if (results.length === 4 && lookup === 0) lookup = results[2]!.meta.rows_read ?? 0;
+        return results;
+      };
+      return typeof value === 'function' ? value.bind(target) : value;
+    } }) as unknown as D1Database;
+    await advanceStocks(metered, SECRET, now);
+    expect(lookup).toBe(many);
+    const events = (await market.db.prepare("SELECT id, ticker FROM stock_events WHERE kind = 'game' ORDER BY id").all()).results;
+    expect(events).toEqual([{ id: 'game:luck:2026-11-03', ticker: 'YEDO' }, { id: 'game:offwork:2026-11-04', ticker: 'SIWN' }, { id: 'game:wake:2026-11-04', ticker: 'MINJ' }]);
+    await advanceStocks(metered, SECRET, now + 1000);
+    expect(await market.db.prepare("SELECT COUNT(*) AS n FROM stock_events WHERE kind = 'game'").first('n')).toBe(3);
+    // Nothing from before the look-back became an event.
+    expect(await market.db.prepare("SELECT COUNT(*) AS n FROM stock_events WHERE id LIKE 'game:%:2026-10-%' OR id LIKE 'game:%:2025%'").first('n')).toBe(0);
   });
 
   it('applies results published after the close at the next open, and locks the author until then', async () => {
@@ -382,6 +600,31 @@ describe('stock market API', () => {
     ]);
     expect(await unlocked()).toEqual(['stock_buy', 'stock_delisted', 'stock_gain_100', 'stock_gain_1000', 'stock_gain_2000', 'stock_gain_500',
       'stock_limit_down', 'stock_limit_up', 'stock_loss_100', 'stock_loss_1000', 'stock_loss_500', 'stock_sell']);
+  });
+
+  it('credits market achievements from the 18:00 Cron, without any request from the holder', async () => {
+    const market = await Market.create(kst('2026-11-05', '17:50'));
+    // min bought SOAR yesterday, the day it closed at the upper limit; siwon never traded.
+    await market.db.batch([
+      market.db.prepare(`INSERT INTO stock_trades (id, user_id, request_id, ticker, side, quantity, price, fee, total, cost_basis, date, created_at)
+        VALUES ('held', 'min', 'held', 'SOAR', 'buy', 1, 760, 8, 768, 768, '2026-11-04', '2026-11-04T01:00:00.000Z')`),
+      market.db.prepare("INSERT INTO stock_holdings (user_id, ticker, quantity, cost_basis) VALUES ('min', 'SOAR', 1, 768)"),
+      market.db.prepare("INSERT INTO stock_daily (ticker, date, open, high, low, close) VALUES ('SOAR', '2026-11-03', 750, 760, 740, 750), ('SOAR', '2026-11-04', 760, 862, 760, 862)"),
+    ]);
+    const now = kst('2026-11-05', '18:00') + 20_000;
+    const cronDb = new Proxy(market.db, { get(target, key) {
+      const value = Reflect.get(target, key);
+      if (key === 'prepare') return (sql: string) => target.prepare(sql.replaceAll("unixepoch('now') * 1000", String(now)));
+      return typeof value === 'function' ? value.bind(target) : value;
+    } }) as unknown as D1Database;
+    const rows = async () => (await market.db.prepare('SELECT user_id, key FROM achievements ORDER BY user_id, key').all()).results;
+    expect(await rows()).toEqual([]);
+    await runStockCron(cronDb, SECRET, {}, now);
+    expect(await rows()).toEqual([{ user_id: 'min', key: 'stock_limit_up' }, { user_id: 'min', key: 'welcome' }]);
+    // Today's candles are final after the close; the watermark stops at the last finished day before today.
+    expect(await market.db.prepare("SELECT stock_limit_date FROM achievement_scans WHERE user_id = 'min'").first('stock_limit_date')).toBe('2026-11-04');
+    expect(await market.db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE kind = 'achievement' AND user_id = 'min'").first('n')).toBe(2);
+    expect(await market.db.prepare("SELECT COUNT(*) AS n FROM stock_news WHERE id = 'close:2026-11-05'").first('n')).toBe(1);
   });
 
   it('returns 503 until the seed secret is configured', async () => {

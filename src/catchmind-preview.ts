@@ -1,4 +1,4 @@
-import { CATCHMIND_RULES } from '../shared/balance';
+import { CATCHMIND_RULES, playWindow } from '../shared/balance';
 import { catchmindKey, catchmindWordProblem, cleanCatchmindWord } from '../shared/catchmind';
 import { defaultCharacter } from '../shared/characters';
 import type {
@@ -116,7 +116,9 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
   function read(since?: number): CatchmindPollResponse;
   function read(since?: number): CatchmindPollResponse {
     const serverTime = new Date().toISOString();
-    if (since === version) return { unchanged: true, version, viewerId: player.id, serverTime };
+    // The preview has no server: its play window is this device's clock.
+    const play = playWindow(Date.now());
+    if (since === version) return { unchanged: true, version, viewerId: player.id, serverTime, play };
     const draft = round?.status === 'draft';
     const open = round?.status === 'open';
     const holder = turn?.id === player.id;
@@ -131,7 +133,7 @@ export function createCatchmindPreview(viewer: CatchmindPlayer) {
       canNext: Boolean(participates && round?.status === 'ended' && holder),
       nextDrawer: round ? round.status === 'ended' ? turn : successor(round.drawer) : null,
       canSkip: Boolean(participates && skipAvailableAt && turn && !holder && Date.now() >= Date.parse(skipAvailableAt)), skipAvailableAt,
-    }, version, viewerId: player.id, serverTime });
+    }, version, viewerId: player.id, serverTime, play });
   }
   function summary(): CatchmindSummary {
     return structuredClone({ roundId: round?.id ?? null, status: round?.status ?? 'idle', drawer: round?.drawer ?? null,

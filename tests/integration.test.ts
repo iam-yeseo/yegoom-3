@@ -13,6 +13,7 @@ import { PASSWORD_RULES } from '../shared/password';
 import { CATCHMIND_RULES, SLOT_RULES, SPEETTO_RULES } from '../shared/balance';
 import { CATCHMIND_WORDS } from '../shared/catchmind-words';
 import { catchmindRoute } from '../worker/catchmind';
+import { catchmindImageSizeProblem } from '../shared/catchmind';
 import type { AdminState, PredictionRules } from '../shared/admin';
 import { defaultPredictionRules } from '../shared/game-settings';
 import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
@@ -22,6 +23,7 @@ import { readNotificationSummary } from '../worker/notifications';
 import { isToastWorthy } from '../shared/notifications';
 import { readEffectiveRules } from '../worker/game-settings';
 import { readKujiSummary } from '../worker/shop';
+import { readTagState } from '../worker/nickname-tags';
 import { maintainDatabase } from '../worker/maintenance';
 import { settleDueRankingRewards } from '../worker/ranking-rewards';
 import { mondayOf } from '../shared/ranking-periods';
@@ -63,11 +65,14 @@ const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds
  * finished week and month (one partial-index probe, at most 2 rows). */
 const STOCK_HOME = { prepares: 1 + 1 + 1 + 1, queries: 1 + 1 + 1 + 1, bindingCalls: 1 + 1 + 1 + 1, rowsRead: 12 + 2 + 12 + 2, rowsWritten: 0 } as const;
 const stockAllowance = (route: string, field: keyof typeof STOCK_HOME) => route.includes('bootstrap') ? STOCK_HOME[field] : 0;
-/** Every successful player write is followed by the achievement check: one
- * batch that reads the facts and the known rows, and, only when something new
- * was earned, one batch of two statements per unlock (the row and its notice).
+/** Every successful player write is followed by the achievement check of that
+ * write's activity: one batch that reads the player and the rows they already
+ * hold (plus the limit-day watermark for a stock check), one statement with
+ * the facts still undecided (none once the activity's one-time achievements are
+ * all held), and, only when something new was earned, one batch of two
+ * statements per unlock (the row and its notice) and the watermark.
  * A first write in a fresh fixture earns up to three at once. */
-const ACHIEVEMENT_SYNC = { prepares: 2 + 2 * 3, queries: 2 + 2 * 3, bindingCalls: 2, rowsRead: 60, rowsWritten: 8 * 3 + 1 } as const;
+const ACHIEVEMENT_SYNC = { prepares: 3 + 1 + 2 * 3 + 1, queries: 3 + 1 + 2 * 3 + 1, bindingCalls: 3, rowsRead: 60, rowsWritten: 8 * 3 + 1 + 2 } as const;
 /** bootstrap also carries up to five of my own fresh achievement notices for the toast. */
 const achievementAllowance = (route: string, field: keyof typeof ACHIEVEMENT_SYNC) =>
   /^POST\b/.test(route) ? ACHIEVEMENT_SYNC[field] : route.includes('bootstrap') && field === 'rowsRead' ? 5 : 0;
@@ -238,6 +243,27 @@ function drawingPng(width = 2, height = 2, decodedBytes?: number): string {
     chunks.push(chunk('tEXt', Buffer.concat([prefix, Buffer.alloc(padding, 120)])));
   }
   return `data:image/png;base64,${Buffer.concat([...chunks, ending]).toString('base64')}`;
+}
+/** A real one-bit grayscale PNG of any size: all white, so even 16,000 x 16,000
+ * pixels compress to a few dozen kilobytes. */
+function sizedPng(width: number, height: number): string {
+  const chunk = (kind: string, data: Buffer) => {
+    const contents = Buffer.concat([Buffer.from(kind), data]);
+    let crc = 0xffffffff;
+    for (const value of contents) {
+      crc ^= value;
+      for (let bit = 0; bit < 8; bit++) crc = crc >>> 1 ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    const size = Buffer.alloc(4); size.writeUInt32BE(data.length);
+    const checksum = Buffer.alloc(4); checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+    return Buffer.concat([size, contents, checksum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width); header.writeUInt32BE(height, 4);
+  header[8] = 1; header[9] = 0; // One bit per pixel, grayscale.
+  const rows = Buffer.alloc(height * (Math.ceil(width / 8) + 1), 0xff);
+  for (let row = 0; row < height; row++) rows[row * (Math.ceil(width / 8) + 1)] = 0; // filter type: none
+  return `data:image/png;base64,${Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]).toString('base64')}`;
 }
 const catchmindImagePath = (roundId: string) => `/api/catchmind/rounds/${encodeURIComponent(roundId)}/image`;
 const DRAWING_PNG = drawingPng();
@@ -1277,15 +1303,145 @@ describe('Worker and D1 integration', () => {
           expect((await response.json() as { error: { code: string } }).error.code, path).toBe('PLAY_CLOSED');
         };
         await closed('/api/shop/lotto', { requestId: crypto.randomUUID(), numbers: [1, 2, 3, 4, 5], payment: 'gold' });
-        await closed('/api/shop/kuji', { requestId: crypto.randomUUID(), count: 1 });
+        // The close applies to a well-formed new purchase (malformed input is refused as such, before it).
+        const board = (await (await request('/api/shop/kuji', { cookie, instance })).json() as KujiResponse).kuji.boardId;
+        await closed('/api/shop/kuji', { requestId: crypto.randomUUID(), boardId: board, positions: [0] });
+        await closed('/api/shop/speetto', { requestId: crypto.randomUUID(), payment: 'gold' });
+        await closed('/api/shop/slot', { requestId: crypto.randomUUID() });
         await closed('/api/claw/play', { requestId: crypto.randomUUID(), version: (await getClaw(cookie, instance)).version, x: .05, stop: null });
         await closed('/api/freethrow/sets', { requestId: 'req-closed-0123456789abcdef' });
-        // Drawing may start; only publishing and guessing are closed.
+        // Drawing may start; only publishing and guessing are closed. The board
+        // says the drawer may publish this round; the play window says not now.
         const claimed = await catchmindAction('claim', cookie, null, {}, instance);
-        expect(claimed.catchmind.canPublish).toBe(false);
+        expect(claimed.catchmind.canPublish).toBe(true);
+        expect(claimed.play).toEqual({ closed: true, changesAt: '2026-10-30T15:00:00.000Z' });
         await closed('/api/catchmind/publish', { requestId: crypto.randomUUID(), roundId: claimed.catchmind.round!.id,
           word: CATCHMIND_TEST_WORD, image: DRAWING_PNG });
       } finally { await instance.dispose(); }
+    });
+
+    it('answers a purchase stored before 23:50 with its receipt after the close and past midnight, refusing only new purchases', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-close-receipt-'));
+      let instance = runtime(await workerAt(`${TODAY}T14:49:59Z`), persistence); // 23:49:59 KST
+      try {
+        let database = await instance.getD1Database('DB');
+        await provision(database, migration, passwordHash);
+        await fund(20000, 'min', database);
+        await fund(20000, 'siwon', database);
+        let min = (await login('min', instance)).cookie;
+        const board = (await (await request('/api/shop/kuji', { cookie: min, instance })).json() as KujiResponse).kuji.boardId;
+        const orders: Record<string, Record<string, unknown>> = {
+          '/api/shop/kuji': { requestId: 'before-close-kuji', boardId: board, positions: [3] },
+          '/api/shop/lotto': { requestId: 'before-close-lotto', numbers: [1, 2, 3, 4, 5], payment: 'gold' },
+          '/api/shop/speetto': { requestId: 'before-close-speetto', payment: 'gold' },
+          '/api/shop/slot': { requestId: 'before-close-slot' },
+        };
+        const receipt = async (path: string, cookie: string, body: Record<string, unknown>) => {
+          const response = await request(path, { method: 'POST', cookie, instance, body });
+          const data = await response.json() as { purchase?: unknown; spin?: unknown; error?: { code: string } };
+          return { status: response.status, code: data.error?.code, receipt: data.purchase ?? data.spin };
+        };
+        // Everything the four purchases charged, drew and paid.
+        const stored = async () => Object.fromEntries(await Promise.all(['ledger', 'inventory_ledger', 'shop_purchases', 'slot_spins', 'kuji_claims', 'lotto_tickets', 'user_balances']
+          .map(async table => [table, (await database.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all()).results])));
+        const first: Record<string, unknown> = {};
+        for (const [path, body] of Object.entries(orders)) {
+          const bought = await receipt(path, min, body);
+          expect(bought.status, path).toBe(200);
+          expect(bought.receipt, path).toBeTruthy();
+          first[path] = bought.receipt;
+        }
+        const saved = await stored();
+        expect(saved.shop_purchases).toHaveLength(3);
+        expect(saved.slot_spins).toHaveLength(1);
+
+        // 23:50:00 and 23:59:59 (closed), then past midnight (open again; the lotto draw is still ahead).
+        for (const [instant, isClosed] of [[`${TODAY}T14:50:00Z`, true], [`${TODAY}T14:59:59Z`, true], [`${TODAY}T15:00:05Z`, false]] as const) {
+          await instance.dispose();
+          instance = runtime(await workerAt(instant), persistence);
+          database = await instance.getD1Database('DB');
+          min = (await login('min', instance)).cookie;
+          const siwon = (await login('siwon', instance)).cookie;
+          for (const [path, body] of Object.entries(orders)) {
+            // The response to the 23:49:59 purchase was lost: the same request asks again.
+            const retried = await receipt(path, min, body);
+            expect([retried.status, retried.code], `${instant} ${path}`).toEqual([200, undefined]);
+            expect(retried.receipt, `${instant} ${path}`).toEqual(first[path]);
+            if (isClosed) {
+              // A new request, and another player's request under the same id, are new purchases: closed.
+              expect(await receipt(path, min, { ...body, requestId: crypto.randomUUID() }), `${instant} ${path}`).toMatchObject({ status: 409, code: 'PLAY_CLOSED' });
+              expect(await receipt(path, siwon, body), `${instant} ${path}`).toMatchObject({ status: 409, code: 'PLAY_CLOSED' });
+            }
+          }
+          // The same id with other input stays refused, as before.
+          expect(await receipt('/api/shop/kuji', min, { ...orders['/api/shop/kuji'], positions: [4] }), instant).toMatchObject({ status: 409, code: 'REQUEST_CONFLICT' });
+          expect(await receipt('/api/shop/lotto', min, { ...orders['/api/shop/lotto'], numbers: [6, 7, 8, 9, 10] }), instant).toMatchObject({ status: 409, code: 'REQUEST_CONFLICT' });
+          expect(await receipt('/api/shop/speetto', min, { ...orders['/api/shop/speetto'], payment: 'ticket' }), instant).toMatchObject({ status: 409, code: 'REQUEST_CONFLICT' });
+          expect(await receipt('/api/shop/kuji', min, { requestId: 'before-close-kuji', count: 1 }), instant).toMatchObject({ status: 400, code: 'INVALID_KUJI_SELECTION' });
+          // Nothing was charged, drawn or paid again.
+          expect(await stored(), instant).toEqual(saved);
+        }
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
+    });
+
+    it('reports the Catchmind play window apart from the board: the same round closes at 23:50 and reopens at midnight without a new version', async () => {
+      const persistence = await mkdtemp(join(tmpdir(), 'yegoom-catchmind-window-'));
+      let instance = runtime(await workerAt(`${TODAY}T14:49:00Z`), persistence); // 23:49 KST
+      const at = async (instant: string) => {
+        await instance.dispose();
+        instance = runtime(await workerAt(instant), persistence);
+        return { drawer: (await login('min', instance)).cookie, guesser: (await login('siwon', instance)).cookie };
+      };
+      const poll = async (cookie: string, since?: number) => {
+        const response = await request(`/api/catchmind${since === undefined ? '' : `?since=${since}`}`, { cookie, instance });
+        expect(response.status).toBe(200);
+        return response.json() as Promise<CatchmindResponse & { unchanged?: true }>;
+      };
+      const act = async (action: string, cookie: string, roundId: string, extra: Record<string, unknown>) => {
+        const response = await request(`/api/catchmind/${action}`, { method: 'POST', cookie, instance, body: { requestId: crypto.randomUUID(), roundId, ...extra } });
+        return { status: response.status, data: await response.json() as CatchmindResponse & { error?: { code: string } } };
+      };
+      const OPEN_UNTIL = '2026-10-30T14:50:00.000Z', CLOSED_UNTIL = '2026-10-30T15:00:00.000Z';
+      try {
+        await provision(await instance.getD1Database('DB'), migration, passwordHash);
+        let { drawer, guesser } = { drawer: (await login('min', instance)).cookie, guesser: (await login('siwon', instance)).cookie };
+        // 23:49: min starts a draft. Open, and the window says when that changes.
+        const claimed = await catchmindAction('claim', drawer, null, {}, instance);
+        const draft = claimed.catchmind.round!;
+        expect(claimed).toMatchObject({ play: { closed: false, changesAt: OPEN_UNTIL }, catchmind: { canPublish: true } });
+        const draftVersion = claimed.version;
+
+        // 23:50 and 23:55: the board did not change, so the poll is still "unchanged" — and says closed.
+        for (const instant of [`${TODAY}T14:50:00Z`, `${TODAY}T14:55:00Z`]) {
+          ({ drawer, guesser } = await at(instant));
+          expect(await poll(drawer, draftVersion), instant).toMatchObject({ unchanged: true, version: draftVersion, play: { closed: true, changesAt: CLOSED_UNTIL } });
+          // A full read has the same permissions as at 23:49; only the window differs.
+          const full = await poll(drawer);
+          expect(full, instant).toMatchObject({ version: draftVersion, play: { closed: true, changesAt: CLOSED_UNTIL } });
+          expect(full.catchmind, instant).toEqual(claimed.catchmind);
+          // The Worker still has the last word.
+          expect(await act('publish', drawer, draft.id, { word: CATCHMIND_TEST_WORD, image: DRAWING_PNG }), instant).toMatchObject({ status: 409, data: { error: { code: 'PLAY_CLOSED' } } });
+        }
+        // 00:00:05: still the same draft and version, open again; the drawer publishes it.
+        ({ drawer, guesser } = await at(`${TODAY}T15:00:05Z`));
+        expect(await poll(drawer, draftVersion)).toMatchObject({ unchanged: true, version: draftVersion, play: { closed: false, changesAt: '2026-10-31T14:50:00.000Z' } });
+        const published = await act('publish', drawer, draft.id, { word: CATCHMIND_TEST_WORD, image: DRAWING_PNG });
+        expect(published).toMatchObject({ status: 200, data: { catchmind: { round: { id: draft.id, status: 'open' } }, play: { closed: false } } });
+        const openVersion = published.data.version;
+        expect((await poll(guesser)).catchmind).toMatchObject({ canGuess: true, round: { id: draft.id } });
+
+        // The next evening the open round is the same one: guessing closes at 23:50 and reopens at midnight.
+        ({ drawer, guesser } = await at('2026-10-31T14:49:00Z'));
+        expect(await poll(guesser, openVersion)).toMatchObject({ unchanged: true, play: { closed: false, changesAt: '2026-10-31T14:50:00.000Z' } });
+        ({ drawer, guesser } = await at('2026-10-31T14:55:00Z'));
+        expect(await poll(guesser, openVersion)).toMatchObject({ unchanged: true, version: openVersion, play: { closed: true, changesAt: '2026-10-31T15:00:00.000Z' } });
+        expect((await poll(guesser)).catchmind).toMatchObject({ canGuess: true, round: { id: draft.id, status: 'open' } });
+        expect(await act('guess', guesser, draft.id, { answer: '오답' })).toMatchObject({ status: 409, data: { error: { code: 'PLAY_CLOSED' } } });
+        ({ drawer, guesser } = await at('2026-10-31T15:00:05Z'));
+        expect(await poll(guesser, openVersion)).toMatchObject({ unchanged: true, version: openVersion, play: { closed: false } });
+        const guessed = await act('guess', guesser, draft.id, { answer: '오답' });
+        expect(guessed).toMatchObject({ status: 200, data: { catchmind: { round: { id: draft.id, wrongCount: 1 } } } });
+      } finally { await instance.dispose(); await rm(persistence, { recursive: true, force: true }); }
     });
 
     it('scores a Catchmind round solved on its own day', async () => {
@@ -1493,6 +1649,75 @@ describe('Worker and D1 integration', () => {
       expect((await equip(cookie, kept.id)).status).toBe(200);
       expect((await discard(kept.id)).status).toBe(409);
       expect((await discard('someone-else')).status).toBe(404);
+    });
+    it('lists owned tags from their own index and counts today apart, whatever was discarded before', async () => {
+      await giveGold(db, 'yeseo', 1000);
+      const { cookie } = await login('yeseo');
+      const user = { id: 'yeseo', role: 'player' as const };
+      const now = new Date(`${TODAY}T00:00:00Z`);
+      // Two free draws today; one is thrown away at once.
+      const kept = (await (await draw(cookie, 'owned-1')).json() as TagResponse).draw!;
+      const tossed = (await (await draw(cookie, 'owned-2')).json() as TagResponse).draw!;
+      expect((await request('/api/me/nickname-tag/discard', { method: 'POST', body: { tagId: tossed.id }, cookie })).status).toBe(200);
+      // Ten owned tags of every grade from earlier days (one worn), and a material spent today.
+      const grades = ['C', 'S', 'B', 'A', 'C', 'B', 'S', 'A', 'C', 'B'];
+      await db.batch([
+        ...grades.map((grade, index) => db.prepare(`INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at, payment, discarded)
+          VALUES (?, 'yeseo', ?, ?, '느긋한', ?, '2026-10-2' || ?, '2026-10-2' || ? || 'T03:00:0' || ? || '.000Z', 'gold', 0)`)
+          .bind(`old-${index}`, `old-${index}`, grade, index === 3 ? 1 : 0, index % 5, index % 5, index)),
+        db.prepare(`INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at, payment, discarded)
+          VALUES ('material', 'yeseo', 'material', 'C', '느긋한', 0, ?, ?, 'ticket', 1)`).bind(TODAY, `${TODAY}T00:00:00.000Z`),
+      ]);
+      /** The collection as the single query used to build it: every row, filtered afterwards. */
+      const legacy = async () => {
+        const rows = (await db.prepare(`SELECT id, date, discarded FROM nickname_tags WHERE user_id = 'yeseo'
+          ORDER BY equipped DESC, CASE grade WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 3 END, created_at DESC, id`).all<{ id: string; date: string; discarded: number }>()).results;
+        return { ids: rows.filter(row => !row.discarded).map(row => row.id), drawsToday: rows.filter(row => row.date === TODAY).length };
+      };
+      const observed = measuredDatabase(db, now.getTime());
+      const read = async () => {
+        observed.reset();
+        const state = await readTagState(observed.binding, user, now);
+        return { state, rows: observed.rowsRead(), statements: observed.queries.length };
+      };
+      const before = await read();
+      expect(before.state.tags.map(tag => tag.id)).toEqual((await legacy()).ids);
+      expect(before.state.tags).toHaveLength(11);
+      expect(before.state.tags[0]).toMatchObject({ id: 'old-3', equipped: true });
+      expect(before.state.equipped?.id).toBe('old-3');
+      // Drawn today: the kept one, the tossed one and the spent material. Discarding gave nothing back.
+      expect(before.state.drawsToday).toBe(3);
+      expect((await legacy()).drawsToday).toBe(3);
+      expect((await bootstrap(cookie)).dailyFree.tag).toBe(1);
+      expect(before.statements).toBe(3);
+
+      // 2,000 tags discarded over earlier days: the same answer for the same rows read.
+      for (let offset = 0; offset < 2000; offset += 500) {
+        await db.prepare(`INSERT INTO nickname_tags (id, user_id, request_id, grade, text, equipped, date, created_at, payment, discarded)
+          SELECT 'gone-' || value, 'yeseo', 'gone-' || value, 'C', '배가 고픈', 0, date('2026-10-01', '-' || (value % 300) || ' days'), '2025-01-01T00:00:00.000Z', 'gold', 1 FROM json_each(?)`)
+          .bind(JSON.stringify(Array.from({ length: 500 }, (_, index) => offset + index))).run();
+      }
+      const after = await read();
+      expect(after.state).toEqual(before.state);
+      expect(after.state.tags.map(tag => tag.id)).toEqual((await legacy()).ids);
+      expect(after.rows).toBe(before.rows);
+      expect(after.rows).toBeLessThanOrEqual(40);
+      console.info(`Nickname tag state D1 rows_read: ${before.rows} with 11 owned tags, ${after.rows} after 2,000 more discarded tags`);
+      const plan = (await db.prepare(`EXPLAIN QUERY PLAN SELECT * FROM nickname_tags WHERE user_id = ? AND discarded = 0
+        ORDER BY equipped DESC, CASE grade WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 3 END, created_at DESC, id`).bind('yeseo').all<{ detail: string }>()).results.map(row => row.detail).join(' | ');
+      expect(plan).toContain('nickname_tags_owned_idx');
+
+      // The receipt of the discarded draw is still returned for its request; nothing new is drawn.
+      const replay = await (await draw(cookie, 'owned-2')).json() as TagResponse;
+      expect(replay.draw).toMatchObject({ id: tossed.id });
+      expect(replay.tags.drawsToday).toBe(3);
+      expect(replay.tags.tags.map(tag => tag.id)).toEqual(after.state.tags.map(tag => tag.id));
+      expect(replay.tags.tags.map(tag => tag.id)).toContain(kept.id);
+      // The daily limit still counts discarded draws: two more, then no more.
+      expect((await draw(cookie, 'owned-4')).status).toBe(200);
+      expect((await draw(cookie, 'owned-5')).status).toBe(200);
+      const sixth = await draw(cookie, 'owned-6');
+      expect([sixth.status, (await sixth.json() as { error: { code: string } }).error.code]).toEqual([409, 'DAILY_LIMIT']);
     });
     describe('evolution', () => {
       const evolve = (cookie: string, body: Record<string, unknown>, instance: Miniflare) =>
@@ -3831,7 +4056,9 @@ describe('Worker and D1 integration', () => {
         const full = await fullResponse.json() as CatchmindResponse;
         expect(Number.isSafeInteger(full.version)).toBe(true);
         const poll = await request(`/api/catchmind?since=${full.version}`, { cookie: siwon.cookie, instance });
-        expect(await poll.json()).toEqual({ unchanged: true, version: full.version, viewerId: 'siwon', serverTime: `${TODAY}T00:00:00.000Z` });
+        // The short answer still carries the play window: at 09:00 KST, open until 23:50.
+        expect(await poll.json()).toEqual({ unchanged: true, version: full.version, viewerId: 'siwon', serverTime: `${TODAY}T00:00:00.000Z`,
+          play: { closed: false, changesAt: `${TODAY}T14:50:00.000Z` } });
         expect(Number(poll.headers.get('X-Test-D1-Queries'))).toBeLessThanOrEqual(2);
         expect(Number(poll.headers.get('X-Test-D1-Rows-Read'))).toBeLessThanOrEqual(5);
         expect(Number(poll.headers.get('X-Test-D1-Rows-Written'))).toBe(0);
@@ -4204,6 +4431,65 @@ describe('Worker and D1 integration', () => {
       expect(Buffer.from(image.split(',')[1]!, 'base64')).toHaveLength(300 * 1024);
       const published = await catchmindAction('publish', cookie, draft.id, { word: CATCHMIND_TEST_WORD, image });
       expect(published.catchmind.round).toMatchObject({ status: 'open', image: catchmindImagePath(draft.id) });
+    });
+
+    it('accepts drawings up to 1,024 pixels a side and refuses larger ones however small the file, in PNG and WebP', async () => {
+      const { cookie } = await login('min');
+      const draft = (await catchmindAction('claim', cookie, null)).catchmind.round!;
+      const publish = async (image: string) => {
+        const response = await request('/api/catchmind/publish', { method: 'POST', cookie,
+          body: { requestId: crypto.randomUUID(), roundId: draft.id, word: CATCHMIND_TEST_WORD, image } });
+        return { status: response.status, code: response.ok ? undefined : (await response.json() as { error: { code: string; message: string } }).error.code };
+      };
+      const kib = (image: string) => Buffer.from(image.split(',')[1]!, 'base64').length / 1024;
+      // The review's case: a valid 16,000 x 16,000 PNG that is far below the 300KiB file limit.
+      const huge = sizedPng(16_000, 16_000);
+      expect(kib(huge)).toBeLessThan(300);
+      const overLimit = [huge, sizedPng(1025, 1025), sizedPng(2048, 512), sizedPng(1024, 1025),
+        photoFixture('drawing-1025-lossy.webp'), photoFixture('drawing-1025-lossless.webp'), photoFixture('drawing-1025-alpha.webp')];
+      for (const [index, image] of overLimit.entries()) {
+        expect(kib(image), String(index)).toBeLessThan(300);
+        expect(await publish(image), String(index)).toEqual({ status: 413, code: 'IMAGE_DIMENSIONS_TOO_LARGE' });
+      }
+      // A damaged oversized file is still simply invalid, and a square that fits must still be square.
+      const damaged = photoFixture('drawing-1025-lossy.webp');
+      expect(await publish(damaged.slice(0, -8))).toEqual({ status: 400, code: 'INVALID_IMAGE' });
+      expect(await publish(sizedPng(1024, 1000))).toEqual({ status: 400, code: 'INVALID_IMAGE' });
+      expect(await publish(sizedPng(0, 0))).toEqual({ status: 400, code: 'INVALID_IMAGE' });
+      // Nothing was published by any refusal: the draft is still the drawer's to retry.
+      expect((await getCatchmind(cookie)).catchmind.round).toMatchObject({ id: draft.id, status: 'draft', image: null, publishedAt: null });
+      expect(await db.prepare('SELECT COUNT(*) AS n FROM catchmind_requests WHERE action = ?').bind('publish').first('n')).toBe(0);
+      expect((await publish(sizedPng(1024, 1024))).status).toBe(200);
+      expect((await getCatchmind(cookie)).catchmind.round).toMatchObject({ id: draft.id, status: 'open', image: catchmindImagePath(draft.id) });
+
+      // The shared rule itself: one side, and the pixel count.
+      expect(catchmindImageSizeProblem(CATCHMIND_RULES.canvasSide, CATCHMIND_RULES.canvasSide)).toBeNull();
+      expect(catchmindImageSizeProblem(1024, 1024)).toBeNull();
+      for (const [width, height] of [[1025, 1], [1, 1025], [1025, 1025], [16_000, 16_000]]) expect(catchmindImageSizeProblem(width!, height!), `${width}x${height}`).toContain('1,024픽셀');
+      expect(CATCHMIND_RULES.maxImagePixels).toBe(CATCHMIND_RULES.maxImageSide ** 2);
+    });
+
+    it.each(['drawing-canvas-680.webp', 'drawing-1024-lossy.webp', 'drawing-1024-lossless.webp', 'drawing-1024-alpha.webp'])('accepts the WebP drawing %s at or under the limit', async name => {
+      const { cookie } = await login('min');
+      const draft = (await catchmindAction('claim', cookie, null)).catchmind.round!;
+      const published = await catchmindAction('publish', cookie, draft.id, { word: CATCHMIND_TEST_WORD, image: photoFixture(name) });
+      expect(published.catchmind.round).toMatchObject({ status: 'open', image: catchmindImagePath(draft.id) });
+    });
+
+    it('keeps serving a drawing stored before the dimension limit, unchanged', async () => {
+      const { cookie } = await login('min');
+      const legacy = photoFixture('drawing-1025-lossy.webp');
+      await db.batch([
+        db.prepare(`INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, image, end_reason, round_date, published_at, ended_at, created_at)
+          VALUES ('legacy-large', 1, 'siwon', '옛그림', '옛그림', '[]', 'ended', ?, 'manual', '2026-10-29', '2026-10-29T01:00:00.000Z', '2026-10-29T02:00:00.000Z', '2026-10-29T00:00:00.000Z')`).bind(legacy),
+      ]);
+      const response = await request(catchmindImagePath('legacy-large'), { cookie });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('image/webp');
+      expect(Buffer.from(await response.arrayBuffer()).toString('base64')).toBe(legacy.split(',')[1]);
+      const gallery = await (await request('/api/catchmind/gallery', { cookie })).json() as CatchmindGalleryResponse;
+      expect(gallery.rounds.map(round => round.id)).toContain('legacy-large');
+      expect(await db.prepare("SELECT image FROM catchmind_rounds WHERE id = 'legacy-large'").first('image')).toBe(legacy);
     });
 
     it('pays a Sunday-published round solved after Monday midnight gold only, never score', async () => {

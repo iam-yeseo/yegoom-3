@@ -24,8 +24,9 @@ const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_ph
   'tag_ticket_ledger',
   // Ranking payouts (0019) start after launch too; their settlement markers stay.
   'ranking_settlements',
-  // The notification centre (0020) and achievements (0021) are newer than the launch-era reset as well.
-  'notifications', 'achievements',
+  // The notification centre (0020) and achievements (0021) are newer than the launch-era reset as well,
+  // and so is the achievements' limit-day watermark (0031).
+  'notifications', 'achievements', 'achievement_scans',
   // The stock market (0015) starts after launch; a launch reset never touches it.
   'stock_state', 'stock_ticks', 'stock_daily', 'stock_events', 'stock_news', 'stock_holdings', 'stock_trades', 'market_holidays', 'ai_usage', 'stock_settings',
   // Free-throw official sets (0026) are newer than the launch-era reset.
@@ -123,6 +124,7 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare(`INSERT INTO notifications (kind, audience, user_id, actor_id, payload_json, created_at, reference)
         VALUES ('speetto', 'all', NULL, 'min', '{"kind":"speetto","prize":1500}', '2026-11-01T00:00:00Z', 'retained-notification')`),
       db.prepare("INSERT INTO achievements (user_id, key, period_key, unlocked_at, claimed_at) VALUES ('min', 'welcome', '', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')"),
+      db.prepare("INSERT INTO achievement_scans (user_id, stock_limit_date) VALUES ('min', '2026-10-30')"),
       db.prepare("INSERT INTO stock_ticks (ticker, at, price) VALUES ('YEGM', 1, 500)"),
       db.prepare("INSERT INTO stock_daily (ticker, date, open, high, low, close) VALUES ('YEGM', '2026-11-05', 500, 510, 490, 505)"),
       db.prepare("INSERT INTO stock_events (id, ticker, kind, effect_bp, apply_at, created_at) VALUES ('retained-event', 'MINJ', 'game', 400, 1, 'x')"),

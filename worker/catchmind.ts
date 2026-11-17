@@ -1,5 +1,5 @@
-import { CATCHMIND_RULES, PLAY_RULES, playClosed, scoreCounts } from '../shared/balance';
-import { catchmindKey, catchmindWordProblem, cleanCatchmindWord } from '../shared/catchmind';
+import { CATCHMIND_RULES, PLAY_RULES, playClosed, playWindow, scoreCounts } from '../shared/balance';
+import { catchmindImageSizeProblem, catchmindKey, catchmindWordProblem, cleanCatchmindWord } from '../shared/catchmind';
 import { defaultCharacter, type ArtKey } from '../shared/characters';
 import type { CatchmindAction, CatchmindGalleryResponse, CatchmindPlayer, CatchmindPollResponse, CatchmindResponse, CatchmindState, CatchmindSummary } from '../shared/types';
 import { hashToken } from './crypto';
@@ -90,6 +90,10 @@ function webpDimensions(bytes: Uint8Array): [number, number] {
   if (offset !== bytes.length || !frame || (extended && (extended[0] !== frame[0] || extended[1] !== frame[1]))) return invalidImage();
   return frame;
 }
+/** Checks an uploaded drawing before it is stored: format, structure, encoded
+ * size, pixel dimensions and squareness. Only new uploads pass through here.
+ * Drawings stored before the dimension limit existed are served unchanged
+ * (readCatchmindImage does not re-validate); nothing is deleted or rewritten. */
 export function validateDrawing(value: unknown): string {
   if (typeof value !== 'string') return invalidImage();
   if (value.length > Math.ceil(CATCHMIND_RULES.maxImageBytes / 3) * 4 + 23) throw new CatchmindError(413, 'IMAGE_TOO_LARGE', '그림 파일이 너무 커요. 크기를 줄여 다시 올려 주세요.');
@@ -103,7 +107,12 @@ export function validateDrawing(value: unknown): string {
   const bytes = new Uint8Array(raw.length);
   for (let index = 0; index < raw.length; index++) bytes[index] = raw.charCodeAt(index);
   const [width, height] = match[1] === 'png' ? pngDimensions(bytes) : webpDimensions(bytes);
-  if (!width || width !== height) return invalidImage();
+  if (!width || !height) return invalidImage();
+  // A small file can still declare a huge picture; refuse it by what it decodes
+  // to. The drawer can retry with a smaller one (the draft stays theirs).
+  const tooBig = catchmindImageSizeProblem(width, height);
+  if (tooBig) throw new CatchmindError(413, 'IMAGE_DIMENSIONS_TOO_LARGE', tooBig);
+  if (width !== height) return invalidImage();
   return value;
 }
 
@@ -207,7 +216,6 @@ async function readState(db: D1Database, user: Actor, now: Date): Promise<{ catc
   const skipTime = round?.status === 'ended' && round.ended_at ? Date.parse(round.ended_at) + CATCHMIND_RULES.skipAfterMs : NaN;
   const skipAvailableAt = Number.isFinite(skipTime) ? new Date(skipTime).toISOString() : null;
   const playing = user.role === 'player'; const author = playing && round?.drawer_id === user.id;
-  const closed = playClosed(now.getTime());
   const guesses = round ? (await db.prepare(`SELECT g.id, g.answer, g.correct, g.created_at, u.id AS player_id, u.username, u.display_name, u.character, CASE WHEN EXISTS (SELECT 1 FROM user_photos WHERE user_id = u.id) THEN u.photo_version ELSE NULL END AS photo_version
     FROM catchmind_guesses g JOIN users u ON u.id = g.player_id WHERE g.round_id = ? ORDER BY g.sequence`)
     .bind(round.id).all<{ id: string; answer: string; correct: number; created_at: string; player_id: string; username: string; display_name: string; character: ArtKey | null; photo_version: number | null }>()).results : [];
@@ -227,7 +235,10 @@ async function readState(db: D1Database, user: Actor, now: Date): Promise<{ catc
       guesses: guesses.map(guess => ({ id: guess.id, answer: guess.answer, correct: Boolean(guess.correct), createdAt: guess.created_at,
         player: { id: guess.player_id, username: guess.username, displayName: guess.display_name, photoVersion: guess.photo_version, character: guess.character ?? defaultCharacter(guess.username) } })) } : null,
     canClaim: playing && !turn.drawer_id && !round,
-    canPublish: Boolean(author && round?.status === 'draft' && !closed), canGuess: Boolean(playing && !author && round?.status === 'open' && !closed),
+    // Role and round only. The 23:50 close is time, not board data: it travels
+    // as the response's `play` window (and mutate() still enforces it), so a
+    // board that did not change never has to be sent again for it.
+    canPublish: Boolean(author && round?.status === 'draft'), canGuess: Boolean(playing && !author && round?.status === 'open'),
     canEnd: Boolean(author && round?.status === 'open'),
     canNext: Boolean(playing && turn.drawer_id === user.id && (round?.status === 'ended' || (round?.status === 'draft' && !round.drawer_active))),
   } };
@@ -372,14 +383,14 @@ export async function catchmindRoute(db: D1Database, user: Actor, action: string
           EXISTS (SELECT 1 FROM users WHERE id = t.drawer_id AND active = 1 AND role = 'player') AS turn_active
         FROM catchmind_turn t WHERE t.id = 1`).first<{ version: number; round_id: string | null; turn_active: number }>();
       if (snapshot && snapshot.version === since && (!snapshot.round_id || snapshot.turn_active)) {
-        return { unchanged: true, version: snapshot.version, viewerId: user.id, serverTime: now.toISOString() };
+        return { unchanged: true, version: snapshot.version, viewerId: user.id, serverTime: now.toISOString(), play: playWindow(now.getTime()) };
       }
     }
-    return { ...await readState(db, user, now), viewerId: user.id, serverTime: now.toISOString() };
+    return { ...await readState(db, user, now), viewerId: user.id, serverTime: now.toISOString(), play: playWindow(now.getTime()) };
   }
   const actions: CatchmindAction[] = ['claim', 'publish', 'guess', 'end', 'next', 'skip'];
   if (!actions.includes(action as CatchmindAction)) throw new CatchmindError(404, 'NOT_FOUND', '요청한 캐치마인드 기능이 없어요.');
   if (method !== 'POST') throw new CatchmindError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
   await mutate(db, user, action as CatchmindAction, input!, now);
-  return { ...await readState(db, user, now), viewerId: user.id, serverTime: now.toISOString() };
+  return { ...await readState(db, user, now), viewerId: user.id, serverTime: now.toISOString(), play: playWindow(now.getTime()) };
 }

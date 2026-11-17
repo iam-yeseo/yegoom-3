@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { CATCHMIND_RULES, PLAY_RULES } from "../../shared/balance";
 import { kstDateOf } from "../../shared/ranking-periods";
-import { todayKst, usePlayClosed } from "../play-window";
+import { todayKst } from "../play-window";
 import type { CatchmindAction, CatchmindInput, CatchmindRound, CatchmindState, User } from "../../shared/types";
 import { useCatchmind } from "../catchmind";
 import { catchmindKey, catchmindWordProblem, cleanCatchmindWord, suggestCatchmindWord } from "../../shared/catchmind";
@@ -112,7 +112,10 @@ function Result({ state, user, locked, onNext, onSkip, canSkip, demo }: {
 export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: () => void; demo?: boolean }) {
   const displayNameOf = useDisplayNameLookup();
   const game = useCatchmind();
-  const closed = usePlayClosed();
+  // Publishing and guessing close at 23:50 and reopen at midnight on the
+  // server's clock. The board's own permissions (state.canPublish/canGuess)
+  // do not change with time, so both are checked wherever input is enabled.
+  const closed = game.playClosed;
   const latest = useRef(game);
   latest.current = game;
   const [answer, setAnswer] = useState("");
@@ -149,6 +152,16 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
       window.removeEventListener("online", refresh);
     };
   }, [pollInterval]);
+  // When the window flips, ask the server once: it confirms the new window and
+  // brings anything that happened meanwhile. The drawer of a draft has no
+  // interval, so this is their only read at 23:50 and at midnight. The words
+  // and the drawing being written stay where they are: nothing is remounted.
+  const windowSeen = useRef(closed);
+  useEffect(() => {
+    if (windowSeen.current === closed) return;
+    windowSeen.current = closed;
+    if (document.visibilityState === "visible" && navigator.onLine) void latest.current.refresh().catch(() => {});
+  }, [closed]);
   const [skipReady, setSkipReady] = useState(false);
   useEffect(() => {
     setSkipReady(false);
@@ -186,12 +199,13 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
   const mutation = () => ({ requestId: crypto.randomUUID(), roundId: round?.id ?? null });
   async function guess(event: FormEvent) {
     event.preventDefault();
-    if (!game.state?.canGuess || locked || !catchmindKey(answer)) return;
+    if (!game.state?.canGuess || closed || locked || !catchmindKey(answer)) return;
     if (await run("guess", { ...mutation(), answer })) setAnswer("");
   }
   const publish = useCallback(async (image: string) => {
     const current = latest.current;
     const shown = current.state?.round;
+    if (current.playClosed) throw new Error(PLAY_RULES.closedMessage);
     if (!shown || shown.id !== round?.id || !current.state?.canPublish
       || actionInFlight.current || current.busy || current.pending) throw new Error("그림을 올릴 차례인지 확인해 주세요.");
     const problem = catchmindWordProblem(wordRef.current);
@@ -231,7 +245,7 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
           <p className="cm-draft-note">나에게만 보이는 정답이에요. 띄어쓰기는 달라도 맞힌 걸로 쳐요.</p>
         </div>
         {closed && <p className="subtle-note" role="status">{PLAY_RULES.closedMessage}</p>}
-        <DrawingCanvas key={round.id} disabled={locked || !state.canPublish} blockedReason={wordProblem ?? undefined}
+        <DrawingCanvas key={round.id} disabled={locked || !state.canPublish || closed} blockedReason={wordProblem ?? undefined}
           publishing={game.busy && game.pending?.action === "publish"} onPublish={publish} />
       </> : <div className="pg-card cm-waiting">
         <Avatar username={round.drawer.username} userId={round.drawer.id} photoVersion={round.drawer.photoVersion} artKey={demo ? undefined : round.drawer.character} size={64} />
@@ -247,8 +261,8 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
         {closed ? <p className="subtle-note" role="status">{PLAY_RULES.closedMessage}</p>
           : round.publishedAt && kstDateOf(round.publishedAt) < todayKst() && <p className="subtle-note" role="status">지난 날 공개된 그림이라 맞혀도 점수는 집계되지 않아요. 골드는 받아요.</p>}
         {user.role === "player" && !isDrawer ? <form className="pg-answer" onSubmit={guess} ref={form}>
-          <input aria-label="캐치마인드 정답" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="정답 입력" maxLength={CATCHMIND_RULES.maxAnswerLength} disabled={locked || !state.canGuess} autoComplete="off" />
-          <button type="submit" disabled={locked || !state.canGuess || !catchmindKey(answer)}>{acting || game.busy ? "확인 중…" : "정답"}</button>
+          <input aria-label="캐치마인드 정답" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="정답 입력" maxLength={CATCHMIND_RULES.maxAnswerLength} disabled={locked || !state.canGuess || closed} autoComplete="off" />
+          <button type="submit" disabled={locked || !state.canGuess || closed || !catchmindKey(answer)}>{acting || game.busy ? "확인 중…" : "정답"}</button>
         </form> : isDrawer && <p className="subtle-note">내가 낸 그림에는 답할 수 없어요. 친구들의 답을 기다려 주세요.</p>}
       </>}
       {state && round?.status === "ended" && <Result key={round.id} state={state} user={user} locked={locked} demo={demo}

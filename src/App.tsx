@@ -55,6 +55,7 @@ import { LaunchGiftProvider, StockNotice } from "./launch-gift";
 import { RankResultDialog } from "./rank-result";
 import type { RankResult } from "../shared/ranking-rewards";
 import { createPreviewStockClient, previewStockHome, resetPreviewStock, type StockClient } from "./stock-preview";
+import { previewStockOrders, stockOrders } from "./stock-orders";
 import { Achievements, type AchievementClient } from "./screens/Achievements";
 import { createPreviewAchievements } from "./achievements-preview";
 import { ACHIEVEMENTS_PATH } from "../shared/achievements";
@@ -993,12 +994,13 @@ export default function App() {
       />
     );
   else if (path === "/stock")
-    content = <StockMarket client={stockClient} gold={me.gold} onBack={home} go={go} />;
+    content = <StockMarket client={stockClient} orders={demo ? previewStockOrders : stockOrders} account={demo ? "preview" : me.id} gold={me.gold} onBack={home} go={go}
+      onTraded={() => { if (!demo) void refresh(); }} onAccountChanged={() => { if (!demo) void refresh(); }} />;
   else if (path === "/stock/news")
     content = <StockNews client={stockClient} onBack={() => go("/stock")} go={go} />;
   else if (stockId)
-    content = <StockDetail key={stockId} client={stockClient} ticker={stockId} onBack={() => go("/stock")}
-      onTraded={() => { if (!demo) void refresh(); }} />;
+    content = <StockDetail key={stockId} client={stockClient} orders={demo ? previewStockOrders : stockOrders} account={demo ? "preview" : me.id} ticker={stockId} onBack={() => go("/stock")}
+      onTraded={() => { if (!demo) void refresh(); }} onAccountChanged={() => { if (!demo) void refresh(); }} />;
   else if (path === "/shop") content = <ShopMain go={go} gold={me.gold} />;
   else if (path === "/shop/lotto")
     content = <Lotto gold={me.gold} onBack={() => go("/shop")} />;

@@ -2,8 +2,9 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import type { Inventory, KujiPurchaseInput, KujiResponse, KujiState, LedgerEntry, LottoNotice, LottoPurchaseInput, LottoResponse, LottoState, ShopKind, ShopState, SpeettoPurchaseInput, SpeettoResponse, SpeettoState, SlotResponse, SlotSpinInput, SlotState, NicknameTagState, NicknameTagView, TagDrawInput, TagEvolveInput, TagResponse } from "../shared/types";
 import { LOTTO_RULES } from "../shared/balance";
 import { noticeDate } from "./lotto-notice";
-import { api, ApiFailure } from "./api";
+import { api, refusedByServer } from "./api";
 import { createShopPreview } from "./shop-preview";
+import { createRequestGate } from "./shop-requests";
 
 export type PendingPurchase =
   | { kind: "kuji"; input: KujiPurchaseInput }
@@ -12,6 +13,10 @@ export type PendingPurchase =
   | { kind: "slot"; input: SlotSpinInput }
   | { kind: "tag"; input: TagDrawInput };
 type ShopResponse = ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse | TagResponse;
+type ReadKind = ShopKind | "shop";
+/** Whether a write's answer already holds what a read of `kind` would fetch. */
+const SECTION: Record<ShopKind, string> = { kuji: "kuji", lotto: "lotto", speetto: "speetto", slot: "slot", tag: "tags" };
+const covers = (answer: ShopResponse, kind: ReadKind) => kind === "shop" || SECTION[kind] in answer;
 interface ShopContextValue extends ShopState {
   /** Names this account's device-local notes (e.g. which draw was already shown). */
   accountKey: string;
@@ -89,18 +94,20 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   const [error, setError] = useState("");
   const [pending, setPending] = useState<PendingPurchase | null>(() => preview ? null : savedPending(storageKey));
   const pendingRef = useRef(pending);
-  const writeInFlight = useRef(false);
-  const deferredRead = useRef<ShopKind | "shop" | null>(null);
   const mounted = useRef(true);
-  const generation = useRef(0);
+  // Reads, purchases and tag changes all pass this gate, so `loading` is cleared
+  // by whichever of them ends last, and by nothing while another still runs.
+  const gateRef = useRef<ReturnType<typeof createRequestGate<ReadKind>> | null>(null);
+  gateRef.current ??= createRequestGate<ReadKind>(value => { if (mounted.current) setLoading(value); });
+  const gate = gateRef.current;
   const callbacks = useRef({ transact, onPreviewChange, onServerRead });
   callbacks.current = { transact, onPreviewChange, onServerRead };
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     // A bootstrap refresh after a purchase replaces the wallet. It carries today's
     // free uses too; keep the last known ones if an older caller omits them, so
     // the merged 이용권 count never drops to owned tickets only.
-    if (!preview && !writeInFlight.current) setState(current => ({ ...initial, free: initial.free ?? current.free }));
+    if (!preview && !gate.writing()) setState(current => ({ ...initial, free: initial.free ?? current.free }));
   }, [preview, initial.gold, initial.inventory.lottoTickets, initial.inventory.speettoTickets, initial.inventory.tagTickets, initial.canPurchase, initial.serverTime,
     initial.free?.lotto, initial.free?.speetto, initial.free?.slot, initial.free?.tag]);
   const remember = useCallback((value: PendingPurchase | null) => {
@@ -138,53 +145,64 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     return () => clearTimeout(timer);
   }, [preview, state.serverTime, syncPreview, apply]);
   const refresh = useCallback(async (kind?: ShopKind) => {
-    if (writeInFlight.current) { deferredRead.current = kind ?? "shop"; return; }
-    const current = ++generation.current;
-    setLoading(true);
+    // During a write the read is owed: the gate hands it back when the write ends.
+    const read = gate.beginRead(kind ?? "shop");
+    if (!read) return;
     try {
       const engine = syncPreview();
       const next = engine ? engine.read(kind)
         : await (kind ? api[kind]() : api.shop());
-      if (!mounted.current || current !== generation.current) return;
+      // An answer overtaken by a newer read or a write never replaces their state.
+      if (!mounted.current || !read.current()) return;
       apply(next);
       setError("");
       if (!previewEngine.current) callbacks.current.onServerRead(next);
     } catch (e) {
-      if (mounted.current && current === generation.current) setError(e instanceof Error ? e.message : "상점을 불러오지 못했어요.");
+      if (mounted.current && read.current()) setError(e instanceof Error ? e.message : "상점을 불러오지 못했어요.");
     } finally {
-      if (mounted.current && current === generation.current) setLoading(false);
+      read.end();
     }
-  }, [apply, syncPreview]);
+  }, [apply, syncPreview, gate]);
+  /** One write at a time (callers check first). It overtakes any read in
+   * flight; that read, or one asked for meanwhile, runs again afterwards unless
+   * this write's answer already carries it (always, after a failure). */
+  const write = useCallback(async <T extends ShopResponse>(action: () => Promise<T>): Promise<T> => {
+    const writing = gate.beginWrite();
+    let answer: ShopResponse | null = null;
+    try {
+      const next = await callbacks.current.transact(action);
+      apply(next);
+      answer = next;
+      return next;
+    } finally {
+      const owed = writing.end(kind => answer !== null && covers(answer, kind));
+      if (owed && mounted.current) void refresh(owed.kind === "shop" ? undefined : owed.kind);
+    }
+  }, [apply, refresh, gate]);
   const purchase = useCallback(async <T extends ShopResponse>(attempt: PendingPurchase, action: () => Promise<T>): Promise<T> => {
-    if (writeInFlight.current) throw new Error("구매를 확인하고 있어요. 잠시 기다려 주세요.");
+    if (gate.writing()) throw new Error("구매를 확인하고 있어요. 잠시 기다려 주세요.");
     const previous = pendingRef.current;
     if (previous && JSON.stringify(previous) !== JSON.stringify(attempt)) {
       throw new Error("진행 중인 구매 화면에서 구매 결과를 먼저 확인해 주세요.");
     }
-    generation.current++;
-    writeInFlight.current = true;
     remember(attempt);
-    setLoading(true);
     setError("");
     try {
-      const next = await callbacks.current.transact(action);
-      apply(next);
+      const next = await write(action);
       remember(null);
       return next;
     } catch (e) {
       // A lost response may follow a committed purchase. Keep the same request
       // and payload across routes/reloads until its persisted receipt is read.
-      if (preview || (e instanceof ApiFailure && e.status >= 400 && e.status < 500)) remember(null);
+      // Only a refusal the server gave after looking for that receipt ends it:
+      // the 23:50 close, for one, is checked after the receipt, so "closed" means
+      // nothing was bought. A session that ended proves nothing (the purchase
+      // may be stored), so the request waits for the next sign-in.
+      if (preview || refusedByServer(e)) remember(null);
       if (mounted.current) setError(e instanceof Error ? e.message : "구매 결과를 확인하지 못했어요. 다시 확인해 주세요.");
       throw e;
-    } finally {
-      writeInFlight.current = false;
-      if (mounted.current) setLoading(false);
-      const nextRead = deferredRead.current;
-      deferredRead.current = null;
-      if (mounted.current && nextRead) void refresh(nextRead === "shop" ? undefined : nextRead);
     }
-  }, [apply, preview, remember, refresh]);
+  }, [preview, remember, write, gate]);
   const buyKuji = useCallback((input: KujiPurchaseInput) => purchase({ kind: "kuji", input }, async () => {
     const engine = syncPreview();
     return engine ? engine.buyKuji(input) : api.buyKuji(input);
@@ -205,48 +223,31 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
     const engine = syncPreview();
     return engine ? engine.drawTag(input) : api.drawTag(input);
   }), [purchase, syncPreview]);
-  const equipTag = useCallback(async (tagId: string | null) => {
-    if (writeInFlight.current || pendingRef.current) throw new Error("진행 중인 구매 결과를 먼저 확인해 주세요.");
-    generation.current++;
-    writeInFlight.current = true;
+  /** Wearing, discarding and evolving are writes like a purchase (they end
+   * through the same gate) but keep no pending request: their own screens ask
+   * again. `failure` is the provider-level message, where one is shown. */
+  const changeTags = useCallback(async (action: () => Promise<TagResponse>, failure?: string): Promise<TagResponse> => {
+    if (gate.writing() || pendingRef.current) throw new Error("진행 중인 구매 결과를 먼저 확인해 주세요.");
     setError("");
     try {
-      const engine = syncPreview();
-      const next = await callbacks.current.transact(async () => engine ? engine.equipTag(tagId) : api.equipTag(tagId));
-      apply(next);
-      return next;
+      return await write(action);
     } catch (e) {
-      if (mounted.current) setError(e instanceof Error ? e.message : "별명 태그를 바꾸지 못했어요.");
+      if (failure && mounted.current) setError(e instanceof Error ? e.message : failure);
       throw e;
-    } finally { writeInFlight.current = false; }
-  }, [apply, syncPreview]);
-  const discardTag = useCallback(async (tagId: string) => {
-    if (writeInFlight.current || pendingRef.current) throw new Error("진행 중인 구매 결과를 먼저 확인해 주세요.");
-    generation.current++;
-    writeInFlight.current = true;
-    setError("");
-    try {
-      const engine = syncPreview();
-      const next = await callbacks.current.transact(async () => engine ? engine.discardTag(tagId) : api.discardTag(tagId));
-      apply(next);
-      return next;
-    } catch (e) {
-      if (mounted.current) setError(e instanceof Error ? e.message : "별명 태그를 버리지 못했어요.");
-      throw e;
-    } finally { writeInFlight.current = false; }
-  }, [apply, syncPreview]);
-  const evolveTag = useCallback(async (input: TagEvolveInput) => {
-    if (writeInFlight.current || pendingRef.current) throw new Error("진행 중인 구매 결과를 먼저 확인해 주세요.");
-    generation.current++;
-    writeInFlight.current = true;
-    setError("");
-    try {
-      const engine = syncPreview();
-      const next = await callbacks.current.transact(async () => engine ? engine.evolveTag(input) : api.evolveTag(input));
-      apply(next);
-      return next;
-    } finally { writeInFlight.current = false; }
-  }, [apply, syncPreview]);
+    }
+  }, [write, gate]);
+  const equipTag = useCallback((tagId: string | null) => changeTags(async () => {
+    const engine = syncPreview();
+    return engine ? engine.equipTag(tagId) : api.equipTag(tagId);
+  }, "별명 태그를 바꾸지 못했어요."), [changeTags, syncPreview]);
+  const discardTag = useCallback((tagId: string) => changeTags(async () => {
+    const engine = syncPreview();
+    return engine ? engine.discardTag(tagId) : api.discardTag(tagId);
+  }, "별명 태그를 버리지 못했어요."), [changeTags, syncPreview]);
+  const evolveTag = useCallback((input: TagEvolveInput) => changeTags(async () => {
+    const engine = syncPreview();
+    return engine ? engine.evolveTag(input) : api.evolveTag(input);
+  }), [changeTags, syncPreview]);
   const revealSpeetto = useCallback(async (ticketId: string) => {
     // Shown as scratched at once; the server copy only matters to other devices
     // and later visits, so a failed save is retried by the next reveal or read.
@@ -258,12 +259,12 @@ export function ShopProvider({ children, preview, accountKey, initial, previewGo
   const claimPreviewLaunchGift = useCallback(() => {
     const engine = syncPreview();
     if (!engine) throw new Error("미리보기에서만 사용할 수 있어요.");
-    if (writeInFlight.current || pendingRef.current) throw new Error("진행 중인 구매 결과를 먼저 확인해 주세요.");
-    generation.current++;
+    if (gate.writing() || pendingRef.current) throw new Error("진행 중인 구매 결과를 먼저 확인해 주세요.");
+    gate.supersedeRead();
     const result = engine.claimLaunchGift();
     apply(result.state);
     return { inventory: result.state.inventory, awarded: result.awarded };
-  }, [syncPreview, apply]);
+  }, [syncPreview, apply, gate]);
   return <ShopContext.Provider value={{ ...state, accountKey, kuji, lotto, speetto, slot, tags, loading, error, pending, refresh, buyKuji, buyLotto, buySpeetto, spinSlot, drawTag, equipTag, discardTag, evolveTag, revealSpeetto, claimPreviewLaunchGift }}>{children}</ShopContext.Provider>;
 }
 

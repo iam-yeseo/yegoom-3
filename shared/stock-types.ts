@@ -50,7 +50,23 @@ export interface StockDetailView {
   tradeBlock: string | null;
   serverTime: string;
 }
-export interface StockTradeInput { requestId: string; ticker: Ticker; side: 'buy' | 'sell'; quantity: number; expectedVersion: number }
+export interface StockTradeInput {
+  requestId: string; ticker: Ticker; side: 'buy' | 'sell'; quantity: number; expectedVersion: number;
+  /** The account the order was written for. A session of any other account is
+   * refused, so a saved order is never retried as somebody else. */
+  expectedUserId?: string;
+}
+/** The refusals that prove an order did not fill. The Worker answers with one
+ * of the market codes only after it has looked for a trade stored under the
+ * order's requestId and found none; the input codes reject the same stored
+ * order every time. Any other failure (a lost response, a server error, a
+ * missing session, another account) says nothing about the order: it stays
+ * pending and is asked again with the same requestId. */
+export const STOCK_ORDER_UNFILLED_CODES: readonly string[] = [
+  'MARKET_CLOSED', 'TRADING_HALTED', 'DELISTED', 'AUTHOR_LOCKED', 'PRICE_CHANGED',
+  'NOT_ENOUGH_SHARES', 'HOLDING_LIMIT', 'NOT_ENOUGH_GOLD', 'MARKET_CHANGED', 'REQUEST_CONFLICT',
+  'INVALID_REQUEST_ID', 'UNKNOWN_STOCK', 'INVALID_SIDE', 'INVALID_QUANTITY', 'INVALID_VERSION',
+];
 export interface StockTradeResponse { trade: StockTradeView; stock: StockQuote; gold: number; replayed: boolean }
 export interface StockNewsPage { news: StockNewsItem[]; nextBefore: string | null; serverTime: string }
 export interface StockHomeSummary { open: boolean; holiday: string | null; value: number; cost: number }

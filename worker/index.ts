@@ -22,9 +22,9 @@ import { PROFILE_PHOTO, LUCK_PHOTO } from '../shared/profile';
 import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, luckPhotoUrl } from './luck-photos';
 import { notificationsRoute, readNotificationSummary, sendAdminNotification, NotificationError, notify } from './notifications';
 import { maintainDatabase } from './maintenance';
-import { AchievementError, claimAchievement, readAchievements, recordAchievementEvent, syncAchievements, syncAchievementsFor } from './achievements';
+import { AchievementError, achievementScopesFor, claimAchievement, readAchievements, recordAchievementEvent, syncAchievements, syncAchievementsFor } from './achievements';
 import { RankResultError, markRankResultsSeen, readRankResults, settleDueRankingRewards } from './ranking-rewards';
-import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockSecret, tradeStock } from './stocks';
+import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockPricesMoved, stockSecret, tradeStock } from './stocks';
 import { aiWriters, isAiProvider, readAiStatus, saveAiSettings } from './stock-ai';
 import { FEATURES, PLAY_RULES, nextPredictionOpenAt, playClosed, predictionDayOff, scoreCounts } from '../shared/balance';
 
@@ -289,7 +289,7 @@ async function settlePublishedRounds(db: D1Database, now: Date): Promise<void> {
   // commit together, including rollbacks and concurrent idempotent retries.
   await db.batch(writes);
   // A revealed answer can complete a daily achievement for each predictor.
-  await syncAchievementsFor(db, predictions.map(prediction => prediction.player_id), now);
+  await syncAchievementsFor(db, predictions.map(prediction => prediction.player_id), now, ['prediction']);
 }
 
 async function readHistory(db: D1Database, user: UserRow, id: GameId, now: Date): Promise<GameHistoryRound[]> {
@@ -639,12 +639,13 @@ async function api(request: Request, env: Env, context: ExecutionContext): Promi
   }
   const user = await requireUser(request, env, now.getTime());
   const response = await authenticatedApi(request, env, url, user, now);
-  // Any successful player write may have completed an achievement. The check
-  // runs after the response has gone out, so the write itself is not slowed by
-  // it; the unlock notice reaches the player with their next refresh. It never
-  // fails the request.
+  // Any successful player write may have completed an achievement, of the
+  // activity that write belongs to: only that activity's facts are read. The
+  // check runs after the response has gone out, so the write itself is not
+  // slowed by it; the unlock notice reaches the player with their next
+  // refresh. It never fails the request.
   if (!['GET', 'HEAD'].includes(request.method) && user.role === 'player' && response.ok && !url.pathname.startsWith('/api/achievements')) {
-    context.waitUntil(syncAchievements(env.DB, user.id, new Date(), url.pathname === '/api/me/password' ? ['password'] : []).catch(error => {
+    context.waitUntil(syncAchievements(env.DB, user.id, new Date(), url.pathname === '/api/me/password' ? ['password'] : [], achievementScopesFor(url.pathname)).catch(error => {
       console.error('Achievement sync failed', error instanceof Error ? error.name : 'UnknownError');
     }));
   }
@@ -808,7 +809,7 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
   if (url.pathname === '/api/notifications') {
     const page = await notificationsRoute(env.DB, user, request.method, url.searchParams.get('before'), now);
     // Opening the centre (its first page) is itself an achievement.
-    if (!url.searchParams.get('before') && user.role === 'player') await syncAchievements(env.DB, user.id, now).catch(() => undefined);
+    if (!url.searchParams.get('before') && user.role === 'player') await syncAchievements(env.DB, user.id, now, [], ['profile']).catch(() => undefined);
     return json(page);
   }
   if (url.pathname === '/api/achievements') {
@@ -843,11 +844,11 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
       throw new HttpError(400, 'INVALID_VERSION', '판 버전을 확인해 주세요.');
     }
     const result = await catchmindRoute(env.DB, user, catchmindMatch[1], request.method, input, new Date(), rawSince === null ? undefined : Number(rawSince));
-    // A guess that ends the round can complete the drawer's achievement too;
-    // the guesser's own check runs after every write.
+    // A guess that ends the round (the answer, or the tenth miss) can complete
+    // the drawer's achievement too; the guesser's own check runs after every write.
     if (catchmindMatch[1] === 'guess' && 'catchmind' in result) {
       const round = result.catchmind.round;
-      if (round?.status === 'ended' && round.winner && round.drawer.id !== user.id) await syncAchievementsFor(env.DB, [round.drawer.id], new Date());
+      if (round?.status === 'ended' && round.drawer.id !== user.id) await syncAchievementsFor(env.DB, [round.drawer.id], new Date(), ['catchmind']);
     }
     return json(result);
   }
@@ -860,10 +861,12 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
     if (url.pathname === '/api/stock') {
       const since = url.searchParams.get('since');
-      const view = await readStockMarket(env.DB, secret, user, now.getTime(), since && since.length <= 64 ? since : undefined);
-      // A full read (prices moved) may have brought a limit move or a
-      // delisting on a stock the player holds: those are achievements too.
-      if (!('unchanged' in view) && user.role === 'player') await syncAchievements(env.DB, user.id, now).catch(() => undefined);
+      const known = since && since.length <= 64 ? since : undefined;
+      const view = await readStockMarket(env.DB, secret, user, now.getTime(), known);
+      // Moved prices may have brought a limit move or a delisting on a stock
+      // the player holds: those are achievements too. A full answer for news,
+      // gold or holdings alone (prices unchanged) brings none of them.
+      if (!('unchanged' in view) && user.role === 'player' && stockPricesMoved(known, view.version)) await syncAchievements(env.DB, user.id, now, [], ['stock-market']).catch(() => undefined);
       return json(view);
     }
     if (url.pathname === '/api/stock/news') return json(await readStockNews(env.DB, secret, user, url.searchParams.get('before'), now.getTime()));

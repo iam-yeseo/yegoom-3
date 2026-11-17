@@ -108,7 +108,7 @@ export async function settleDueRankingRewards(db: D1Database, now: Date): Promis
       throw error;
     }
     // A first place or a podium finish is also an achievement.
-    await syncAchievementsFor(db, payouts.map(entry => entry.userId), now);
+    await syncAchievementsFor(db, payouts.map(entry => entry.userId), now, ['ranking']);
   }
 }
 

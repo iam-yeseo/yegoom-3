@@ -71,6 +71,14 @@ async function previousPurchase(db: D1Database, user: ShopUser, id: string, kind
   if (row && (row.kind !== kind || row.request_payload !== payload)) throw new ShopError(409, 'REQUEST_CONFLICT', '이미 다른 구매에 사용한 요청 번호예요.');
   return row;
 }
+/** Kuji, lotto, speetto and the slot are games: they close with the rest at
+ * 23:50. Only a new purchase is refused. Each buy looks up its request's stored
+ * receipt first, so a purchase saved at 23:49 is still answered with its
+ * original result after the close (and after midnight) without charging,
+ * drawing or paying anything again. */
+function requireOpenPlay(now: Date): void {
+  if (playClosed(now.getTime())) throw new ShopError(409, 'PLAY_CLOSED', PLAY_RULES.closedMessage);
+}
 async function rejectedPurchase(db: D1Database, user: ShopUser, start: number, end: number): Promise<never> {
   const active = await db.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'player' AND active = 1").bind(user.id).first();
   if (!active) throw new ShopError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');
@@ -189,6 +197,7 @@ async function buyKuji(db: D1Database, user: ShopUser, input: Record<string, unk
   const payload = JSON.stringify({ boardId: input.boardId, positions });
   const previous = await previousPurchase(db, user, id, 'kuji', payload);
   if (previous) return previous;
+  requireOpenPlay(now);
   const board = await ensureBoard(db, now);
   if (board.id !== input.boardId) throw new ShopError(409, 'BOARD_CHANGED', '새 쿠지판이 열렸어요. 다시 골라 주세요.');
   const grades = JSON.parse(board.grades) as KujiGrade[];
@@ -281,7 +290,7 @@ export async function settleDueLotto(db: D1Database, now: Date): Promise<void> {
   // keeps the same call budget, with payouts, notices and settlement atomic.
   if (writes.length) await db.batch(writes);
   // A first prize or a blank ticket completes an achievement for its owner.
-  await syncAchievementsFor(db, tickets.map(ticket => ticket.user_id), now);
+  await syncAchievementsFor(db, tickets.map(ticket => ticket.user_id), now, ['lotto']);
 }
 
 /** A daily free use is stored as a zero-cost gold row marked free, so no gold or
@@ -317,6 +326,7 @@ async function buyLotto(db: D1Database, user: ShopUser, input: Record<string, un
   const payload = JSON.stringify({ numbers, payment: method });
   const previous = await previousPurchase(db, user, id, 'lotto', payload);
   if (previous) return previous;
+  requireOpenPlay(now);
   const drawDate = targetDrawDate(now); const drawAt = kstTimestamp(drawDate, LOTTO_RULES.drawTime);
   const window = dayWindow(now); const start = Math.max(window.start, drawAt - 86_400_000); const end = Math.min(window.end, drawAt);
   const attempt = crypto.randomUUID();
@@ -385,6 +395,7 @@ async function buySpeetto(db: D1Database, user: ShopUser, input: Record<string, 
   const id = requestId(input); const method = payment(input); const payload = JSON.stringify({ payment: method });
   const previous = await previousPurchase(db, user, id, 'speetto', payload);
   if (previous) return previous;
+  requireOpenPlay(now);
   const won = randomInt(100) < SPEETTO_RULES.winPercent;
   const characters = SPEETTO_RULES.characters;
   const first = randomInt(characters.length);
@@ -416,6 +427,7 @@ async function spinSlot(db: D1Database, user: ShopUser, input: Record<string, un
   const onlyFree = input.free === true;
   const previous = await previousSlotSpin(db, user.id, id);
   if (previous) return previous;
+  requireOpenPlay(now);
   const result = slotResult(randomInt);
   const attempt = crypto.randomUUID();
   const window = dayWindow(now);
@@ -453,11 +465,10 @@ async function spinSlot(db: D1Database, user: ShopUser, input: Record<string, un
 export async function shopRoute(db: D1Database, user: ShopUser, path: string, method: string, input: Record<string, unknown> | undefined, now: Date): Promise<ShopState | KujiResponse | LottoResponse | SpeettoResponse | SlotResponse> {
   if (method !== 'GET' && method !== 'POST') throw new ShopError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
   if (method === 'POST' && user.role !== 'player') throw new ShopError(403, 'CANNOT_PURCHASE', '플레이어만 구매할 수 있어요.');
-  // Kuji, lotto, speetto and the slot are games: they close with the rest at 23:50.
-  // Scratching a ticket already bought is not play: it stays possible after 23:50.
+  // The 23:50 close is applied inside each buy, after its stored receipt was
+  // looked up (requireOpenPlay). Scratching a ticket already bought is not play.
   const reveal = path === '/api/shop/speetto/reveal';
   if (reveal && method !== 'POST') throw new ShopError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
-  if (method === 'POST' && !reveal && playClosed(now.getTime())) throw new ShopError(409, 'PLAY_CLOSED', PLAY_RULES.closedMessage);
   await settleDueLotto(db, now);
   if (path === '/api/shop' && method === 'GET') return readShopState(db, user, now);
   if (path === '/api/shop/kuji') {

@@ -6,6 +6,8 @@ import { GAME_RULES } from '../shared/balance';
 import type { GameId } from '../shared/types';
 import { readGameRules } from './game-settings';
 import { notify } from './notifications';
+import { hashToken } from './crypto';
+import { syncMarketAchievements } from './achievements';
 import { AI_RULES } from '../shared/balance';
 import { writeCloseNews, writeMorningNews, type AiWriters } from './stock-ai';
 import type { Candle, MarketClock, MarketHoliday, StockDetailView, StockHomeSummary, StockMarketView, StockNewsItem, StockNewsKind, StockNewsPage, StockQuote, StockTradeResponse, StockTradeView, StockUnchanged } from '../shared/stock-types';
@@ -204,27 +206,55 @@ function quote(row: StockRow, date: string, holding?: HoldingRow): StockQuote {
 }
 const VISIBLE_NEWS = 'publish_at <= ? AND hidden = 0 AND (audience_user_id IS NULL OR audience_user_id = ?)';
 
+/** A market version is `<price version>.<content stamp>`; the price version
+ * (two dot-separated numbers) moves with every tick and news step. Versions
+ * from before the content stamp are the price version alone. */
+const pricePart = (version: string) => version.split('.').slice(0, 2).join('.');
+/** Whether prices moved between the reader's last version and this one. */
+export const stockPricesMoved = (since: string | undefined, version: string): boolean => !since || pricePart(since) !== pricePart(version);
+
+/** The market list. `since` is the version of the reader's last full answer;
+ * the short "unchanged" answer is given only when nothing in that answer would
+ * differ: prices, the listed news, the closing articles, the gold and the
+ * holdings. Prices standing still say nothing about the rest: the closing
+ * article is written after the last tick, a whale or a hidden article changes
+ * the news at any moment, and gold and holdings move with trades elsewhere.
+ * So the version is the price version plus a stamp of what is shown, and the
+ * shown rows are read either way (a handful of indexed rows, never history). */
 export async function readStockMarket(db: D1Database, secret: string, user: StockUser, now: number, since?: string): Promise<StockMarketView | StockUnchanged> {
   const { rows, holidays } = await advanceStocks(db, secret, now);
-  const version = marketVersion(rows);
   const market = clock(now, holidays);
   const serverTime = new Date(now).toISOString();
-  if (since === version) return { unchanged: true, version, market, serverTime };
   const [holdings, news, gold, closingRows] = await db.batch([
-    db.prepare('SELECT ticker, quantity, cost_basis FROM stock_holdings WHERE user_id = ?').bind(user.id),
+    db.prepare('SELECT ticker, quantity, cost_basis FROM stock_holdings WHERE user_id = ? ORDER BY ticker').bind(user.id),
     db.prepare(`SELECT id, ticker, kind, headline, body, publish_at, effect_bp, source FROM stock_news WHERE ${VISIBLE_NEWS}
       AND kind NOT IN ('close', 'comment', 'weekly') ORDER BY publish_at DESC, id DESC LIMIT 5`).bind(now, user.id),
     db.prepare('SELECT gold FROM user_balances WHERE user_id = ?').bind(user.id),
     // The latest closing articles (one publish time); empty work while the market is open.
+    // The newest one is found first and only its instant is read: asking for
+    // "the three newest" walked back through older news whenever fewer than
+    // three were visible (no weekly report, or no comment for this player).
     db.prepare(`SELECT id, ticker, kind, headline, body, publish_at, effect_bp, source FROM stock_news WHERE ${VISIBLE_NEWS}
-      AND kind IN ('close', 'comment', 'weekly') AND ? = 0 ORDER BY publish_at DESC LIMIT 3`).bind(now, user.id, market.open ? 1 : 0),
+      AND kind IN ('close', 'comment', 'weekly') AND ? = 0
+      AND publish_at = (SELECT publish_at FROM stock_news WHERE ${VISIBLE_NEWS} AND kind IN ('close', 'comment', 'weekly')
+        ORDER BY publish_at DESC LIMIT 1)
+      ORDER BY publish_at DESC LIMIT 3`).bind(now, user.id, market.open ? 1 : 0, now, user.id),
   ]);
   const held = new Map((holdings!.results as HoldingRow[]).map(row => [row.ticker, row]));
   const closingNews = (closingRows!.results as NewsRow[]).filter((row, _, all) => row.publish_at === all[0]!.publish_at).map(newsView);
   const closing = market.open ? null : { summary: closingNews.find(item => item.kind === 'close') ?? null,
     comment: closingNews.find(item => item.kind === 'comment') ?? null, weekly: closingNews.find(item => item.kind === 'weekly') ?? null };
-  return { market, version, stocks: rows.map(row => quote(row, market.date, held.get(row.ticker))), news: (news!.results as NewsRow[]).map(newsView), closing,
-    gold: (gold!.results[0] as { gold: number } | undefined)?.gold ?? 0, canTrade: user.role === 'player', serverTime };
+  const listed = (news!.results as NewsRow[]).map(newsView);
+  const balance = (gold!.results[0] as { gold: number } | undefined)?.gold ?? 0;
+  const article = (item: StockNewsItem | null | undefined) => item ? [item.id, item.source, item.headline] : null;
+  const stamp = (await hashToken(JSON.stringify([
+    listed.map(article), closing && [article(closing.summary), article(closing.comment), article(closing.weekly)],
+    balance, (holdings!.results as HoldingRow[]).map(row => [row.ticker, row.quantity, row.cost_basis]), user.role,
+  ]))).slice(0, 16);
+  const version = `${marketVersion(rows)}.${stamp}`;
+  if (since === version) return { unchanged: true, version, market, serverTime };
+  return { market, version, stocks: rows.map(row => quote(row, market.date, held.get(row.ticker))), news: listed, closing,
+    gold: balance, canTrade: user.role === 'player', serverTime };
 }
 
 export async function readStockDetail(db: D1Database, secret: string, user: StockUser, ticker: string, now: number): Promise<StockDetailView> {
@@ -291,20 +321,44 @@ async function tradeResponse(db: D1Database, user: StockUser, trade: TradeRow, r
 
 /** Buy or sell at the current server price. Balance, holding, market hours, stock
  * status and price version are checked inside the same conditional batch that
- * writes the trade, the ledger and the holding. A repeated requestId replays. */
+ * writes the trade, the ledger and the holding. A repeated requestId replays:
+ * the stored trade is looked up before any market rule, so an order that filled
+ * is answered with its receipt whatever has happened to the market since. */
 export async function tradeStock(db: D1Database, secret: string, user: StockUser, input: Record<string, unknown>, now: number): Promise<StockTradeResponse> {
+  // A saved order is retried by the browser that sent it; it must never fill
+  // for an account that signed in on that browser afterwards.
+  if (input.expectedUserId !== undefined && input.expectedUserId !== user.id) {
+    throw new StockError(409, 'ACCOUNT_CHANGED', '로그인한 계정이 바뀌었어요. 화면을 새로고침해 주세요.');
+  }
   if (user.role !== 'player') throw new StockError(403, 'CANNOT_TRADE', '플레이어만 주식을 거래할 수 있어요.');
   const order = tradeInput(input);
-  const previous = await db.prepare('SELECT * FROM stock_trades WHERE user_id = ? AND request_id = ?').bind(user.id, order.requestId).first<TradeRow>();
+  const stored = () => db.prepare('SELECT * FROM stock_trades WHERE user_id = ? AND request_id = ?').bind(user.id, order.requestId).first<TradeRow>();
+  const previous = await stored();
   const { rows, holidays } = await advanceStocks(db, secret, now);
   const date = kstDateOf(now);
   const row = rows.find(item => item.ticker === order.ticker)!;
-  if (previous) {
-    if (previous.ticker !== order.ticker || previous.side !== order.side || previous.quantity !== order.quantity) {
+  const replay = (trade: TradeRow) => {
+    if (trade.ticker !== order.ticker || trade.side !== order.side || trade.quantity !== order.quantity) {
       throw new StockError(409, 'REQUEST_CONFLICT', '이미 다른 주문에 사용한 주문 번호예요.');
     }
-    return tradeResponse(db, user, previous, row, date, true);
+    return tradeResponse(db, user, trade, row, date, true);
+  };
+  if (previous) return replay(previous);
+  try {
+    return await placeOrder(db, user, order, row, holidays, date, now);
+  } catch (error) {
+    if (!(error instanceof StockError)) throw error;
+    // A refusal says "this order did not fill" (STOCK_ORDER_UNFILLED_CODES), so
+    // it is only given once no twin of the request (a retry racing its
+    // original) has stored the trade since the first lookup.
+    const committed = await stored();
+    if (committed) return replay(committed);
+    throw error;
   }
+}
+
+async function placeOrder(db: D1Database, user: StockUser, order: ReturnType<typeof tradeInput>, row: StockRow,
+  holidays: Map<string, string>, date: string, now: number): Promise<StockTradeResponse> {
   const status = marketStatus(now, holidays);
   if (!status.open) throw new StockError(409, 'MARKET_CLOSED', status.holiday ? `오늘은 ${status.holiday} 휴장이에요.` : '지금은 장이 닫혀 있어요.');
   if (!tradesOn(order.ticker, date)) throw new StockError(409, 'TRADING_HALTED', '겨울 근무 중이라 오늘은 거래할 수 없어요.');
@@ -378,14 +432,14 @@ export async function tradeStock(db: D1Database, secret: string, user: StockUser
   return rejectTrade(db, user, order, row);
 }
 
+/** Why the conditional write stored nothing. A trade stored by a twin of this
+ * request is not looked for here: tradeStock checks that before any refusal. */
 async function rejectTrade(db: D1Database, user: StockUser, order: ReturnType<typeof tradeInput>, row: StockRow): Promise<never> {
-  const [replay, state, holding, gold] = await db.batch([
-    db.prepare('SELECT * FROM stock_trades WHERE user_id = ? AND request_id = ?').bind(user.id, order.requestId),
+  const [state, holding, gold] = await db.batch([
     db.prepare('SELECT * FROM stock_state WHERE ticker = ?').bind(order.ticker),
     db.prepare('SELECT ticker, quantity, cost_basis FROM stock_holdings WHERE user_id = ? AND ticker = ?').bind(user.id, order.ticker),
     db.prepare('SELECT gold FROM user_balances WHERE user_id = ?').bind(user.id),
   ]);
-  if (replay!.results.length) throw new StockError(409, 'REQUEST_IN_PROGRESS', '같은 주문을 처리하고 있어요. 잠시 뒤 다시 확인해 주세요.');
   const current = state!.results[0] as StateRow | undefined;
   if (!current || current.version !== order.expectedVersion || current.price !== row.price) {
     throw new StockError(409, 'PRICE_CHANGED', '가격이 바뀌었어요. 확인하고 다시 주문해 주세요.');
@@ -463,7 +517,14 @@ export async function runStockCron(db: D1Database, secret: string, writers: AiWr
     const seeds = await daySeeds(secret, [date, 'phase']);
     await writeMorningNews(db, writers, seeds.get(date)!, date, rows, now, seeds.get('phase')!);
   }
-  if (time === '18:00') await writeCloseNews(db, writers, date, rows, now);
+  if (time === '18:00') {
+    await writeCloseNews(db, writers, date, rows, now);
+    // The day's candles and delistings are final: credit what they earned.
+    // A missed run loses nothing; the next check starts from the same watermark.
+    await syncMarketAchievements(db, new Date(now)).catch(error => {
+      console.error('Market achievement sync failed', error instanceof Error ? error.name : 'UnknownError');
+    });
+  }
 }
 
 // Administrator: published news only (never future), hide/show, and the AI switch.
