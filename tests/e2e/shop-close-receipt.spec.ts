@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { SlotResponse, SlotSpinInput, SpeettoPurchaseInput, SpeettoResponse } from '../../shared/types';
-import { ServerClock, startClockServers, type ClockServers } from './clock-servers';
+import { ServerClock, releaseClock, startClockServers, type ClockServers } from './clock-servers';
 
 // A purchase is stored at 23:49:59 KST but its answer is lost. The same request
 // is asked again after the 23:50 close, and after midnight: it must return the
@@ -14,6 +14,7 @@ test.beforeAll(async ({}, info) => {
   servers = await startClockServers('close-receipt', 8794, INSTANTS);
 });
 test.afterAll(async () => { await servers?.stop(); });
+test.afterEach(async ({ page }) => { await releaseClock(page); });
 
 async function login(page: Page, username: string) {
   await page.setExtraHTTPHeaders({ 'CF-Connecting-IP': '192.0.2.45' });

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import type { CatchmindResponse } from '../../shared/types';
-import { ServerClock, startClockServers, type ClockServers } from './clock-servers';
+import { ServerClock, releaseClock, startClockServers, type ClockServers } from './clock-servers';
 
 // One Catchmind round is kept across the 23:50 close and midnight. Its board
 // (and version) never changes, so nothing but the clock can close and reopen
@@ -12,6 +12,7 @@ const [, CLOSED, LATE, NEXT_DAY] = [0, 1, 2, 3];
 const CLOSED_NOTE = '오늘 게임은 밤 11시 50분에 마감했어요';
 const DRAWING = `data:image/webp;base64,${readFileSync('tests/fixtures/drawing-canvas-680.webp').toString('base64')}`;
 test.use({ serviceWorkers: 'block' });
+test.afterEach(async ({ page }) => { await releaseClock(page); });
 
 async function login(page: Page, servers: ClockServers, username: string) {
   await page.setExtraHTTPHeaders({ 'CF-Connecting-IP': '192.0.2.47' });

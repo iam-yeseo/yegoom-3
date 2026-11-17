@@ -24,7 +24,13 @@ async function waitFor(origin: string, child: ChildProcess) {
 export async function startClockServers(name: string, firstPort: number, instants: readonly string[], profile?: string): Promise<ClockServers> {
   const persist = `.test-build/e2e-shared-${name}-${process.pid}`;
   const children: ChildProcess[] = [];
+  // A hook that is cut short (a failure elsewhere, a timeout) never gets to
+  // `stop`. The servers are detached, so they are ended with the worker; one
+  // left behind would answer for the next run's server, on another database.
+  const abandon = () => { for (const child of children) { try { process.kill(-child.pid!, 'SIGTERM'); } catch { /* Already closed. */ } } };
+  process.once('exit', abandon);
   const stop = async () => {
+    process.off('exit', abandon);
     await Promise.all(children.splice(0).map(child => new Promise<void>(resolve => {
       if (!child.pid || child.exitCode !== null || child.signalCode !== null) return resolve();
       child.once('close', () => resolve());
@@ -46,6 +52,9 @@ export async function startClockServers(name: string, firstPort: number, instant
     return waitFor(origins[index]!, child);
   };
   try {
+    for (const origin of origins) {
+      if (await fetch(`${origin}/api/health`).then(() => true, () => false)) throw new Error(`${origin} already answers: stop the E2E server left over from an earlier run`);
+    }
     // The first creates and seeds the database; the others then attach to it.
     await start(0);
     await Promise.all(instants.slice(1).map((_, index) => start(index + 1)));
@@ -65,6 +74,18 @@ async function settled(send: () => Promise<APIResponse>): Promise<APIResponse> {
     response = await send();
   }
   return response;
+}
+
+/** For `test.afterEach` in every spec that attaches a `ServerClock`.
+ *
+ * A screen keeps asking the server on its own (polls, timers), and a routed
+ * request takes real time here, more so while `settled` is asking again. One
+ * that is still on its way to a Worker when the test ends is cut off by the
+ * closing browser context, and Playwright then fails the finished test (or the
+ * next one) from the route handler: "route.fetch: Test ended". Ending the
+ * routing first drops whatever is still in flight instead. */
+export async function releaseClock(page: Page) {
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 }
 
 /** Routes this page's API calls to the Worker of the chosen instant. */

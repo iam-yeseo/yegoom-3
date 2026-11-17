@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { StockMarketView } from '../../shared/stock-types';
-import { ServerClock, startClockServers, type ClockServers } from './clock-servers';
+import { ServerClock, releaseClock, startClockServers, type ClockServers } from './clock-servers';
 
 // Friday 2026-10-30. The market list is read right after the 18:00 close tick,
 // before the closing article exists. The 18:00 Cron then stores the article;
@@ -11,6 +11,7 @@ let servers: ClockServers;
 test.use({ serviceWorkers: 'block' });
 test.beforeAll(async ({}, info) => { info.setTimeout(240_000); servers = await startClockServers('closing-news', 8805, INSTANTS); });
 test.afterAll(async () => { await servers?.stop(); });
+test.afterEach(async ({ page }) => { await releaseClock(page); });
 
 async function login(page: Page, username: string) {
   await page.setExtraHTTPHeaders({ 'CF-Connecting-IP': '192.0.2.49' });
