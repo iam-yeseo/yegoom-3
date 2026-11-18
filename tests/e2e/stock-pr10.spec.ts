@@ -34,11 +34,17 @@ test('preview market lists fifteen stocks, trades with fees and shows dated news
   for (const name of ['YK하이커스', 'SW전자', 'MJ일렉트로닉스', '예도어', '더워스쿨', '민두래곤', '소니항공', '에바참치', '리안뷰티', '예굼', 'GU', '피자대학', '구로미해적단', '고글', '야마존']) {
     await expect(rows.filter({ hasText: name })).toHaveCount(1);
   }
-  await expect(rows.filter({ hasText: '예굼' })).toContainText('20주 보유');
+  // The sample holdings (예굼 20주, 예도어 3주) go through the same simulated month as the
+  // prices, and a delisting on the way takes them away. Whether 예굼 was delisted before this
+  // date depends on how the engine is tuned (with today's numbers it was, and it is listed
+  // again), so the holding is read from the list and the trades below are checked against it.
+  const yegm = rows.filter({ hasText: '예굼' });
+  const held = Number(/(\d+)주 보유/.exec(await yegm.innerText())?.[1] ?? 0);
+  expect([0, 20], 'the sample holding is whole or was delisted away').toContain(held);
   await expect(page.locator('main')).not.toContainText('NaN');
   await shot(page, 'list', info);
 
-  await rows.filter({ hasText: '예굼' }).click();
+  await yegm.click();
   await expect(page).toHaveURL(/#\/preview\/stock\/YEGM$/);
   await expect(page.getByText('세계 최초, 모기 사냥에 성공하면')).toBeVisible();
   const priceText = await page.locator('.detail-head p strong').innerText();
@@ -52,18 +58,23 @@ test('preview market lists fifteen stocks, trades with fees and shows dated news
   await expect(sheet).toContainText('수수료 1%');
   await shot(page, 'confirm', info, false);
   await sheet.getByRole('button', { name: '확인' }).click();
-  await expect(page.locator('.holding')).toContainText('22주');
+  const shares = page.locator('.holding div').filter({ hasText: '보유' }).locator('strong');
+  await expect(shares).toHaveText(`${held + 2}주`);
   await expect.poll(async () => Number((await page.locator('.game-toolbar .gold').innerText()).replace(/[^\d]/g, ''))).toBe(goldBefore - price * 2 - fee);
   await shot(page, 'detail', info);
 
   await page.getByRole('tab', { name: '팔기' }).click();
   await page.getByRole('button', { name: '1주 팔기' }).click();
   await page.getByRole('dialog', { name: '거래 확인' }).getByRole('button', { name: '확인' }).click();
-  await expect(page.locator('.holding')).toContainText('21주');
+  await expect(shares).toHaveText(`${held + 1}주`);
   for (const range of ['1주', '1개월']) {
     await page.getByRole('tab', { name: range }).click();
     await expect(page.locator('.chart-card svg')).toHaveAttribute('aria-label', new RegExp(`최근 ${range} 예굼`));
   }
+
+  // Back on the list, the row carries what is held after the two trades.
+  await page.goto('/#/preview/stock');
+  await expect(yegm).toContainText(`${held + 1}주 보유`);
 
   await page.goto('/#/preview/stock/news');
   await expect(page.locator('.stock-news-item').first()).toBeVisible();

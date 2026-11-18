@@ -237,7 +237,7 @@ PR #14의 머지를 확인한 최신 main `2e66839`에서 `codex/launch-b`로 �
 
 주문 재시도 중복 체결, 마감 후 구매 영수증 재조회, 태그 로딩 고착, 캐치마인드 그림 해상도 상한과 마감·재개 입력 권한, 주식 뉴스 조건부 조회, 도전과제 판정의 활동별 분리, 게임 조회·보유 태그 인덱스를 다뤘습니다. 묶음별 문제·해결·영향 파일·검증과 전후 측정표는 [리뷰 수정 검증 보고](docs/review-fixes-validation.md)에 있습니다.
 
-- **배포 전(필수):** `migrations/0031_achievement_scopes.sql`, `0032_stock_game_rounds_index.sql`, `0033_nickname_tags_owned_index.sql` 원격 적용 → 머지 → 배포 순서입니다. 모두 추가만 하므로 기존 Worker 실행 중에 먼저 적용할 수 있습니다. 0031 없이 배포하면 도전과제 화면이 오류를 냅니다. 이번 작업에서는 원격 변경·머지·배포를 실행하지 않았습니다.
+- **배포 전(필수):** `migrations/0031_achievement_scopes.sql`, `0032_stock_game_rounds_index.sql`, `0033_nickname_tags_owned_index.sql` 원격 적용 → 머지 → 배포 순서입니다. 모두 추가만 하므로 기존 Worker 실행 중에 먼저 적용할 수 있습니다. 0031 없이 배포하면 도전과제 화면이 오류를 냅니다. 세 마이그레이션은 2026-11-18에 운영 D1에 적용했고, 그 뒤 `main`에 머지해 배포됐습니다.
 - 전후 읽기량은 `node scripts/measure-d1-reads.mjs`로 다시 잴 수 있습니다(로컬 합성 데이터).
 - 시간 경계 E2E는 같은 로컬 D1을 서로 다른 고정 시각의 Worker 여러 개가 제공합니다(`tests/e2e/clock-servers.ts`, 8794~8806 포트).
 
