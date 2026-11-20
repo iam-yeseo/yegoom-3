@@ -3,7 +3,8 @@ import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, KUJI_RULES, L
 import { usePlayClosed } from "../play-window";
 import { ticketCount, useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
-import type { CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice, SantaSummary } from "../../shared/types";
+import { arcadeTileText } from "../arcade/summary";
+import type { ArcadeSummary, BingoSummary, CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice, SantaSummary } from "../../shared/types";
 import { santaTileText, santaTileVisible } from "../santa/summary";
 import type { StockHomeSummary } from "../../shared/stock-types";
 import { STOCKS } from "../../shared/stocks";
@@ -59,6 +60,8 @@ export interface HomeData {
   claw: ClawSummary;
   freethrow: FreeThrowSummary;
   santa: SantaSummary;
+  arcade: { curling: ArcadeSummary; penalty: ArcadeSummary };
+  bingo: BingoSummary;
   lottoNotice: LottoNotice | null;
   /** null while the market is not open to players. */
   stock: StockHomeSummary | null;
@@ -84,6 +87,8 @@ interface GameRow {
   path: string;
   name: string;
   icon: ArtKey;
+  /** A picture of its own instead of a character, with the colour behind it. */
+  image?: { src: string; tint: string };
   chip: ChipKind;
   sub: string;
   right: string;
@@ -181,10 +186,24 @@ function catchmindRow(game: CatchmindSummary, me: string, displayNameOf: Display
     right: game.winner?.username === me ? game.winnerScored ? `+${CATCHMIND_RULES.score}점` : `+${CATCHMIND_RULES.gold}G` : "",
   };
 }
-export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, kuji: KujiSummary | null, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username): GameRow[] {
+/** The bingo row: what the reader can do there right now. */
+export function bingoRow(game: BingoSummary, me: string, displayNameOf: DisplayNameLookup): GameRow {
+  const row = { path: "/play/bingo", name: "빙고", icon: "bunny" as const, image: { src: "/bingo/tile.webp", tint: "#FFF1D6" }, right: "" };
+  const who = (person: { username: string; displayName: string } | null) => (person ? honorific(displayNameOf(person.username, person.displayName)) : "");
+  if (game.status === "filling") return { ...row, chip: game.joined ? "open" : "try", sub: `「${game.topic}」 · ${game.joined ? `판 제출 완료 · ${game.players}명 참여` : "빙고판을 채워 주세요"}` };
+  if (game.status === "playing") {
+    const mine = game.turn?.username === me;
+    return { ...row, chip: mine ? "try" : "open", sub: `「${game.topic}」 · ${mine ? "내가 단어를 지울 차례" : `${who(game.turn)} 차례`}` };
+  }
+  const next = game.leader ? (game.leader.username === me ? "내가 다음 리더예요" : `다음 리더 ${who(game.leader)}`) : "첫 판을 열어 보세요";
+  if (game.status === "ended") return { ...row, chip: game.leader?.username === me ? "host" : "done", sub: `「${game.topic}」 ${game.winner?.username === me ? "내가 1등" : `${who(game.winner)} 1등`} · ${next}` };
+  return { ...row, chip: !game.leader ? "try" : game.leader.username === me ? "host" : "waiting", sub: next };
+}
+export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, kuji: KujiSummary | null, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username, bingo?: BingoSummary): GameRow[] {
   return [
     ...games.map((game) => predictionRow(game, me)),
     catchmindRow(catchmind, me, displayNameOf),
+    ...(bingo ? [bingoRow(bingo, me, displayNameOf)] : []),
     {
       path: "/play/kuji",
       name: "예굼쿠지",
@@ -198,7 +217,7 @@ export function gameRows(games: GameState[], me: string, catchmind: CatchmindSum
 
 export function TodayGames({ data, go }: { data: HomeData; go: Go }) {
   const displayNameOf = useDisplayNameLookup();
-  const rows = gameRows(data.games, data.username, data.catchmind, data.kuji, displayNameOf);
+  const rows = gameRows(data.games, data.username, data.catchmind, data.kuji, displayNameOf, data.bingo);
   // Catchmind rounds can span several days; their result is not today's total.
   const earned = data.games.reduce(
     (sum, game) => sum + (game.phase === "revealed" ? game.results.find(result => result.username === data.username)?.score ?? 0 : 0),
@@ -223,8 +242,8 @@ function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
   useOnChange(label, () => flip(chip.current));
   return (
           <button className="card game-row" onClick={() => go(row.path)}>
-            <span className="game-row-icon" style={{ background: art[row.icon].tint }}>
-              <img className="character" src={artSrc(row.icon)} alt="" />
+            <span className="game-row-icon" style={{ background: row.image?.tint ?? art[row.icon].tint }}>
+              <img className="character" src={row.image?.src ?? artSrc(row.icon)} alt="" />
             </span>
             <span className="game-row-text">
               <strong>{row.name}</strong>
@@ -249,7 +268,7 @@ export function freeThrowTileText(summary: FreeThrowSummary): string {
   const next = `다음 세트 ${String(new Date(summary.nextSlotAt + 9 * 3_600_000).getUTCHours()).padStart(2, "0")}시`;
   return summary.completed ? `이번 세트 ${summary.made}골 · ${next}` : next;
 }
-export function SoloGames({ go, claw, freethrow, santa, stock }: { go: Go; claw: ClawSummary; freethrow: FreeThrowSummary; santa: SantaSummary; stock: StockHomeSummary | null }) {
+export function SoloGames({ go, claw, freethrow, santa, arcade, stock }: { go: Go; claw: ClawSummary; freethrow: FreeThrowSummary; santa: SantaSummary; arcade: { curling: ArcadeSummary; penalty: ArcadeSummary }; stock: StockHomeSummary | null }) {
   const nextGrant = formatTime(new Date(claw.nextGrantAt).toISOString());
   const open = !!stock?.open;
   const pnl = stock ? stock.value - stock.cost : 0;
@@ -284,6 +303,24 @@ export function SoloGames({ go, claw, freethrow, santa, stock }: { go: Go; claw:
           <span className="solo-text">
             <strong>자유투 대결</strong>
             <small>{freeThrowTileText(freethrow)}</small>
+          </span>
+        </button>
+        <button className="card solo-tile" onClick={() => go("/play/curling")}>
+          <span className="solo-icon" style={{ background: "#DCECF4" }}>
+            <img className="character" src="/curling/tile.webp" alt="" />
+          </span>
+          <span className="solo-text">
+            <strong>컬링</strong>
+            <small>{arcadeTileText(arcade.curling, "개")}</small>
+          </span>
+        </button>
+        <button className="card solo-tile" onClick={() => go("/play/penalty")}>
+          <span className="solo-icon" style={{ background: "#DDF3E2" }}>
+            <img className="character" src="/penalty/tile.webp" alt="" />
+          </span>
+          <span className="solo-text">
+            <strong>승부차기</strong>
+            <small>{arcadeTileText(arcade.penalty, "골")}</small>
           </span>
         </button>
         <button className="card solo-tile" onClick={() => go("/stock")}>
@@ -635,7 +672,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
         />
         <LottoNoticeCard data={data} go={go} />
         <TodayGames data={data} go={go} />
-        <SoloGames go={go} claw={data.claw} freethrow={data.freethrow} santa={data.santa} stock={data.stock} />
+        <SoloGames go={go} claw={data.claw} freethrow={data.freethrow} santa={data.santa} arcade={data.arcade} stock={data.stock} />
         <SectionTitle title="상점" right="전체" onClick={() => go("/shop")} />
         <ShopCards go={go} />
         <SectionTitle title="이번 주 랭킹" right={settleText()} />

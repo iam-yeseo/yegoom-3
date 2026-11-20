@@ -121,6 +121,38 @@ export const FREETHROW_RULES = {
 export const freeThrowSlot = (now: number): number => Math.floor(now / FREETHROW_RULES.setIntervalMs);
 export const freeThrowSlotStart = (slot: number): number => slot * FREETHROW_RULES.setIntervalMs;
 export const freeThrowDeadline = (slot: number): number => (slot + 1) * FREETHROW_RULES.setIntervalMs + FREETHROW_RULES.graceMs;
+/** Curling and the penalty shoot-out (docs/plan-curling.md, docs/plan-penalty.md).
+ * Like the free throw, each opens one set every three hours, but an hour apart
+ * so a new solo game opens every hour: free throw at KST 00·03·…·21시, curling
+ * at 01·04·…·22시 and penalties at 02·05·…·23시. A set is `tries` throws or
+ * kicks, recorded in one request; each one that counts pays score + gold. A set
+ * started near the end of its slot may finish within graceMs after it. engine
+ * is stored with each set; bump it whenever the game's shared engine changes
+ * outcomes. */
+export const ARCADE_RULES = {
+  curling: { tries: 5, slotMs: 3 * 60 * 60 * 1000, offsetMs: 1 * 60 * 60 * 1000, graceMs: 10 * 60 * 1000, score: 1, gold: 10, engine: 1 },
+  penalty: { tries: 5, slotMs: 3 * 60 * 60 * 1000, offsetMs: 2 * 60 * 60 * 1000, graceMs: 10 * 60 * 1000, score: 1, gold: 10, engine: 1 },
+} as const;
+export type ArcadeGame = keyof typeof ARCADE_RULES;
+export const ARCADE_GAMES = Object.keys(ARCADE_RULES) as ArcadeGame[];
+export const isArcadeGame = (value: unknown): value is ArcadeGame => typeof value === 'string' && Object.hasOwn(ARCADE_RULES, value);
+export const arcadeSlot = (game: ArcadeGame, now: number): number => Math.floor((now - ARCADE_RULES[game].offsetMs) / ARCADE_RULES[game].slotMs);
+export const arcadeSlotStart = (game: ArcadeGame, slot: number): number => slot * ARCADE_RULES[game].slotMs + ARCADE_RULES[game].offsetMs;
+export const arcadeDeadline = (game: ArcadeGame, slot: number): number => arcadeSlotStart(game, slot + 1) + ARCADE_RULES[game].graceMs;
+/** Bingo (docs/plan-bingo.md): the leader names a topic and the winning line
+ * count, 30 words are made from it, and everyone fills a 5x5 board from them. */
+export const BINGO_RULES = {
+  size: 5, words: 30, lineChoices: [3, 5] as const,
+  /** Points for the first three to finish, paid the moment each place is settled. */
+  rankScores: [5, 3, 1] as const,
+  minPlayers: 2,
+  /** After this long another player may pass a waiting turn, start a filled game, or pass the lead. */
+  skipAfterMs: 10 * 60 * 1000,
+  maxTopicLength: 40, maxWordLength: 10,
+  pollIntervalMs: 5000, idlePollIntervalMs: 10000,
+  /** The word list is written by OpenAI (worker/bingo-ai.ts); the daily cap is shared with stock news. */
+  ai: { reasoningEffort: 'low' as const, maxTokens: 4000, timeoutMs: 45_000 },
+} as const;
 /** Santa's gift delivery, a limited Christmas event (docs/plan-santa.md). One run
  * of `houses` chimneys per KST half day (오전 00–12시, 오후 12–24시). Each gift in a
  * chimney pays hitScore, all of them adds perfectBonus, and finishing the run

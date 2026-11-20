@@ -34,7 +34,9 @@ const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_ph
   // Ranking result snapshots (0027) sit beside their settlement markers.
   'ranking_results',
   // The Christmas gift delivery (0028) is newer than the launch-era reset.
-  'santa_runs', 'santa_drops'];
+  'santa_runs', 'santa_drops',
+  // Curling and penalty sets (0034) and bingo (0035) are newer still.
+  'arcade_sets', 'bingo_games', 'bingo_boards', 'bingo_state'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -137,6 +139,9 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO freethrow_shots (id, set_id, shot_index, power, aim, made, kind, created_at) VALUES ('retained-shot', '00000000-0000-4000-8000-000000000001', 0, 10, 0, 0, 'short', '2026-11-07T03:00:01Z')"),
       db.prepare("INSERT INTO santa_runs (id, user_id, request_id, slot, date, engine, drops, hits, created_at) VALUES ('00000000-0000-4000-8000-000000000002', 'min', 'retained-santa-request', 41231, '2026-11-10', 1, 1, 0, '2026-11-10T03:00:00Z')"),
       db.prepare("INSERT INTO santa_drops (id, run_id, house_index, release_ms, hit, kind, created_at) VALUES ('retained-drop', '00000000-0000-4000-8000-000000000002', 0, -1, 0, 'pass', '2026-11-10T03:00:01Z')"),
+      db.prepare("INSERT INTO arcade_sets (id, user_id, game, request_id, slot, date, engine, created_at) VALUES ('00000000-0000-4000-8000-000000000003', 'min', 'curling', 'retained-curling-request', 165000, '2026-11-20', 1, '2026-11-20T03:00:00Z')"),
+      db.prepare("INSERT INTO bingo_games (id, number, leader_id, request_id, topic, lines, words_json, source, status, created_at) VALUES ('retained-bingo', 1, 'min', 'retained-bingo-request', '과일', 3, '[]', 'manual', 'filling', '2026-11-20T03:00:00Z')"),
+      db.prepare("INSERT INTO bingo_boards (game_id, user_id, cells_json, submitted_at) VALUES ('retained-bingo', 'min', '[]', '2026-11-20T03:00:01Z')"),
     ]);
   });
   afterAll(async () => { await worker?.dispose(); });

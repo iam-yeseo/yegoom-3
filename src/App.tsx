@@ -10,6 +10,8 @@ import type {
   CatchmindSummary,
   ClawSummary,
   FreeThrowSummary,
+  ArcadeSummary,
+  BingoSummary,
   SantaSummary,
   LottoNotice,
   LaunchGiftResponse, AuthResponse, LuckPhotoResponse, TagResponse, NicknameTagView, AchievementsResponse,
@@ -31,6 +33,9 @@ import { ClawProvider } from "./claw-state";
 import { previewClawSummary } from "./claw-summary";
 import { previewFreeThrowSummary } from "./freethrow/summary";
 import { previewSantaSummary } from "./santa/summary";
+import { previewArcadeSummary } from "./arcade/summary";
+import { previewBingoSummary } from "./bingo-preview";
+import { ARCADE_GAMES, type ArcadeGame } from "../shared/balance";
 import {
   previewGame,
   previewGold,
@@ -72,6 +77,9 @@ const serverStock: StockClient = {
 const Admin = lazy(() => import("./screens/Admin").then(module => ({ default: module.Admin })));
 const Notifications = lazy(() => import("./screens/Notifications").then(module => ({ default: module.Notifications })));
 const Claw = lazy(() => import("./screens/Claw").then(module => ({ default: module.Claw })));
+const Bingo = lazy(() => import("./screens/Bingo").then(module => ({ default: module.Bingo })));
+const Curling = lazy(() => import("./screens/Curling").then(module => ({ default: module.Curling })));
+const Penalty = lazy(() => import("./screens/Penalty").then(module => ({ default: module.Penalty })));
 const FreeThrow = lazy(() => import("./screens/FreeThrow").then(module => ({ default: module.FreeThrow })));
 const Santa = lazy(() => import("./screens/Santa").then(module => ({ default: module.Santa })));
 const StockMarket = lazy(() => import("./screens/Stock").then(module => ({ default: module.StockMarket })));
@@ -126,6 +134,8 @@ function previewHome(): HomeData {
     claw: previewClawSummary(),
     freethrow: previewFreeThrowSummary(),
     santa: previewSantaSummary(),
+    arcade: { curling: previewArcadeSummary("curling"), penalty: previewArcadeSummary("penalty") },
+    bingo: previewBingoSummary(),
     lottoNotice: null,
     unreadNotifications: previewNotificationSummary(previewUser.id).unread,
     serverTime: new Date().toISOString(),
@@ -145,6 +155,8 @@ function homeData(data: BootstrapResponse): HomeData {
     claw: data.claw,
     freethrow: data.freethrow,
     santa: data.santa,
+    arcade: data.arcade,
+    bingo: data.bingo,
     lottoNotice: data.lottoNotice,
     stock: data.stock,
     unreadNotifications: data.notifications.unread,
@@ -370,6 +382,10 @@ export default function App() {
   const [previewCatchmind, setPreviewCatchmind] = useState<{ summary: CatchmindSummary; gold: number; score: number; ledger: LedgerEntry[] }>({ summary: emptyCatchmind, gold: 0, score: 0, ledger: [] });
   const [previewFreeThrow, setPreviewFreeThrow] = useState<{ summary: FreeThrowSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewFreeThrowSummary(), gold: 0, score: 0, ledger: [] }));
   const [previewSanta, setPreviewSanta] = useState<{ summary: SantaSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewSantaSummary(), gold: 0, score: 0, ledger: [] }));
+  const [previewBingoState, setPreviewBingoState] = useState<{ summary: BingoSummary; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewBingoSummary(), score: 0, ledger: [] }));
+  /** Curling and penalty previews keep the same shape as the free throw's, one entry per game. */
+  const [previewArcade, setPreviewArcade] = useState<Record<ArcadeGame, { summary: ArcadeSummary; gold: number; score: number; ledger: LedgerEntry[] }>>(() =>
+    Object.fromEntries(ARCADE_GAMES.map(game => [game, { summary: previewArcadeSummary(game), gold: 0, score: 0, ledger: [] }])) as never);
   const [previewClaw, setPreviewClaw] = useState<{ summary: ClawSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewClawSummary(), gold: 0, score: 0, ledger: [] }));
   const [previewStock, setPreviewStock] = useState<{ gold: number; ledger: LedgerEntry[] }>({ gold: 0, ledger: [] });
   const [previewAchievementGold, setPreviewAchievementGold] = useState(0);
@@ -537,8 +553,8 @@ export default function App() {
   }, [stockBlocked, demo, route]);
   const gameId = path.match(/^\/game\/(wake|offwork|luck)$/)?.[1] as
     GameId | undefined;
-  const play = path.match(/^\/play\/(catchmind|kuji|claw|freethrow|santa)$/)?.[1] as
-    "catchmind" | "kuji" | "claw" | "freethrow" | "santa" | undefined;
+  const play = path.match(/^\/play\/(catchmind|kuji|claw|freethrow|santa|curling|penalty|bingo)$/)?.[1] as
+    "catchmind" | "kuji" | "claw" | "freethrow" | "santa" | "curling" | "penalty" | "bingo" | undefined;
   const stockId = path.match(/^\/stock\/([A-Z]{4})$/)?.[1];
   const go = (to: string) => {
     if (!FEATURES.stock && !demo && /^\/stock(?:\/|$)/.test(to)) { setStockNoticeOpen(true); return; }
@@ -759,15 +775,19 @@ export default function App() {
   }
   const catchmindReadKey = useRef("");
   const signedIn = !demo && !loading && data !== null;
-  const view = demo ? { ...previewHome(), displayName: previewProfile.displayName, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold + previewFreeThrow.gold + previewSanta.gold + previewStock.gold + previewAchievementGold,
-    catchmind: previewCatchmind.summary, claw: previewClaw.summary, freethrow: previewFreeThrow.summary, santa: previewSanta.summary, lottoNotice: previewShop.lottoNotice, stock: previewStockHome(),
+  const previewExtras = ARCADE_GAMES.map(game => previewArcade[game]);
+  const previewExtraGold = previewExtras.reduce((sum, extra) => sum + extra.gold, 0), previewExtraScore = previewExtras.reduce((sum, extra) => sum + extra.score, 0) + previewBingoState.score;
+  const previewArcadeView = { curling: previewArcade.curling.summary, penalty: previewArcade.penalty.summary };
+  const view = demo ? { ...previewHome(), displayName: previewProfile.displayName, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold + previewFreeThrow.gold + previewSanta.gold + previewExtraGold + previewStock.gold + previewAchievementGold,
+    catchmind: previewCatchmind.summary, claw: previewClaw.summary, freethrow: previewFreeThrow.summary, santa: previewSanta.summary, arcade: previewArcadeView, bingo: previewBingoState.summary, lottoNotice: previewShop.lottoNotice, stock: previewStockHome(),
     ...(adminDemo ? { userId: "preview-admin", username: "preview-admin", displayName: "운영 미리보기", lottoNotice: null,
       games: previewAdminState.games.map(game => previewGame(game.id, game.rules)),
       claw: { ...previewClaw.summary, coins: 0, freeCoins: 0, purchasedCoins: 0, isAdmin: true },
       freethrow: { ...previewFreeThrow.summary, available: false, played: false, completed: false, isAdmin: true },
-      santa: { ...previewSanta.summary, available: false, played: false, completed: false, isAdmin: true } } : {}),
-    players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, displayName: previewProfile.displayName, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score + previewFreeThrow.score + previewSanta.score } : player) } : data ? homeData(data) : null;
-  const me = demo ? { ...previewUser, displayName: previewProfile.displayName, photoVersion: previewProfile.photoVersion, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold + previewFreeThrow.gold + previewSanta.gold + previewStock.gold + previewAchievementGold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score + previewFreeThrow.score + previewSanta.score,
+      santa: { ...previewSanta.summary, available: false, played: false, completed: false, isAdmin: true },
+      arcade: { curling: { ...previewArcadeView.curling, available: false, played: false, completed: false, isAdmin: true }, penalty: { ...previewArcadeView.penalty, available: false, played: false, completed: false, isAdmin: true } } } : {}),
+    players: previewHome().players.map(player => player.username === previewUser.username ? { ...player, displayName: previewProfile.displayName, weeklyScore: player.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score + previewFreeThrow.score + previewSanta.score + previewExtraScore } : player) } : data ? homeData(data) : null;
+  const me = demo ? { ...previewUser, displayName: previewProfile.displayName, photoVersion: previewProfile.photoVersion, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold + previewFreeThrow.gold + previewSanta.gold + previewExtraGold + previewStock.gold + previewAchievementGold, weeklyScore: previewUser.weeklyScore + previewShop.score + previewCatchmind.score + previewClaw.score + previewFreeThrow.score + previewSanta.score + previewExtraScore,
     ...(adminDemo ? { id: "preview-admin", username: "preview-admin", displayName: "운영 미리보기", role: "admin" as const, photoVersion: null, weeklyScore: 0 } : {}) } : data?.user;
   if (demo) { previewGoldRef.current = me?.gold ?? 0; previewAdminRef.current = adminDemo; }
   const stockClient = demo ? previewStockClient : serverStock;
@@ -836,6 +856,15 @@ export default function App() {
   else if (play === "santa") content = <Santa user={me} demo={demo} onBack={home} transact={transactFreeThrow} onRevealed={() => void refresh()}
     onSummary={santa => setData(current => current ? { ...current, santa } : current)}
     onPreviewChange={(summary, gold, score, ledger) => setPreviewSanta({ summary, gold, score, ledger })} />;
+  else if (play === "bingo") content = <Bingo user={me} demo={demo} onBack={home} onScored={() => void refresh()}
+    onSummary={bingo => setData(current => current ? { ...current, bingo } : current)}
+    onPreviewChange={(summary, score, ledger) => setPreviewBingoState({ summary, score, ledger })} />;
+  else if (play === "curling" || play === "penalty") {
+    const game = play, Screen = game === "curling" ? Curling : Penalty;
+    content = <Screen user={me} demo={demo} onBack={home} transact={transactFreeThrow} onRevealed={() => void refresh()}
+      onSummary={summary => setData(current => current ? { ...current, arcade: { ...current.arcade, [game]: summary } } : current)}
+      onPreviewChange={(summary, gold, score, ledger) => setPreviewArcade(current => ({ ...current, [game]: { summary, gold, score, ledger } }))} />;
+  }
   else if (gameId && demo) {
     const viewer = previewViewer(gameId);
     content = (
@@ -912,7 +941,7 @@ export default function App() {
           ? <Achievements key={demo ? "preview" : me.id} viewerId={me.id} client={demo ? previewAchievements : serverAchievements} />
           : <div className="screen-body stack">
             <TodayGames data={view} go={go} />
-            <SoloGames go={go} claw={view.claw} freethrow={view.freethrow} santa={view.santa} stock={view.stock} />
+            <SoloGames go={go} claw={view.claw} freethrow={view.freethrow} santa={view.santa} arcade={view.arcade} stock={view.stock} />
           </div>}
       </div>
     );
@@ -944,7 +973,7 @@ export default function App() {
         attendanceKey={view.attendanceKey}
         gold={me.gold}
         weeklyScore={me.weeklyScore}
-        ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewFreeThrow.ledger, ...previewSanta.ledger, ...previewStock.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
+        ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewFreeThrow.ledger, ...previewSanta.ledger, ...previewExtras.flatMap(extra => extra.ledger), ...previewBingoState.ledger, ...previewStock.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
         others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
         tagShopHref={demo ? "#/preview/shop/tag/inventory" : "#/shop/tag/inventory"}
         onBack={home}
@@ -1055,7 +1084,7 @@ export default function App() {
     <ShopProvider key={demo ? "preview" : data?.user.id ?? "anonymous"}
       preview={demo} accountKey={demo ? "preview" : data?.user.id ?? "anonymous"}
       previewGoldBonus={previewAttendance.goldBonus}
-      previewGameGold={demo ? previewCatchmind.gold + previewClaw.gold + previewFreeThrow.gold + previewSanta.gold + previewStock.gold + previewAchievementGold : 0}
+      previewGameGold={demo ? previewCatchmind.gold + previewClaw.gold + previewFreeThrow.gold + previewSanta.gold + previewExtraGold + previewStock.gold + previewAchievementGold : 0}
       previewAttendanceDate={previewAttendance.attendance.today}
       initial={{ gold: demo ? previewGold : me?.gold ?? 0, inventory: data?.inventory ?? { lottoTickets: 0, speettoTickets: 0, tagTickets: 0 },
         free: data?.dailyFree, canPurchase: !!me && me.role === "player", serverTime: data?.serverTime ?? new Date().toISOString() }}
@@ -1068,7 +1097,7 @@ export default function App() {
       }}
       onPreviewChange={(state, ledger, score, lottoNotice, tag) => {
         markViewedLottoDraw(adminDemo ? "preview-admin" : previewUser.id, path, "lotto" in state ? state.lotto.todayDraw : null, state.serverTime);
-        setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold - previewFreeThrow.gold - previewSanta.gold - previewStock.gold - previewAchievementGoldRef.current, ledger: [...ledger], score, lottoNotice, tag });
+        setPreviewShop({ gold: state.gold - previewAttendance.goldBonus - previewCatchmind.gold - previewClaw.gold - previewFreeThrow.gold - previewSanta.gold - previewExtraGold - previewStock.gold - previewAchievementGoldRef.current, ledger: [...ledger], score, lottoNotice, tag });
       }}>
     <LaunchGiftProvider preview={demo} role={me?.role} state={data?.launchGift ?? { available: false, claimed: false }}
       serverTime={new Date(Date.now() + (demo ? 0 : serverClockOffset.current)).toISOString()}
