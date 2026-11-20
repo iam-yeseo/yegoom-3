@@ -34,10 +34,14 @@ export interface Scene {
   netAt: { x: number; y: number } | null;
 }
 const POST = 5;
-export const ART = { ball: "/penalty/ball.webp", ready: "/penalty/keeper-ready.webp", dive: "/penalty/keeper-dive.webp" } as const;
+export const ART = { ball: "/penalty/ball.webp", ready: "/penalty/keeper-ready.webp", dive: "/penalty/keeper-dive.webp", jump: "/penalty/keeper-jump.webp", stand: "/penalty/stand.webp" } as const;
 /** How tall the standing keeper picture is, and how long the diving one, in metres.
  * Standing, the open arms span about the reach the engine gives a keeper who does not move. */
-const KEEPER_HEIGHT = 1.95, DIVE_LENGTH = 2.3;
+const KEEPER_HEIGHT = 1.95, DIVE_LENGTH = 2.3, JUMP_HEIGHT = 2.3;
+/** Off the ground by more than this (metres) without diving, the keeper is drawn jumping. */
+const JUMP_LIFT = 0.1;
+/** The stand picture covers the stage down to the foot of the advertising board. */
+const STAND_HEIGHT = 166, BOARD_TOP = 146;
 /** Past this lean the diving picture replaces the standing one. */
 const DIVE_LEAN = 0.75;
 
@@ -54,7 +58,8 @@ export class PenaltyRenderer {
     if (typeof Image !== "undefined") for (const key of Object.keys(ART) as (keyof typeof ART)[]) {
       const image = new Image();
       image.decoding = "async";
-      image.onload = () => { this.art[key] = image; };
+      // The stand is part of the painted backdrop: paint that again once it is here.
+      image.onload = () => { this.art[key] = image; if (key === "stand") this.backdrop = null; };
       image.src = ART[key];
     }
   }
@@ -85,19 +90,22 @@ export class PenaltyRenderer {
     layer.width = this.canvas.width; layer.height = this.canvas.height;
     const ctx = layer.getContext("2d")!;
     ctx.setTransform(this.ratio, 0, 0, this.ratio, 0, 0);
-    const sky = ctx.createLinearGradient(0, 0, 0, 150);
-    sky.addColorStop(0, "#bfe3f5"); sky.addColorStop(1, "#e6f5fb");
-    ctx.fillStyle = sky; ctx.fillRect(0, 0, STAGE.width, 150);
-    // The stand: rows of dots for the crowd, then an advertising board.
-    ctx.fillStyle = "#cdbfe6"; ctx.fillRect(0, 52, STAGE.width, 100);
-    let seed = 11;
-    const random = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 0x100000000);
-    const crowd = ["#f47c66", "#ffd866", "#ffffff", "#7fd1b4", "#8cc4ea", "#f6a7c1"];
-    for (let row = 0; row < 7; row++) for (let x = 6 + (row % 2) * 6; x < STAGE.width; x += 12) {
-      ctx.fillStyle = crowd[Math.floor(random() * crowd.length)]!;
-      ctx.beginPath(); ctx.arc(x + random() * 3, 62 + row * 12 + random() * 2, 4, 0, Math.PI * 2); ctx.fill();
+    if (this.art.stand) ctx.drawImage(this.art.stand, 0, 0, STAGE.width, STAND_HEIGHT);
+    else {
+      const sky = ctx.createLinearGradient(0, 0, 0, 150);
+      sky.addColorStop(0, "#bfe3f5"); sky.addColorStop(1, "#e6f5fb");
+      ctx.fillStyle = sky; ctx.fillRect(0, 0, STAGE.width, 150);
+      // The stand: rows of dots for the crowd, then an advertising board.
+      ctx.fillStyle = "#cdbfe6"; ctx.fillRect(0, 52, STAGE.width, 100);
+      let seed = 11;
+      const random = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 0x100000000);
+      const crowd = ["#f47c66", "#ffd866", "#ffffff", "#7fd1b4", "#8cc4ea", "#f6a7c1"];
+      for (let row = 0; row < 7; row++) for (let x = 6 + (row % 2) * 6; x < STAGE.width; x += 12) {
+        ctx.fillStyle = crowd[Math.floor(random() * crowd.length)]!;
+        ctx.beginPath(); ctx.arc(x + random() * 3, 62 + row * 12 + random() * 2, 4, 0, Math.PI * 2); ctx.fill();
+      }
     }
-    ctx.fillStyle = "#3a3340"; ctx.fillRect(0, 146, STAGE.width, 20);
+    ctx.fillStyle = "#3a3340"; ctx.fillRect(0, BOARD_TOP, STAGE.width, STAND_HEIGHT - BOARD_TOP);
     ctx.fillStyle = "#ffd866"; ctx.font = "800 11px system-ui, sans-serif"; ctx.textAlign = "center";
     ctx.fillText("YEGOOM ARCADE  ·  예굼방 승부차기  ·  YEGOOM ARCADE", CX, 160);
     const grass = ctx.createLinearGradient(0, 166, 0, STAGE.height);
@@ -164,7 +172,7 @@ export class PenaltyRenderer {
     // Shadow stays on the grass under the keeper.
     ctx.fillStyle = "rgba(58, 51, 64, 0.18)";
     ctx.beginPath(); ctx.ellipse(feet.x, GROUND + 3, 20 - Math.min(8, pose.lift * 8), 5, 0, 0, Math.PI * 2); ctx.fill();
-    const lean = Math.abs(pose.lean), { ready, dive } = this.art;
+    const lean = Math.abs(pose.lean), { ready, dive, jump } = this.art;
     if (dive && lean > DIVE_LEAN) {
       // Flying sideways: the picture dives to the right and is mirrored for the left.
       // Early in the dive it is still tipped up; at full stretch it lies level.
@@ -177,8 +185,17 @@ export class PenaltyRenderer {
       ctx.restore();
       return;
     }
+    if (jump && pose.lift > JUMP_LIFT) {
+      // Up for a high ball close by: arms straight above the head.
+      const height = JUMP_HEIGHT * unit, width = height * KEEPER_ART.jump;
+      ctx.translate(feet.x, feet.y);
+      ctx.rotate(pose.lean * 0.6);
+      ctx.drawImage(jump, -width / 2, -height, width, height);
+      ctx.restore();
+      return;
+    }
     if (ready) {
-      // Standing, stepping or jumping: the picture turns a little about its feet.
+      // Standing or stepping: the picture turns a little about its feet.
       const height = KEEPER_HEIGHT * unit, width = height * KEEPER_ART.ready;
       ctx.translate(feet.x, feet.y);
       ctx.rotate(pose.lean * 0.6);

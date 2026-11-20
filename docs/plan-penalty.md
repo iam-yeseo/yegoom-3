@@ -44,7 +44,7 @@
 | 파일 | 내용 |
 | --- | --- |
 | `shared/penalty-engine.ts` | 골키퍼 다섯 명(`penaltyKeepers`), 골키퍼 위치(`keeperAt`), 킥 판정(`judgeKick`) |
-| `src/penalty/render.ts` | 공 뒤에서 본 골대·관중석·그물은 캔버스로, 공과 골키퍼(준비·다이빙)는 받은 그림으로 그림. 그림이 아직 안 왔으면 도형으로 그림 |
+| `src/penalty/render.ts` | 골대·잔디·그물은 캔버스로, 관중석·공·골키퍼(준비·점프·다이빙)는 받은 그림으로 그림. 그림을 불러오지 못하면 도형으로 그림 |
 | `src/penalty/controller.ts` | 휘슬·시계·쓸어 올리기·공 비행·다이빙 재생 |
 | `src/screens/Penalty.tsx` | 화면과 문구 |
 
@@ -54,4 +54,4 @@
 
 ## 4. 다음에 정할 것
 
-- 도전과제(운영 시트에 먼저). 골키퍼 점프 그림과 관중석 그림은 [이미지 프롬프트](arcade-image-prompts.md)의 선택 항목으로 남아 있다.
+- 도전과제(운영 시트에 먼저). 그림은 모두 받았다([이미지 프롬프트](arcade-image-prompts.md)).

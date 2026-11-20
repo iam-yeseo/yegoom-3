@@ -61,3 +61,4 @@ button.bingo-cell { touch-action: manipulation; }
 .bingo-reveal { font-size: 13px; }
 .bingo-reveal-board { display: grid; gap: 6px; margin-top: 12px; }
 .bingo-reveal-board small { color: var(--muted); font-weight: 700; }
+.bingo-result-art { display: block; width: 132px; height: 132px; margin: 0 auto -4px; }

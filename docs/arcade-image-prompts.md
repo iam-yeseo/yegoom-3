@@ -1,6 +1,6 @@
 # 컬링·승부차기·빙고 — 이미지 프롬프트
 
-> 1~7번은 2026-11-20에 받아서 반영했습니다([출처 기록](asset-provenance.md)). 선택 그림(8~10번)은 아직 없고, 없는 동안에는 준비 자세 그림과 코드로 그린 관중석을 씁니다.
+> 1~10번을 모두 2026-11-20에 받아서 반영했습니다([출처 기록](asset-provenance.md)). 결과 그림은 컬링·승부차기 결과 창과, 빙고에서 1등을 했을 때의 결과 카드에 씁니다.
 
 **한 대화창에서 0번부터 차례로** 만들면 그림체가 맞춰집니다.
 
@@ -86,7 +86,7 @@ The SAME goalkeeper character as the previous image (same face, same hair, same 
 
 ## (선택) 있으면 좋은 그림
 
-필수는 아닙니다. 없으면 지금처럼 코드로 그리거나 다른 그림을 대신 씁니다.
+필수는 아니었지만 모두 받았습니다. 그림을 불러오지 못하면 코드로 그린 도형이 대신 나옵니다.
 
 ### 8. 골키퍼 점프 — `keeper-jump.png`
 
@@ -106,7 +106,7 @@ Cute 3D clay toy style background for a soccer penalty game: a stadium stand see
 
 ### 10. 결과 창 그림 — `curling-result.png` · `penalty-result.png` · `bingo-result.png`
 
-결과 창에는 타일 그림(1~3번)을 그대로 씁니다. 따로 넣고 싶을 때만 만들어 주세요. 타일 프롬프트 끝에 아래 문장을 덧붙이면 됩니다.
+타일 프롬프트 끝에 아래 문장을 덧붙여 만듭니다.
 
 ```
 Same character as the icon, but now jumping with joy with both arms up and little confetti pieces around it.

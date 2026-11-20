@@ -73,9 +73,9 @@ python3 scripts/prepare-santa-art.py /path/to/santa-images
 
 ## 컬링·승부차기·빙고 그림
 
-- `public/curling/{tile,stone}.webp`, `public/penalty/{tile,ball,keeper-ready,keeper-dive}.webp`, `public/bingo/tile.webp` 7장은 사용자가 2026-11-20에 제공한 이미지다. 사용자가 [이미지 프롬프트](arcade-image-prompts.md)로 이미지 생성기에서 만들었다. 지인용 비공개 서비스 전용이다.
-- 원본 PNG(1024×1024, 골키퍼 다이빙만 1536×1024, 장당 0.7~1.7MB)는 커밋 `91a0e84`의 `public/arcade/`에 있다. 그대로 두면 서비스 워커가 미리 받아 두는 파일에 들어가므로 변환한 뒤 작업 트리에서는 지웠다.
-- `scripts/prepare-arcade-art.py`가 알파 24 이하의 옅은 잡티를 지우고 투명 여백을 자른 뒤 WebP(RGB quality 85, 알파 무손실)로 줄인다. 골키퍼 두 장의 가로세로 비율은 `src/penalty/art.ts`로 쓴다. 그림을 바꾸면 스크립트를 다시 돌린다.
+- `public/curling/{tile,result,stone}.webp`, `public/penalty/{tile,result,ball,keeper-ready,keeper-dive,keeper-jump,stand}.webp`, `public/bingo/{tile,result}.webp` 12장은 사용자가 2026-11-20에 제공한 이미지다(먼저 7장, 이어서 골키퍼 점프·관중석·결과 그림 3장). 사용자가 [이미지 프롬프트](arcade-image-prompts.md)로 이미지 생성기에서 만들었다. 지인용 비공개 서비스 전용이다.
+- 먼저 받은 7장의 원본 PNG(1024×1024, 골키퍼 다이빙만 1536×1024, 장당 0.7~1.7MB)는 커밋 `91a0e84`의 `public/arcade/`에 있다. 그대로 두면 서비스 워커가 미리 받아 두는 파일에 들어가므로 변환한 뒤 작업 트리에서는 지웠다. 나중에 받은 5장은 압축 파일로 받아 변환만 했고 원본은 저장소에 없다.
+- `scripts/prepare-arcade-art.py`가 알파 24 이하의 옅은 잡티를 지우고 투명 여백을 자른 뒤 WebP(RGB quality 85, 알파 무손실)로 줄인다. 관중석은 불투명 배경이라 여백을 자르지 않고, 지붕 조금 위부터 무대 윗부분 모양(360:166)만큼 잘라 쓴다(맨 앞줄 아래는 코드로 그리는 광고판이 가린다). 골키퍼 세 장의 가로세로 비율은 `src/penalty/art.ts`로 쓴다. 그림을 바꾸면 스크립트를 다시 돌린다.
 
 | 파일 | 원본 | WebP 바이트 | 크기 |
 | --- | --- | ---: | --- |
@@ -86,6 +86,11 @@ python3 scripts/prepare-santa-art.py /path/to/santa-images
 | penalty/ball | penalty-ball.png 1024×1024 | 5,400 | 128×128 |
 | penalty/keeper-ready | keeper-ready.png 1024×1024 | 16,346 | 252×256 |
 | penalty/keeper-dive | keeper-dive.png 1536×1024 | 16,274 | 320×165 |
+| penalty/keeper-jump | keeper-jump.png 1024×1536 | 18,780 | 236×320 |
+| curling/result | curling-result.png 1254×1254 | 16,636 | 240×240 |
+| penalty/result | penalty-result.png 1254×1254 | 18,996 | 240×240 |
+| bingo/result | bingo-result.png 1254×1254 | 17,602 | 240×240 |
+| penalty/stand | penalty-stand.png 1536×1024 | 43,080 | 720×332 |
 
 ```sh
 git show 91a0e84 --stat   # 원본 PNG가 들어 있는 커밋

@@ -31,7 +31,7 @@ const aimLabel = (aim: number) => (aim === 0 ? "가운데" : `${aim < 0 ? "왼�
 const COPY: ArcadeCopy = {
   title: "컬링", unit: "개", tries: `스톤 ${tries}개`, per: "하우스 스톤 1개마다",
   practice: "마음껏 밀며 얼음 감을 익혀요 · 보상 없음", startLabel: "엔드 시작하기",
-  art: "/curling/tile.webp",
+  art: "/curling/result.webp",
   nothing: "하우스에 남은 스톤이 없었어요.",
   resultTitle: made => (made === tries ? "퍼펙트 엔드!" : `스톤 ${made}개 안착!`),
   resultLine: made => (made >= 4 ? "얼음을 읽는 눈이 생겼어요. 오늘의 기록판을 확인해 보세요!" : made ? "다음 엔드에서는 하나 더! 연습 모드로 힘 조절을 다듬어 보세요." : "스톤들이 전부 산책을 나갔어요. 다음 엔드에서 만회해요!"),

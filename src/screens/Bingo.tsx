@@ -291,6 +291,7 @@ function Result({ game, me }: { game: BingoGameView; me: string }) {
   const mine = game.seats.find(seat => seat.player.id === me);
   return <section className="bingo-card card" aria-label="지난 빙고 결과">
     <div className="bingo-head"><strong>{game.number}번째 빙고 「{game.topic}」</strong><span className="bingo-chip">{game.lines}줄 빙고</span></div>
+    {mine?.rank === 1 && <img className="bingo-result-art" src="/bingo/result.webp" alt="" />}
     <p className="bingo-hint">{mine?.rank ? `${mine.rank}등으로 마쳤어요${mine.points ? ` · +${mine.points}점` : ""}.` : "이번 판 결과예요."} 단어 {game.calls.length}개가 지워졌어요.</p>
     <Seats game={game} me={me} />
     <details className="bingo-reveal"><summary>모두의 빙고판 보기</summary>
