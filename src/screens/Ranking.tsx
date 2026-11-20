@@ -9,7 +9,7 @@ import { RANKING_RULES, type RankingPeriod } from "../../shared/ranking-periods"
 import { RANKING_REWARDS, multiplierLabel, rankingReward, type RewardPeriod } from "../../shared/ranking-rewards";
 import type { RankingHistoryEntry, RankingResponse } from "../../shared/types";
 import { kstParts } from "../sample";
-import { anim, confetti, dropIn, reduced, tween } from "../motion";
+import { anim, confetti, countStep, dropIn, reduced, tween } from "../motion";
 import { standings, type RankingPlayer } from "../ranking";
 
 /** Heights fit the photo, the tag + nickname line and the score, in that order. */
@@ -62,7 +62,7 @@ function CountFrom({ value, delay }: { value: number; delay: number }) {
   useEffect(() => {
     let stop = () => {};
     const t = setTimeout(() => {
-      stop = tween(0, value, 700, (v) => setShown(Math.round(v)));
+      stop = tween(0, value, 700, (v) => setShown(countStep(v, value)));
     }, reduced() ? 0 : delay);
     return () => {
       clearTimeout(t);

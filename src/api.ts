@@ -15,6 +15,7 @@ import type {
   SantaFinishInput, SantaFinishResponse, SantaRunInput, SantaState,
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagEvolveInput, TagResponse, NotificationsResponse, NotificationSummary,
   AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
+import type { NoticesReadResponse } from "../shared/notices";
 import type { ArcadeGame } from "../shared/balance";
 import type { RankingPeriod } from "../shared/ranking-periods";
 import type { RankResult, RankResultKey } from "../shared/ranking-rewards";
@@ -177,6 +178,8 @@ export const api = {
   achievements: () => request<AchievementsResponse>("/achievements"),
   claimAchievement: (input: AchievementClaimInput) => request<AchievementsResponse>("/achievements/claim", { method: "POST", body: JSON.stringify(input) }),
   achievementEvent: (input: AchievementEventInput) => request<AchievementsResponse>("/achievements/events", { method: "POST", body: JSON.stringify(input) }),
+  readNotices: (ids: string[]) =>
+    request<NoticesReadResponse>("/notices/read", { method: "POST", body: JSON.stringify({ ids }) }),
   notifications: (before?: string) =>
     request<NotificationsResponse>(`/notifications${before ? `?before=${encodeURIComponent(before)}` : ""}`),
   ranking: (period: RankingPeriod, before?: string) => request<RankingResponse>(`/ranking?period=${period}${before ? `&before=${encodeURIComponent(before)}` : ""}`),

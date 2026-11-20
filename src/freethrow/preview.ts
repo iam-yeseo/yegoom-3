@@ -5,9 +5,9 @@ import type {
 } from "../../shared/types";
 import { ApiFailure } from "../api";
 
-const { shotsPerSet, goalScore, goalGold, engine } = FREETHROW_RULES;
+const { durationMs, minGapMs, goalScore, goalGold, engine } = FREETHROW_RULES;
 const kstDate = (time: number) => new Date(time + 9 * 3_600_000).toISOString().slice(0, 10);
-interface LocalSet { id: string; requestId: string; slot: number; shots: FreeThrowSet["shots"] }
+interface LocalSet { id: string; requestId: string; slot: number; shots: FreeThrowSet["shots"]; inputs: string | null }
 
 /** Serverless official sets for #/preview, following worker/freethrow.ts. The
  * engine lives for the page session so navigation keeps its sets and rewards. */
@@ -15,7 +15,7 @@ export function createFreeThrowPreview(username: string, admin = false) {
   const sets: LocalSet[] = [];
   const ledger: LedgerEntry[] = [];
   let gold = 0, score = 0;
-  const completed = (set: LocalSet) => set.shots.length >= shotsPerSet;
+  const completed = (set: LocalSet) => set.inputs !== null;
   const finished = (set: LocalSet, now: number) => completed(set) || now >= freeThrowDeadline(set.slot);
   const made = (set: LocalSet) => set.shots.filter(shot => shot.made).length;
   function recent(now: number) {
@@ -31,7 +31,7 @@ export function createFreeThrowPreview(username: string, admin = false) {
   /** Friends' sample sets earlier today, so the board is never empty. */
   function sample(now: number): FreeThrowBoardEntry[] {
     const slot = freeThrowSlot(now), date = kstDate(now);
-    return ([["min", slot - 1, 6], ["siwon", slot - 2, 4], ["min", slot - 3, 3]] as const)
+    return ([["min", slot - 1, 14], ["siwon", slot - 2, 9], ["min", slot - 3, 6]] as const)
       .filter(([, sampleSlot]) => kstDate(freeThrowSlotStart(sampleSlot)) === date)
       .map(([name, sampleSlot, goals]) => ({ username: name, slot: sampleSlot, slotStart: freeThrowSlotStart(sampleSlot), made: goals, completed: true }));
   }
@@ -55,18 +55,22 @@ export function createFreeThrowPreview(username: string, admin = false) {
       if (admin) throw new ApiFailure(403, "플레이어만 공식 도전을 할 수 있어요. 연습 모드는 누구나 던질 수 있어요.");
       if (sets.some(set => set.requestId === input.requestId)) return state(now);
       if (recent(now).thisSlot) throw new ApiFailure(409, "이번 시간의 공식 도전은 이미 시작했어요. 다음 세트를 기다려 주세요.");
-      sets.push({ id: crypto.randomUUID(), requestId: input.requestId, slot: freeThrowSlot(now), shots: [] });
+      sets.push({ id: crypto.randomUUID(), requestId: input.requestId, slot: freeThrowSlot(now), shots: [], inputs: null });
       return state(now);
     },
     async finish(input: FreeThrowFinishInput): Promise<FreeThrowFinishResponse> {
       const now = Date.now(), set = sets.find(candidate => candidate.id === input.setId);
       if (!set) throw new ApiFailure(404, "이 세트를 찾을 수 없어요.");
+      // The same checks as the Worker's cleanShots: valid swipes, in time, in order.
+      const timed = input.shots.every((shot, i) => validShot(shot) && Number.isInteger(shot.t) && shot.t >= 0 && shot.t <= durationMs && shot.t - (input.shots[i - 1]?.t ?? -minGapMs) >= minGapMs);
+      if (!timed) throw new ApiFailure(400, "던진 공의 기록이 올바르지 않아요.");
+      const inputs = JSON.stringify(input.shots.map(shot => ({ power: shot.power, aim: shot.aim, t: shot.t })));
       if (completed(set)) {
-        if (set.shots.every((shot, i) => shot.power === input.shots[i]?.power && shot.aim === input.shots[i]?.aim)) return { ...state(now), set: view(set, now), replayed: true };
+        if (set.inputs === inputs) return { ...state(now), set: view(set, now), replayed: true };
         throw new ApiFailure(409, "이 세트는 이미 다르게 기록됐어요.");
       }
       if (finished(set, now)) throw new ApiFailure(409, "이 세트의 시간이 끝나서 미완료로 기록됐어요.");
-      if (input.shots.length !== shotsPerSet || !input.shots.every(shot => validShot(shot))) throw new ApiFailure(400, "세기와 방향이 올바르지 않아요.");
+      set.inputs = inputs;
       set.shots = input.shots.map((shot, index) => { const result = simulateShot(shot); return { index, power: shot.power, aim: shot.aim, made: result.made, kind: result.kind }; });
       const goals = made(set);
       if (goals) {

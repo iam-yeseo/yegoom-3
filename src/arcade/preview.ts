@@ -1,5 +1,5 @@
 import { ARCADE_RULES, arcadeDeadline, arcadeSlot, arcadeSlotStart, type ArcadeGame } from "../../shared/balance";
-import { ARCADE_JUDGES } from "../../shared/arcade-judge";
+import { ARCADE_JUDGES, arcadePoints } from "../../shared/arcade-judge";
 import type { ArcadeBoardEntry, ArcadeFinishInput, ArcadeFinishResponse, ArcadeSet, ArcadeStartInput, ArcadeState, ArcadeSummary, ArcadeTryRecord, LedgerEntry } from "../../shared/types";
 import { ApiFailure } from "../api";
 
@@ -16,6 +16,7 @@ export function createArcadePreview(game: ArcadeGame, username: string, admin = 
   const completed = (set: LocalSet) => set.tries.length >= rules.tries;
   const finished = (set: LocalSet, now: number) => completed(set) || now >= arcadeDeadline(game, set.slot);
   const made = (set: LocalSet) => set.tries.filter(entry => entry.made).length;
+  const points = (set: LocalSet) => arcadePoints(set.tries, rules.score);
   function recent(now: number) {
     const slot = arcadeSlot(game, now);
     const thisSlot = sets.find(set => set.slot === slot) ?? null;
@@ -29,18 +30,20 @@ export function createArcadePreview(game: ArcadeGame, username: string, admin = 
   /** Friends' sample sets earlier today, so the board is never empty. */
   function sample(now: number): ArcadeBoardEntry[] {
     const slot = arcadeSlot(game, now), date = kstDate(now);
+    // Curling is ranked by points (up to 10 a stone), penalties by goals.
+    const worth = game === "curling" ? 6 : rules.score;
     return ([["min", slot - 1, 3], ["siwon", slot - 2, 4], ["min", slot - 3, 2]] as const)
       .filter(([, sampleSlot]) => kstDate(arcadeSlotStart(game, sampleSlot)) === date)
-      .map(([name, sampleSlot, count]) => ({ username: name, slot: sampleSlot, slotStart: arcadeSlotStart(game, sampleSlot), made: count, completed: true }));
+      .map(([name, sampleSlot, count]) => ({ username: name, slot: sampleSlot, slotStart: arcadeSlotStart(game, sampleSlot), made: count, points: count * worth, completed: true }));
   }
   function view(set: LocalSet, now: number): ArcadeSet {
     return { id: set.id, requestId: set.requestId, slot: set.slot, slotStart: arcadeSlotStart(game, set.slot), deadline: arcadeDeadline(game, set.slot),
-      engine: rules.engine, made: made(set), tries: [...set.tries], completed: completed(set), finished: finished(set, now), points: made(set) * rules.score, gold: made(set) * rules.gold };
+      engine: rules.engine, made: made(set), tries: [...set.tries], completed: completed(set), finished: finished(set, now), points: points(set), gold: made(set) * rules.gold };
   }
   function state(now = Date.now()): ArcadeState {
     const slot = arcadeSlot(game, now), date = kstDate(now), { current } = recent(now);
     const mine = sets.filter(set => completed(set) && set.date === date)
-      .map(set => ({ username, slot: set.slot, slotStart: arcadeSlotStart(game, set.slot), made: made(set), completed: true }));
+      .map(set => ({ username, slot: set.slot, slotStart: arcadeSlotStart(game, set.slot), made: made(set), points: points(set), completed: true }));
     return { ...summary(now), game, date, slot, slotStart: arcadeSlotStart(game, slot), current: current ? view(current, now) : null,
       today: [...sample(now), ...mine].sort((a, b) => a.slot - b.slot || a.username.localeCompare(b.username)) };
   }
@@ -67,12 +70,12 @@ export function createArcadePreview(game: ArcadeGame, username: string, admin = 
       }
       if (finished(set, now)) throw new ApiFailure(409, "이 세트의 시간이 끝나서 미완료로 기록됐어요.");
       set.inputs = JSON.stringify(inputs); set.tries = judge.judge(set.slot, inputs);
-      const count = made(set);
+      const count = made(set), earned = points(set);
       if (count) {
-        gold += count * rules.gold; score += count * rules.score;
+        gold += count * rules.gold; score += earned;
         const createdAt = new Date(now).toISOString();
         ledger.unshift({ id: `preview-${game}-gold-${set.id}`, currency: "gold", amount: count * rules.gold, reason: judge.reason, createdAt },
-          { id: `preview-${game}-score-${set.id}`, currency: "score", amount: count * rules.score, reason: judge.reason, createdAt });
+          { id: `preview-${game}-score-${set.id}`, currency: "score", amount: earned, reason: judge.reason, createdAt });
       }
       return { ...state(now), set: view(set, now), replayed: false };
     },

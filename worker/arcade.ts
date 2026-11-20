@@ -1,5 +1,5 @@
 import { ARCADE_GAMES, ARCADE_RULES, PLAY_RULES, arcadeDeadline, arcadeSlot, arcadeSlotStart, playClosed, scoreCounts, type ArcadeGame } from '../shared/balance';
-import { ARCADE_JUDGES } from '../shared/arcade-judge';
+import { ARCADE_JUDGES, arcadePoints } from '../shared/arcade-judge';
 import type { ArcadeBoardEntry, ArcadeFinishResponse, ArcadeSet, ArcadeState, ArcadeSummary, ArcadeTryRecord } from '../shared/types';
 import { kstDate, weekStart } from './rules';
 
@@ -13,7 +13,7 @@ interface SetRow {
   id: string; game: ArcadeGame; request_id: string; slot: number; date: string; engine: number; tries: number; made: number;
   points: number; gold: number; inputs_json: string | null; results_json: string | null; finish_token: string | null;
 }
-interface BoardRow { username: string; slot: number; made: number }
+interface BoardRow { username: string; slot: number; made: number; results_json: string | null }
 export class ArcadeError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
 }
@@ -61,10 +61,11 @@ export async function getArcadeState(db: D1Database, game: ArcadeGame, user: Act
   const slot = arcadeSlot(game, now), date = kstDate(new Date(now));
   const [sets, board] = await Promise.all([
     user.role === 'player' ? recentSet(db, game, user, now) : Promise.resolve({ current: null, thisSlot: null }),
-    db.prepare(`SELECT u.username, s.slot, s.made FROM arcade_sets s JOIN users u ON u.id = s.user_id
+    db.prepare(`SELECT u.username, s.slot, s.made, s.results_json FROM arcade_sets s JOIN users u ON u.id = s.user_id
       WHERE s.game = ? AND s.date = ? AND s.tries > 0 AND u.role = 'player' AND u.active = 1 ORDER BY s.slot, u.username`).bind(game, date).all<BoardRow>(),
   ]);
-  const today: ArcadeBoardEntry[] = board.results.map(row => ({ username: row.username, slot: row.slot, slotStart: arcadeSlotStart(game, row.slot), made: row.made, completed: true }));
+  const today: ArcadeBoardEntry[] = board.results.map(row => ({ username: row.username, slot: row.slot, slotStart: arcadeSlotStart(game, row.slot), made: row.made,
+    points: arcadePoints(row.results_json ? JSON.parse(row.results_json) as ArcadeTryRecord[] : [], ARCADE_RULES[game].score), completed: true }));
   return { ...summaryOf(game, user, sets, now), game, date, slot, slotStart: arcadeSlotStart(game, slot), current: sets.current ? setView(sets.current, now) : null, today };
 }
 
@@ -116,7 +117,7 @@ export async function finishArcadeSet(db: D1Database, game: ArcadeGame, user: Ac
   const made = results.filter(result => result.made).length;
   // A set belongs to the KST day it was started on; one recorded after that day
   // closed (23:50) pays gold but no score.
-  const points = scoreCounts(set.date, now) ? made * rules.score : 0, gold = made * rules.gold;
+  const points = scoreCounts(set.date, now) ? arcadePoints(results, rules.score) : 0, gold = made * rules.gold;
   const date = new Date(now), finishedIso = date.toISOString(), token = crypto.randomUUID();
   const writes: D1PreparedStatement[] = [db.prepare(`UPDATE arcade_sets SET tries = ?, made = ?, points = ?, gold = ?, inputs_json = ?, results_json = ?, finish_token = ?, finished_at = ?
     WHERE id = ? AND user_id = ? AND tries = 0 AND engine = ? AND ? < ?

@@ -15,14 +15,20 @@ export interface ArcadeCopy {
   unit: string;
   /** "5구", "스톤 5개". */
   tries: string;
-  /** What pays: "1골마다", "하우스에 남은 스톤 1개마다". */
-  per: string;
+  /** What a set pays, in full: "1골마다 1점 + 10G". */
+  pay: string;
+  /** What the board and "오늘 내 최고" compare: tries that counted, or the set's points. */
+  rank?: "made" | "points";
+  /** Unit of that number when it is not `unit`: "점". */
+  rankUnit?: string;
+  /** Heading of a recorded set; "N골 성공!" when absent. */
+  doneTitle?(set: ArcadeSet): string;
   practice: string;
   startLabel: string;
   /** Shown when a set is over with nothing scored. */
   nothing: string;
-  resultTitle(made: number): string;
-  resultLine(made: number): string;
+  resultTitle(made: number, points: number): string;
+  resultLine(made: number, points: number): string;
   art?: string;
   guide: ReactNode;
 }
@@ -39,8 +45,9 @@ export interface ArcadePlayProps {
   mode: "practice" | "official";
   /** The official set's slot (the penalty keepers come from it). */
   slot: number;
-  /** An official set's last try is done: hand every input over. */
-  onFinish(inputs: unknown[], made: number): void;
+  /** An official set's last try is done: hand every input over. `points` is
+   * given by games that score each try by itself. */
+  onFinish(inputs: unknown[], made: number, points?: number): void;
   onQuit(): void;
 }
 interface Source {
@@ -161,26 +168,28 @@ export function ArcadeScreen({ game, copy, play, user, onBack, demo = false, tra
     } catch (failure) { setLoadError(failure instanceof Error ? failure.message : "세트를 시작하지 못했어요."); void load(); }
     finally { setStarting(false); }
   }
-  function finished(setId: string, inputs: unknown[], made: number) {
-    setResult({ setId, made, points: made * rules.score, gold: made * rules.gold, status: "saving", message: "" });
+  function finished(setId: string, inputs: unknown[], made: number, points = made * rules.score) {
+    setResult({ setId, made, points, gold: made * rules.gold, status: "saving", message: "" });
     void send({ setId, inputs });
   }
   function quit() { setPlaying(null); void load(); }
 
   const set = official?.current ?? null;
   const unfinished = !!set && !set.completed && !pending.current && playing?.mode !== "official";
-  const myBest = official ? Math.max(0, ...official.today.filter(entry => entry.username === user.username).map(entry => entry.made)) : 0;
+  const ranked = (entry: { made: number; points: number }) => (copy.rank === "points" ? entry.points : entry.made);
+  const rankUnit = copy.rankUnit ?? copy.unit;
+  const myBest = official ? Math.max(0, ...official.today.filter(entry => entry.username === user.username).map(ranked)) : 0;
   const next = official && <div className="arcade-official-next"><span>다음 세트 {kstHour(official.nextSlotAt)}</span></div>;
   let body;
   if (!official) body = <p className="arcade-official-note">{loadError || "공식 도전 기록을 불러오는 중…"}</p>;
   else if (admin) body = <p className="arcade-official-note">운영자는 공식 도전에 참여하지 않아요. 친구들의 오늘 기록만 볼 수 있어요.</p>;
   else if (official.available) body = <>
-    <div className="arcade-official-head"><strong>{kstHour(official.slotStart)} 세트</strong><small>{copy.tries} · {copy.per} {rules.score}점 + {rules.gold}G</small></div>
+    <div className="arcade-official-head"><strong>{kstHour(official.slotStart)} 세트</strong><small>{copy.tries} · {copy.pay}</small></div>
     <button type="button" className="primary-button arcade-start" onClick={() => void startSet()} disabled={starting}>{starting ? "준비 중…" : copy.startLabel}</button>
     <small className="arcade-official-warn">시작하면 이번 시간의 기회를 써요. 끝까지 해야 기록돼요!</small>
   </>;
   else if (set && set.completed) body = <>
-    <div className="arcade-official-head is-done"><strong>{set.made}{copy.unit} 성공!</strong><small>{set.made ? `${set.points ? `+${set.points}점 · ` : ""}+${set.gold}G 받았어요${set.points < set.made * rules.score ? " (밤 11시 50분 이후 기록은 점수에 들어가지 않아요)" : ""}` : copy.nothing}</small></div>
+    <div className="arcade-official-head is-done"><strong>{copy.doneTitle?.(set) ?? `${set.made}${copy.unit} 성공!`}</strong><small>{set.made ? `${set.points ? `+${set.points}점 · ` : ""}+${set.gold}G 받았어요${set.points ? "" : " (밤 11시 50분 이후 기록은 점수에 들어가지 않아요)"}` : copy.nothing}</small></div>
     <span className="arcade-balls">{set.tries.map(entry => <i key={entry.index} className={entry.made ? "is-made" : "is-miss"} />)}</span>
     {next}
   </>;
@@ -194,7 +203,7 @@ export function ArcadeScreen({ game, copy, play, user, onBack, demo = false, tra
 
   const players = official ? [...new Set(official.today.map(entry => entry.username))].map(username => {
     const sets = official.today.filter(entry => entry.username === username);
-    return { username, sets, best: Math.max(...sets.map(entry => entry.made)) };
+    return { username, sets, best: Math.max(...sets.map(ranked)) };
   }).sort((a, b) => b.best - a.best || a.username.localeCompare(b.username)) : [];
   return <section className="arcade-page" data-game={game}>
     <Toolbar title={copy.title} onBack={onBack} gold={user.gold} />
@@ -205,7 +214,7 @@ export function ArcadeScreen({ game, copy, play, user, onBack, demo = false, tra
     <section className="arcade-official card" aria-label="공식 도전">
       {body}
       {official && loadError && <p className="form-message error" role="alert">{loadError}</p>}
-      {!admin && official && <small className="arcade-official-best">오늘 내 최고 {myBest}{copy.unit}</small>}
+      {!admin && official && <small className="arcade-official-best">오늘 내 최고 {myBest}{rankUnit}</small>}
     </section>
     {(syncing || syncError) && <div className="arcade-sync card" role={syncError ? "alert" : "status"}>
       {syncError ? <><span>{syncError}</span>{pending.current && <button type="button" className="text-button" onClick={() => pending.current && void send(pending.current)}>다시 보내기</button>}</> : <span>세트 기록을 보내는 중…</span>}
@@ -216,19 +225,19 @@ export function ArcadeScreen({ game, copy, play, user, onBack, demo = false, tra
         : <ol>{players.map(player => <li key={player.username} className={player.username === user.username ? "is-me" : ""}>
           <Avatar username={player.username} size={34} nameFormat="plain" />
           <span className="arcade-today-name"><strong>{name(player.username)}</strong>
-            <small>{player.sets.map(entry => `${kstHour(entry.slotStart)} ${entry.made}`).join(" · ")}</small></span>
-          <b>{player.best}<span>{copy.unit}</span></b>
+            <small>{player.sets.map(entry => `${kstHour(entry.slotStart)} ${ranked(entry)}`).join(" · ")}</small></span>
+          <b>{player.best}<span>{rankUnit}</span></b>
         </li>)}</ol>}
     </section>}
     <details className="arcade-guide card"><summary>게임 방법 &amp; 보상</summary>{copy.guide}</details>
     {playing && play({
       mode: playing.mode, slot: playing.mode === "official" ? playing.set.slot : 0,
-      onFinish: (inputs, made) => { if (playing.mode === "official") finished(playing.set.id, inputs, made); }, onQuit: quit,
+      onFinish: (inputs, made, points) => { if (playing.mode === "official") finished(playing.set.id, inputs, made, points); }, onQuit: quit,
     })}
-    {result && <ResultDialog title={copy.resultTitle(result.made)} art={copy.art}
+    {result && <ResultDialog title={copy.resultTitle(result.made, result.points)} art={copy.art}
       lines={<>
         <strong>{result.made ? `${result.points ? `+${result.points}점 · ` : ""}+${result.gold}G` : copy.nothing}</strong>
-        <span>{copy.resultLine(result.made)}</span>
+        <span>{copy.resultLine(result.made, result.points)}</span>
       </>}
       status={result.status} message={result.message} onRetry={() => pending.current && void send(pending.current)}
       onClose={() => { setResult(null); setPlaying(null); }} />}

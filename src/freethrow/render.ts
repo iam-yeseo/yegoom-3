@@ -24,18 +24,25 @@ function floorY(z: number) {
 export const REST = project(COURT.release.x, COURT.release.y, COURT.release.z);
 export const BALL_REST_RADIUS = COURT.ballRadius * REST.scale;
 
-export interface Scene {
+export interface BallState {
   ball: ShotFrame;
   /** Offset in logical pixels while the ball is held or just released. */
   offset: { x: number; y: number };
   spin: number;
   alpha: number;
+}
+export interface Scene {
+  /** The ball in the hand; null for the moment between a release and the next ball. */
+  hand: BallState | null;
+  /** Balls in the air, oldest first: the next one can be thrown before the last has landed. */
+  flying: BallState[];
   /** 0–1 rim wobble and seconds since the net caught a made shot. */
   rimShake: number;
   netAge: number | null;
 }
 export const BALL_SRC = "/freethrow/ball.webp";
-export const restScene = (): Scene => ({ ball: { ...COURT.release }, offset: { x: 0, y: 0 }, spin: 0, alpha: 1, rimShake: 0, netAge: null });
+export const restBall = (): BallState => ({ ball: { ...COURT.release }, offset: { x: 0, y: 0 }, spin: 0, alpha: 1 });
+export const restScene = (): Scene => ({ hand: restBall(), flying: [], rimShake: 0, netAge: null });
 
 const ring = (y: number, radius: number, count: number, shiftX = 0, shiftZ = 0) =>
   Array.from({ length: count }, (_, i) => {
@@ -92,21 +99,26 @@ export class FreeThrowRenderer {
     if (!this.backdrop) this.backdrop = this.paintBackdrop();
     ctx.drawImage(this.backdrop, 0, 0);
     ctx.setTransform(this.ratio, 0, 0, this.ratio, 0, 0);
-    const { ball } = scene, rim = COURT.rim;
-    const flat = Math.hypot(ball.x - rim.x, ball.z - rim.z);
-    const zone = ball.z > COURT.board.z ? "behind-board"
-      : flat < rim.radius ? "inside"
-        : ball.z > rim.z ? "behind-rim" : "front";
-    this.shadow(scene);
-    if (zone === "behind-board") this.ball(scene);
+    const rim = COURT.rim;
+    // Each ball is drawn in front of or behind the board, rim and net by where it is.
+    const balls = (scene.hand ? [...scene.flying, scene.hand] : scene.flying).map(state => {
+      const { ball } = state, flat = Math.hypot(ball.x - rim.x, ball.z - rim.z);
+      const zone = ball.z > COURT.board.z ? "behind-board"
+        : flat < rim.radius ? "inside"
+          : ball.z > rim.z ? "behind-rim" : "front";
+      return { state, zone };
+    });
+    const layer = (zone: string) => { for (const item of balls) if (item.zone === zone) this.ball(item.state); };
+    for (const item of balls) this.shadow(item.state);
+    layer("behind-board");
     this.board();
-    if (zone === "behind-rim") this.ball(scene);
+    layer("behind-rim");
     const shake = scene.rimShake * Math.sin(performance.now() / 22) * 1.6;
     this.rim(true, shake);
-    if (zone === "inside") this.ball(scene);
+    layer("inside");
     this.net(scene.netAge, shake);
     this.rim(false, shake);
-    if (zone === "front") this.ball(scene);
+    layer("front");
   }
 
   private paintBackdrop(): HTMLCanvasElement {
@@ -183,11 +195,11 @@ export class FreeThrowRenderer {
     }
     ctx.stroke();
   }
-  private ballPoint(scene: Scene) {
+  private ballPoint(scene: BallState) {
     const p = project(scene.ball.x, scene.ball.y, scene.ball.z);
     return { x: p.x + scene.offset.x, y: p.y + scene.offset.y, r: COURT.ballRadius * p.scale };
   }
-  private shadow(scene: Scene) {
+  private shadow(scene: BallState) {
     const { ctx } = this, { ball } = scene;
     const p = project(ball.x, 0, Math.max(0, ball.z));
     const height = Math.max(0, ball.y - COURT.ballRadius);
@@ -195,7 +207,7 @@ export class FreeThrowRenderer {
     ctx.fillStyle = `rgba(120,80,50,${(0.24 * (1 - Math.min(0.75, height / 4)) * scene.alpha).toFixed(3)})`;
     ctx.beginPath(); ctx.ellipse(p.x + scene.offset.x * 0.4, floorY(ball.z), r, r * 0.32, 0, 0, Math.PI * 2); ctx.fill();
   }
-  private ball(scene: Scene) {
+  private ball(scene: BallState) {
     const { ctx } = this, { x, y, r } = this.ballPoint(scene);
     ctx.save();
     ctx.globalAlpha = scene.alpha;

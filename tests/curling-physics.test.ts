@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { BACK_LINE, MAX_FRAMES, SHEET, SWEEP, inHouse, simulateEnd, simulateThrow, slideDistance, startThrow, validStone, validSweep } from '../shared/curling-physics';
+import { BACK_LINE, CURLING_ZONES, MAX_FRAMES, SHEET, SWEEP, inHouse, sheetPoints, stonePoints, simulateEnd, simulateThrow, slideDistance, startThrow, validStone, validSweep } from '../shared/curling-physics';
 
 const FINGERPRINT = '2f0ced8c41ca1432a25c49320e7d441054c3d6a36d732941ae4e00e0a6468a12';
 const fingerprint = () => {
@@ -139,6 +139,34 @@ describe('curling physics', () => {
     expect(validStone({ power: 0, aim: -100 })).toBe(true);
     expect(validStone({ power: 100, aim: 100 })).toBe(true);
     for (const bad of [{ power: 101, aim: 0 }, { power: -1, aim: 0 }, { power: 50, aim: 101 }, { power: 50.5, aim: 0 }, { power: '50', aim: 0 }, { power: 50 }, null, 7]) expect(validStone(bad)).toBe(false);
+  });
+
+  it('scores a stone by how close to the centre it lies: 10, 8, 6, 4, 2, 1, then nothing', () => {
+    const [red, white, blue] = [SHEET.rings[2], SHEET.rings[1], SHEET.rings[0]], r = SHEET.stoneRadius;
+    const at = (gap: number) => stonePoints({ x: 0, y: SHEET.tee + gap });
+    // Inside a circle means the stone's centre is in it; touching means only its edge reaches it.
+    expect([0, red, red + 0.01, red + r, red + r + 0.01, white, white + 0.01, white + r, white + r + 0.01, blue, blue + 0.01, blue + r - 0.001, blue + r + 0.01].map(at))
+      .toEqual([10, 10, 8, 8, 6, 6, 4, 4, 2, 2, 1, 1, 0]);
+    // The same in every direction, and never more for being farther out.
+    expect(stonePoints({ x: red + 0.01, y: SHEET.tee })).toBe(8);
+    expect(stonePoints({ x: -0.5, y: SHEET.tee - 0.5 })).toBe(at(Math.sqrt(0.5)));
+    for (let gap = 0, last = 10; gap < 2; gap += 0.01) { const now = at(gap); expect(now).toBeLessThanOrEqual(last); last = now; }
+    expect(CURLING_ZONES.map(zone => zone.points)).toEqual([10, 8, 6, 4, 2, 1]);
+    // A stone is in the house exactly when it scores.
+    for (let gap = 0; gap < 2; gap += 0.013) expect(at(gap) > 0).toBe(inHouse({ x: 0, y: SHEET.tee + gap }));
+  });
+
+  it('adds up an end from where each stone lies when the last one has stopped', () => {
+    const end = simulateEnd([{ power: 55, aim: 0 }, { power: 100, aim: 70 }, { power: 52, aim: -45 }, { power: 40, aim: 0 }, { power: 100, aim: -70 }]);
+    expect(end.points[0]).toBe(10);
+    expect(end.points[1]).toBe(0);
+    expect(end.counted).toEqual(end.points.map(value => value > 0));
+    expect(end.total).toBe(end.points.reduce((sum, value) => sum + value, 0));
+    expect(end.total).toBe(sheetPoints(end.throws[end.throws.length - 1]!.after));
+    // A stone knocked out of the middle afterwards is scored where it ends up, not where it first stopped.
+    const bumped = simulateEnd([{ power: 55, aim: 0 }, { power: 75, aim: 0 }]);
+    expect(stonePoints(bumped.throws[0]!.after[0]!)).toBe(10);
+    expect(bumped.points[0]).toBeLessThan(10);
   });
 
   it('stays cheap enough for a Worker request', () => {

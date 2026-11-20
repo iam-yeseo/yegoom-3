@@ -24,6 +24,7 @@ import { PhotoError } from './photos';
 import { PROFILE_PHOTO, LUCK_PHOTO } from '../shared/profile';
 import { LuckPhotoError, uploadLuckPhoto, readLuckPhoto, luckPhotoUrl } from './luck-photos';
 import { notificationsRoute, readNotificationSummary, sendAdminNotification, NotificationError, notify } from './notifications';
+import { isNoticeId, parseNoticesRead } from '../shared/notices';
 import { maintainDatabase } from './maintenance';
 import { AchievementError, achievementScopesFor, claimAchievement, readAchievements, recordAchievementEvent, syncAchievements, syncAchievementsFor } from './achievements';
 import { RankResultError, markRankResultsSeen, readRankResults, settleDueRankingRewards } from './ranking-rewards';
@@ -32,7 +33,7 @@ import { aiWriters, isAiProvider, readAiStatus, saveAiSettings } from './stock-a
 import { BINGO_RULES, FEATURES, PLAY_RULES, isArcadeGame, nextPredictionOpenAt, playClosed, predictionDayOff, scoreCounts } from '../shared/balance';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher; STOCK_SEED_SECRET?: string; ANTHROPIC_API_KEY?: string; OPENAI_API_KEY?: string }
-interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
+interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null; notices_read_json?: string | null }
 interface RoundRow { answer: string | null; hint: string; reveal_at: number | null; revealed_at: number | null; settings_json: string | null }
 interface PredictionRow { player_id: string; username: string; display_name: string; value: string; character: ArtKey | null; photo_version: number | null }
 interface ProfileRow { id: string; username: string; display_name: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
@@ -512,7 +513,8 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
     inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0, tagTickets: viewer?.tagTickets ?? 0 }, dailyFree,
-    kuji, lottoNotice, catchmind, claw, freethrow, santa, arcade, bingo, launchGift, notifications, rankResults, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    kuji, lottoNotice, catchmind, claw, freethrow, santa, arcade, bingo, launchGift, notifications, noticesRead: parseNoticesRead(user.notices_read_json),
+    rankResults, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {
   if (kstDate(new Date()) !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
@@ -772,7 +774,8 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
   }
   if (url.pathname === '/api/freethrow/sets' || url.pathname === '/api/freethrow/finish') {
     if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
-    const input = await body(request);
+    // A 30-second set can hold over a hundred balls; the usual 4KB body limit is too small for it.
+    const input = await body(request, 16 * 1024);
     return json(await (url.pathname.endsWith('/sets')
       ? startFreeThrowSet(env.DB, user, input, now.getTime())
       : finishFreeThrowSet(env.DB, user, input, now.getTime())));
@@ -861,6 +864,17 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
     // Opening the centre (its first page) is itself an achievement.
     if (!url.searchParams.get('before') && user.role === 'player') await syncAchievements(env.DB, user.id, now, [], ['profile']).catch(() => undefined);
     return json(page);
+  }
+  if (url.pathname === '/api/notices/read') {
+    // A notice (shared/notices.ts) is read once it has been opened; the ids are kept on the reader's row.
+    if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');
+    const ids = (await body(request)).ids;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 50 || !ids.every(isNoticeId)) throw new HttpError(400, 'INVALID_NOTICE', '공지를 확인해 주세요.');
+    // One statement merges the new ids into the stored list, so two devices opening different notices both count.
+    const row = await env.DB.prepare(`UPDATE users SET notices_read_json = (SELECT json_group_array(value) FROM (
+        SELECT value FROM json_each(COALESCE(users.notices_read_json, '[]')) UNION SELECT value FROM json_each(?)))
+      WHERE id = ? RETURNING notices_read_json`).bind(JSON.stringify(ids), user.id).first<{ notices_read_json: string | null }>();
+    return json({ noticesRead: parseNoticesRead(row?.notices_read_json) });
   }
   if (url.pathname === '/api/achievements') {
     if (request.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', '지원하지 않는 요청이에요.');

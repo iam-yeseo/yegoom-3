@@ -1,4 +1,4 @@
-import { BACK_LINE, SHEET, aimDirection, type StonePosition } from "../../shared/curling-physics";
+import { BACK_LINE, CURLING_ZONES, SHEET, aimDirection, type StonePosition } from "../../shared/curling-physics";
 
 /** Logical canvas size; the buffer is scaled by devicePixelRatio (max 2). */
 export const STAGE = { width: 360, height: 560 } as const;
@@ -101,6 +101,18 @@ export class CurlingRenderer {
     line(SHEET.tee); line(BACK_LINE);
     ctx.beginPath(); ctx.moveTo(RELEASE.x, 0); ctx.lineTo(RELEASE.x, RELEASE.y - STONE_RADIUS - 6); ctx.stroke();
     ctx.strokeStyle = COLORS.hog; ctx.lineWidth = 4; line(SHEET.hog);
+    // What each circle is worth, printed on the ice beside the centre line
+    // (touching a circle from outside is the step in between: 8, 4, 1).
+    ctx.font = "800 10px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const worth = (points: number, radius: number, color: string) => { ctx.fillStyle = color; ctx.fillText(String(points), tee.x - radius * SCALE * 0.7071, tee.y - radius * SCALE * 0.7071); };
+    // The middle's 10 sits on the white dot, painted again over the lines that cross it.
+    ctx.beginPath(); ctx.arc(tee.x, tee.y, SHEET.buttonRadius * SCALE * 0.5, 0, Math.PI * 2); ctx.fillStyle = COLORS.white; ctx.fill();
+    ctx.font = "800 9px system-ui, sans-serif";
+    worth(CURLING_ZONES[0].points, 0, "#d9604c");
+    ctx.font = "800 10px system-ui, sans-serif";
+    worth(CURLING_ZONES[2].points, (SHEET.rings[1] + SHEET.rings[2]) / 2, "#9aa9b3");
+    worth(CURLING_ZONES[4].points, (SHEET.rings[0] + SHEET.rings[1]) / 2, "#ffffff");
+    ctx.textBaseline = "alphabetic";
     ctx.fillStyle = COLORS.text; ctx.font = "700 10px system-ui, sans-serif"; ctx.textAlign = "left";
     ctx.fillText("호그 라인", left + 6, toScreen(0, SHEET.hog).y - 7);
     ctx.strokeStyle = "#a9c6d4"; ctx.lineWidth = 2;

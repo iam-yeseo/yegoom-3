@@ -1,17 +1,20 @@
-import { FREETHROW_RULES, PLAY_RULES, freeThrowDeadline, freeThrowSlot, freeThrowSlotStart, playClosed, scoreCounts } from '../shared/balance';
+import { FREETHROW_MAX_SHOTS, FREETHROW_RULES, PLAY_RULES, freeThrowDeadline, freeThrowSlot, freeThrowSlotStart, playClosed, scoreCounts } from '../shared/balance';
 import { simulateShot, validShot } from '../shared/freethrow-physics';
 import type {
-  FreeThrowBoardEntry, FreeThrowFinishResponse, FreeThrowSet, FreeThrowShotRecord, FreeThrowState, FreeThrowSummary,
+  FreeThrowBoardEntry, FreeThrowFinishResponse, FreeThrowSet, FreeThrowShotInput, FreeThrowShotRecord, FreeThrowState, FreeThrowSummary,
 } from '../shared/types';
 import { kstDate, weekStart } from './rules';
 
-// An official set is thrown on the device and recorded in one request once its
-// 10th ball lands (docs/plan-freethrow.md §3). Starting uses the slot's chance;
-// a set that is never recorded (the player left) ends unfinished at its deadline.
+// An official set is thrown on the device for 30 seconds and recorded in one
+// request once its last ball lands (docs/plan-freethrow.md §3). Starting uses
+// the slot's chance; a set that is never recorded (the player left) ends
+// unfinished at its deadline.
 
 interface Actor { id: string; role: 'player' | 'admin' }
-interface SetRow { id: string; request_id: string; slot: number; engine: number; shots: number; made: number }
-interface ShotRow { id: string; shot_index: number; power: number; aim: number; made: number; kind: string; created_at: string }
+interface SetRow {
+  id: string; request_id: string; slot: number; engine: number; shots: number; made: number;
+  points: number; gold: number; inputs_json: string | null; results_json: string | null; finish_token: string | null; finished_at: string | null;
+}
 interface BoardRow { username: string; slot: number; made: number }
 
 export class FreeThrowError extends Error {
@@ -19,14 +22,13 @@ export class FreeThrowError extends Error {
 }
 const requestIdValid = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{16,80}$/.test(value);
 const setIdValid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
-const { shotsPerSet, goalScore, goalGold, engine } = FREETHROW_RULES;
+const { durationMs, minGapMs, goalScore, goalGold, engine } = FREETHROW_RULES;
 /** A set belongs to the KST day its slot starts on. A set recorded after that
  * day closed (23:50), e.g. the 21시 set's grace past midnight, pays gold but no score. */
 const setDay = (slot: number) => kstDate(new Date(freeThrowSlotStart(slot)));
-const goalCounts = (slot: number, at: number) => scoreCounts(setDay(slot), at);
-const completedRow = (row: Pick<SetRow, 'shots'>) => row.shots >= shotsPerSet;
-const finishedAt = (row: Pick<SetRow, 'slot' | 'shots'>, now: number) => completedRow(row) || now >= freeThrowDeadline(row.slot);
-const SET_COLUMNS = 'id, request_id, slot, engine, shots, made';
+const completedRow = (row: Pick<SetRow, 'finished_at'>) => row.finished_at !== null;
+const finishedAt = (row: Pick<SetRow, 'slot' | 'finished_at'>, now: number) => completedRow(row) || now >= freeThrowDeadline(row.slot);
+const SET_COLUMNS = 'id, request_id, slot, engine, shots, made, points, gold, inputs_json, results_json, finish_token, finished_at';
 
 /** This slot's set, or the previous slot's while it can still be recorded. */
 async function recentSet(db: D1Database, user: Actor, now: number): Promise<{ current: SetRow | null; thisSlot: SetRow | null }> {
@@ -51,15 +53,11 @@ export async function getFreeThrowSummary(db: D1Database, user: Actor, now = Dat
   return summaryOf(user, user.role === 'player' ? await recentSet(db, user, now) : { thisSlot: null }, now);
 }
 
-const shotView = (row: ShotRow): FreeThrowShotRecord => ({ index: row.shot_index, power: row.power, aim: row.aim, made: row.made === 1, kind: row.kind });
-async function setView(db: D1Database, row: SetRow, now: number): Promise<FreeThrowSet> {
-  const rows = (await db.prepare('SELECT id, shot_index, power, aim, made, kind, created_at FROM freethrow_shots WHERE set_id = ? ORDER BY shot_index')
-    .bind(row.id).all<ShotRow>()).results;
-  const scored = rows.filter(shot => shot.made === 1 && goalCounts(row.slot, Date.parse(shot.created_at))).length;
+function setView(row: SetRow, now: number): FreeThrowSet {
   return {
     id: row.id, requestId: row.request_id, slot: row.slot, slotStart: freeThrowSlotStart(row.slot), deadline: freeThrowDeadline(row.slot),
-    engine: row.engine, made: row.made, shots: rows.map(shotView), completed: completedRow(row), finished: finishedAt(row, now),
-    points: scored * goalScore, gold: row.made * goalGold,
+    engine: row.engine, made: row.made, shots: row.results_json ? JSON.parse(row.results_json) as FreeThrowShotRecord[] : [],
+    completed: completedRow(row), finished: finishedAt(row, now), points: row.points, gold: row.gold,
   };
 }
 
@@ -68,10 +66,10 @@ export async function getFreeThrowState(db: D1Database, user: Actor, now = Date.
   const [sets, board] = await Promise.all([
     user.role === 'player' ? recentSet(db, user, now) : Promise.resolve({ current: null, thisSlot: null }),
     db.prepare(`SELECT u.username, s.slot, s.made FROM freethrow_sets s JOIN users u ON u.id = s.user_id
-      WHERE s.date = ? AND s.shots = ? AND u.role = 'player' AND u.active = 1 ORDER BY s.slot, u.username`).bind(date, shotsPerSet).all<BoardRow>(),
+      WHERE s.date = ? AND s.finished_at IS NOT NULL AND u.role = 'player' AND u.active = 1 ORDER BY s.slot, u.username`).bind(date).all<BoardRow>(),
   ]);
   const today: FreeThrowBoardEntry[] = board.results.map(row => ({ username: row.username, slot: row.slot, slotStart: freeThrowSlotStart(row.slot), made: row.made, completed: true }));
-  return { ...summaryOf(user, sets, now), date, slot, slotStart: freeThrowSlotStart(slot), current: sets.current ? await setView(db, sets.current, now) : null, today };
+  return { ...summaryOf(user, sets, now), date, slot, slotStart: freeThrowSlotStart(slot), current: sets.current ? setView(sets.current, now) : null, today };
 }
 
 export async function startFreeThrowSet(db: D1Database, user: Actor, input: Record<string, unknown>, now = Date.now()): Promise<FreeThrowState> {
@@ -94,67 +92,67 @@ export async function startFreeThrowSet(db: D1Database, user: Actor, input: Reco
   return getFreeThrowState(db, user, now);
 }
 
-export function validateFinishInput(value: unknown): string | null {
-  const input = value && typeof value === 'object' ? value as Record<string, unknown> : null;
-  if (!input || !setIdValid(input.setId)) return '세트 번호가 올바르지 않아요.';
-  if (!Array.isArray(input.shots) || input.shots.length !== shotsPerSet) return `${shotsPerSet}구의 기록이 모두 필요해요.`;
-  if (!input.shots.every(shot => validShot(shot))) return '세기와 방향이 올바르지 않아요.';
-  return null;
+/** The balls of a set in a fixed shape, or why they cannot be one: each ball
+ * left the hand inside the 30 seconds, in order, and no faster than a hand can. */
+export function cleanShots(value: unknown): FreeThrowShotInput[] | string {
+  if (!Array.isArray(value) || value.length > FREETHROW_MAX_SHOTS) return '던진 공의 기록이 올바르지 않아요.';
+  let last = -minGapMs;
+  const shots: FreeThrowShotInput[] = [];
+  for (const shot of value as unknown[]) {
+    if (!validShot(shot)) return '세기와 방향이 올바르지 않아요.';
+    const t = (shot as { t?: unknown }).t;
+    if (!Number.isInteger(t) || (t as number) < 0 || (t as number) > durationMs || (t as number) - last < minGapMs) return '던진 시간이 올바르지 않아요.';
+    last = t as number;
+    shots.push({ power: shot.power, aim: shot.aim, t: t as number });
+  }
+  return shots;
 }
 
 /** Records a whole set: every ball's power and aim, simulated again here. */
 export async function finishFreeThrowSet(db: D1Database, user: Actor, input: Record<string, unknown>, now = Date.now()): Promise<FreeThrowFinishResponse> {
   if (user.role !== 'player') throw new FreeThrowError(403, 'CANNOT_PLAY', '플레이어만 공식 도전을 할 수 있어요.');
-  const invalid = validateFinishInput(input);
-  if (invalid) throw new FreeThrowError(400, 'INVALID_SET', invalid);
-  const setId = input.setId as string, shots = (input.shots as { power: number; aim: number }[]).map(shot => ({ power: shot.power, aim: shot.aim }));
-  const set = await db.prepare(`SELECT ${SET_COLUMNS} FROM freethrow_sets WHERE id = ? AND user_id = ?`).bind(setId, user.id).first<SetRow>();
+  if (!setIdValid(input.setId)) throw new FreeThrowError(400, 'INVALID_SET', '세트 번호가 올바르지 않아요.');
+  const shots = cleanShots(input.shots);
+  if (typeof shots === 'string') throw new FreeThrowError(400, 'INVALID_SET', shots);
+  const setId = input.setId, inputsJson = JSON.stringify(shots);
+  const read = () => db.prepare(`SELECT ${SET_COLUMNS} FROM freethrow_sets WHERE id = ? AND user_id = ?`).bind(setId, user.id).first<SetRow>();
+  const set = await read();
   if (!set) throw new FreeThrowError(404, 'SET_NOT_FOUND', '이 세트를 찾을 수 없어요. 화면을 새로고침해 주세요.');
-  const recorded = async () => (await db.prepare('SELECT power, aim FROM freethrow_shots WHERE set_id = ? ORDER BY shot_index').bind(setId).all<{ power: number; aim: number }>()).results;
-  const same = (rows: { power: number; aim: number }[]) => rows.length === shotsPerSet && rows.every((row, i) => row.power === shots[i]!.power && row.aim === shots[i]!.aim);
-  const respond = async (replayed: boolean): Promise<FreeThrowFinishResponse> => {
-    const row = await db.prepare(`SELECT ${SET_COLUMNS} FROM freethrow_sets WHERE id = ?`).bind(setId).first<SetRow>();
-    return { ...await getFreeThrowState(db, user, now), set: await setView(db, row!, now), replayed };
-  };
+  const respond = async (row: SetRow, replayed: boolean): Promise<FreeThrowFinishResponse> => ({ ...await getFreeThrowState(db, user, now), set: setView(row, now), replayed });
   if (completedRow(set)) {
     // A retry of a recorded set (lost response) returns it; a different one is refused.
-    if (same(await recorded())) return respond(true);
+    if (set.inputs_json === inputsJson) return respond(set, true);
     throw new FreeThrowError(409, 'SET_CONFLICT', '이 세트는 이미 다르게 기록됐어요. 화면을 새로고침해 주세요.');
   }
-  if (set.shots > 0) throw new FreeThrowError(409, 'SET_CLOSED', '이 세트는 미완료로 끝났어요.');
   if (set.engine !== engine) throw new FreeThrowError(409, 'ENGINE_CHANGED', '게임이 업데이트됐어요. 이 세트는 마감됐어요.');
-  if (now >= freeThrowDeadline(set.slot)) throw new FreeThrowError(409, 'SET_CLOSED', '이 세트의 시간이 끝나서 미완료로 기록됐어요.');
+  const deadline = freeThrowDeadline(set.slot);
+  if (now >= deadline) throw new FreeThrowError(409, 'SET_CLOSED', '이 세트의 시간이 끝나서 미완료로 기록됐어요.');
   // One simulation per ball; the browser has already shown the same shots.
-  const results = shots.map(shot => simulateShot(shot));
+  const results: FreeThrowShotRecord[] = shots.map((shot, index) => {
+    const result = simulateShot(shot);
+    return { index, power: shot.power, aim: shot.aim, made: result.made, kind: result.kind };
+  });
   const made = results.filter(result => result.made).length;
-  const date = new Date(now), createdAt = date.toISOString();
-  const ids = results.map(() => crypto.randomUUID());
-  const writes: D1PreparedStatement[] = results.map((result, i) =>
-    db.prepare(`INSERT OR IGNORE INTO freethrow_shots (id, set_id, shot_index, power, aim, made, kind, created_at)
-      SELECT ?, s.id, ?, ?, ?, ?, ?, ? FROM freethrow_sets s JOIN users u ON u.id = s.user_id
-      WHERE s.id = ? AND s.user_id = ? AND s.shots = 0 AND s.engine = ? AND u.role = 'player' AND u.active = 1 AND ? < ?`)
-      .bind(ids[i], i, shots[i]!.power, shots[i]!.aim, result.made ? 1 : 0, result.kind, createdAt, setId, user.id, engine, now, freeThrowDeadline(set.slot)));
-  writes.push(db.prepare(`UPDATE freethrow_sets SET shots = ?, made = ?
-    WHERE id = ? AND shots = 0 AND (SELECT COUNT(*) FROM freethrow_shots WHERE set_id = ? AND id IN (${ids.map(() => '?').join(', ')})) = ?`)
-    .bind(shotsPerSet, made, setId, setId, ...ids, shotsPerSet));
-  if (made) {
-    // Ledger rows are written only when this request's shot rows were inserted.
-    const witness = ids[shotsPerSet - 1]!;
-    for (const [currency, amount] of [...(goalCounts(set.slot, now) ? [['score', made * goalScore]] as const : []), ['gold', made * goalGold]] as const) {
-      writes.push(db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
-        SELECT ?, s.user_id, ?, ?, '자유투 대결 골', ?, sh.created_at, ? FROM freethrow_shots sh JOIN freethrow_sets s ON s.id = sh.set_id WHERE sh.id = ?`)
-        .bind(crypto.randomUUID(), currency, amount, `freethrow:set:${setId}:${currency}`, currency === 'score' ? weekStart(date) : null, witness));
-    }
+  const points = scoreCounts(setDay(set.slot), now) ? made * goalScore : 0, gold = made * goalGold;
+  const date = new Date(now), finishedIso = date.toISOString(), token = crypto.randomUUID();
+  const writes: D1PreparedStatement[] = [db.prepare(`UPDATE freethrow_sets SET shots = ?, made = ?, points = ?, gold = ?, inputs_json = ?, results_json = ?, finish_token = ?, finished_at = ?
+    WHERE id = ? AND user_id = ? AND finished_at IS NULL AND engine = ? AND ? < ?
+      AND EXISTS (SELECT 1 FROM users WHERE id = freethrow_sets.user_id AND role = 'player' AND active = 1)`)
+    .bind(shots.length, made, points, gold, inputsJson, JSON.stringify(results), token, finishedIso, setId, user.id, engine, now, deadline)];
+  // Ledger rows are written only when this request recorded the set.
+  for (const [currency, amount] of [['score', points], ['gold', gold]] as const) {
+    if (amount) writes.push(db.prepare(`INSERT OR IGNORE INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start)
+      SELECT ?, s.user_id, ?, ?, '자유투 대결 골', ?, s.finished_at, ? FROM freethrow_sets s WHERE s.id = ? AND s.finish_token = ?`)
+      .bind(crypto.randomUUID(), currency, amount, `freethrow:set:${setId}:${currency}`, currency === 'score' ? weekStart(date) : null, setId, token));
   }
   await db.batch(writes);
-  const saved = await db.prepare(`SELECT ${SET_COLUMNS} FROM freethrow_sets WHERE id = ?`).bind(setId).first<SetRow>();
+  const saved = await read();
   if (!saved || !completedRow(saved)) {
     const active = await db.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'player' AND active = 1").bind(user.id).first();
     if (!active) throw new FreeThrowError(403, 'CANNOT_PLAY', '활성 플레이어만 공식 도전을 할 수 있어요.');
     throw new FreeThrowError(409, 'SET_CLOSED', '세트 상태가 바뀌었어요. 화면을 새로고침해 주세요.');
   }
   // A concurrent identical request may have won: then this one is a replay.
-  if (!same(await recorded())) throw new FreeThrowError(409, 'SET_CONFLICT', '이 세트는 이미 다르게 기록됐어요. 화면을 새로고침해 주세요.');
-  const mine = await db.prepare('SELECT 1 FROM freethrow_shots WHERE id = ?').bind(ids[shotsPerSet - 1]).first();
-  return respond(!mine);
+  if (saved.inputs_json !== inputsJson) throw new FreeThrowError(409, 'SET_CONFLICT', '이 세트는 이미 다르게 기록됐어요. 화면을 새로고침해 주세요.');
+  return respond(saved, saved.finish_token !== token);
 }

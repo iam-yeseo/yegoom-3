@@ -28,17 +28,24 @@ async function flick(page: Page, speed: number, slope = 0, { rise = 10 } = {}) {
   }), { x: box.x + box.width / 2, y: box.y + box.height * (423 / 560), height: box.height, speed, slope, rise });
 }
 const idle = (page: Page) => expect(court(page)).toHaveAttribute('data-mode', 'idle', { timeout: 6000 });
-/** Balls already decided in the official progress bar. */
-const decided = (page: Page) => page.locator('.play-progress-bar i.is-hit, .play-progress-bar i.is-miss');
+/** Balls whose result is known (data-decided) and balls that have left the hand (data-thrown). */
+const count = async (page: Page, name: 'thrown' | 'decided') => Number(await court(page).getAttribute(`data-${name}`));
+/** Throws for a whole official set: the 30 seconds start with the first ball
+ * and every ball let go in time counts, however many are still in the air.
+ * Returns how many balls left the hand and how many went in. */
 async function throwSet(page: Page, speed: (i: number) => number) {
-  let goals = 0;
-  for (let i = 0; i < 10; i++) {
+  const over = page.locator('.freethrow-lock');
+  for (let i = 0; !(await over.isVisible()); i++) {
     await flick(page, speed(i));
-    await expect(decided(page)).toHaveCount(i + 1, { timeout: 6000 });
-    if (await page.locator('.freethrow-callout').evaluate(element => element.classList.contains('is-made'))) goals++;
-    await idle(page);
+    // The next ball is in the hand a moment after a release, while the last one is still flying.
+    await expect(court(page)).toHaveAttribute('data-mode', 'idle', { timeout: 3000 });
   }
-  return goals;
+  // Balls already in the air when the time ran out are still judged.
+  await expect(over).toContainText('시간 끝!', { timeout: 8000 });
+  await expect.poll(async () => await count(page, 'decided') === await count(page, 'thrown'), { timeout: 8000 }).toBe(true);
+  const thrown = await count(page, 'thrown');
+  const goals = Number((await page.locator('.freethrow-clock-goals').innerText()).replace(/\D/g, ''));
+  return { thrown, goals };
 }
 
 test('free-throw practice plays full screen in preview without the server and explains every shot', async ({ page }) => {
@@ -121,9 +128,9 @@ test('free-throw sound preference survives a reload and the court fits short and
   await page.screenshot({ path: 'docs/screenshots/freethrow-practice-made-560.png' });
 });
 
-test('an official preview set records all ten balls at the end and shows the result', async ({ page }) => {
-  // Ten real throws with their flights take a while on a busy machine.
-  test.setTimeout(60_000);
+test('an official preview set runs for 30 seconds, counts every ball thrown in time and shows the result', async ({ page }) => {
+  // The set itself lasts 30 seconds.
+  test.setTimeout(90_000);
   await page.route('**/api/**', route => route.abort());
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#/preview/play/freethrow');
@@ -131,16 +138,26 @@ test('an official preview set records all ten balls at the end and shows the res
   const before = await gold();
   await page.getByRole('button', { name: '세트 시작하기' }).click();
   await expect(page.getByRole('region', { name: '자유투 공식 도전' })).toBeVisible();
+  // The clock waits for the first ball.
+  await expect(page.locator('.freethrow-clock-time')).toHaveText('30초');
+  await expect(page.locator('.freethrow-coach')).toContainText('공을 잡으면 30초 시작!');
   // 1.3 falls short with margin above the too-slow cutoff even on a busy machine.
-  const goals = await throwSet(page, i => (i % 2 ? 1.3 : 2.45));
+  const { thrown, goals } = await throwSet(page, i => (i % 2 ? 1.3 : 2.45));
+  // Far more than the old ten balls fit in 30 seconds, and balls overlap in the air.
+  expect(thrown).toBeGreaterThan(15);
   expect(goals).toBeGreaterThanOrEqual(1);
+  expect(goals).toBeLessThan(thrown);
   const result = page.locator('.play-result-dialog');
   await expect(result).toContainText(`${goals}골 성공!`);
+  // Half a point and 5G a goal.
+  await expect(result).toContainText(`+${goals * 0.5}점 · +${goals * 5}G`);
   await expect(result).toContainText('기록했어요');
   await page.screenshot({ path: 'docs/screenshots/freethrow-official-result-390.png' });
   await result.getByRole('button', { name: '확인' }).click();
   await expect(page.locator('.play-shell')).toHaveCount(0);
   await expect(page.locator('.freethrow-official')).toContainText(`${goals}골 성공!`);
+  await expect(page.locator('.freethrow-official')).toContainText(`${thrown}구를 던졌어요`);
+  await expect(page.locator('.freethrow-balls i')).toHaveCount(thrown);
   // The page behind scrolls again: nothing of the play view's lock is left.
   expect(await page.evaluate(() => [document.body.style.overflow, document.body.style.position, document.documentElement.style.overflowY, document.documentElement.dataset.playOpen ?? ''])).toEqual(['', '', '', '']);
   expect(await gold()).toBe(before + goals * 5);
@@ -150,8 +167,8 @@ test('an official preview set records all ten balls at the end and shows the res
 });
 
 test('an official set on the server is recorded once at the end, even across a lost response and a reload', async ({ page }) => {
-  // Ten real throws with their flights take a while on a busy machine.
-  test.setTimeout(60_000);
+  // The set itself lasts 30 seconds.
+  test.setTimeout(90_000);
   await page.setExtraHTTPHeaders({ 'CF-Connecting-IP': '192.0.2.72' });
   await page.setViewportSize({ width: 390, height: 844 });
   const login = await page.request.post('/api/auth/login', {
@@ -167,7 +184,7 @@ test('an official set on the server is recorded once at the end, even across a l
   // Nothing is sent while the set is being thrown.
   await page.route('**/api/freethrow/finish', route => route.abort());
   // 1.3 falls short with margin above the too-slow cutoff even on a busy machine.
-  await throwSet(page, () => 1.3);
+  const { thrown } = await throwSet(page, () => 1.3);
   const result = page.locator('.play-result-dialog');
   await expect(result).toContainText('0골 성공!');
   await expect(result).toContainText('기록을 보내지 못했어요', { timeout: 6000 });
@@ -181,7 +198,7 @@ test('an official set on the server is recorded once at the end, even across a l
   await expect(page.locator('.freethrow-official')).toContainText('0골 성공!', { timeout: 8000 });
   state = await (await page.request.get('/api/freethrow')).json();
   expect(state.current).toMatchObject({ completed: true, made: 0 });
-  expect(state.current.shots.map((shot: { kind: string }) => shot.kind)).toEqual(Array(10).fill('short'));
+  expect(state.current.shots.map((shot: { kind: string }) => shot.kind)).toEqual(Array(thrown).fill('short'));
   await page.goto('/#/');
   await expect(page.locator('.solo-tile', { hasText: '자유투 대결' })).toContainText('이번 세트 0골');
 });
@@ -192,8 +209,10 @@ test('leaving an official set midway asks first and ends it unfinished', async (
   await page.goto('/#/preview/play/freethrow');
   await page.getByRole('button', { name: '세트 시작하기' }).click();
   await flick(page, 1.3);
-  await expect(decided(page)).toHaveCount(1, { timeout: 6000 });
+  await expect(court(page)).toHaveAttribute('data-decided', '1', { timeout: 6000 });
   await idle(page);
+  // The 30 seconds are running.
+  await expect(page.locator('.freethrow-clock-time')).not.toHaveText('30초');
   await page.getByRole('button', { name: '나가기' }).click();
   await expect(page.locator('.play-quit-dialog')).toContainText('미완료로 끝나요');
   await page.getByRole('button', { name: '계속 던지기' }).click();

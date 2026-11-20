@@ -30,8 +30,18 @@
 .freethrow-meter-bar i { position: absolute; top: 50%; width: 14px; height: 14px; border: 3px solid #fff; border-radius: 50%; background: #f47c66; translate: -50% -50%; box-shadow: 0 2px 6px rgba(58, 51, 64, 0.2); transition: left var(--dur-m) var(--ease-out); }
 .freethrow-meter b, .freethrow-aim b { font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .freethrow-meter b { text-align: right; }
-.freethrow-balls { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px; }
-.freethrow-balls i { aspect-ratio: 1; border-radius: 50%; background: #f6f1eb; }
+.freethrow-balls { display: flex; flex-wrap: wrap; gap: 5px; }
+.freethrow-balls i { width: 14px; height: 14px; border-radius: 50%; background: #f6f1eb; }
+.freethrow-official-count { color: var(--muted); font-size: 12px; }
+.freethrow-clock { display: flex; align-items: center; gap: 10px; font-variant-numeric: tabular-nums; }
+.freethrow-clock-bar { flex: 1; height: 10px; overflow: hidden; border-radius: 999px; background: rgba(58, 51, 64, 0.12); }
+.freethrow-clock-bar i { display: block; height: 100%; border-radius: inherit; background: #f47c66; transition: width 100ms linear; }
+.freethrow-clock b { font-size: 17px; font-weight: 800; white-space: nowrap; }
+.freethrow-clock b span { margin-left: 1px; font-size: 12px; font-weight: 700; opacity: .7; }
+.freethrow-clock-time { min-width: 38px; text-align: right; }
+.freethrow-clock-goals { border-radius: 999px; padding: 3px 10px; background: #fff; color: #e0644e; }
+.freethrow-clock.is-ending .freethrow-clock-time { color: #d9604c; }
+.freethrow-clock.is-ending .freethrow-clock-bar i { background: #d9604c; }
 .freethrow-balls i.is-made { background: #f47c66; }
 .freethrow-balls i.is-miss { background: #fff; box-shadow: inset 0 0 0 2px #e4dce6; }
 .freethrow-guide { padding: 14px 16px; font-size: 13px; line-height: 1.6; }

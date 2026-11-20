@@ -1,5 +1,5 @@
 import { ACHIEVEMENT_BY_KEY, ACHIEVEMENT_RULES, ACHIEVEMENTS, isAchievementKey, type AchievementClientEvent, type AchievementProgress, type AchievementsResponse } from '../shared/achievements';
-import { CATCHMIND_RULES, FREETHROW_RULES } from '../shared/balance';
+import { CATCHMIND_RULES } from '../shared/balance';
 import { STOCK_RULES, STOCKS } from '../shared/stocks';
 import type { GameId } from '../shared/types';
 import { readBalances } from './balances';
@@ -135,7 +135,7 @@ const FACTS: readonly FactDefinition[] = [
     sql: `(SELECT json_group_array(reference) FROM notifications WHERE user_id = u.id AND kind = 'rank'
       AND json_extract(payload_json, '$.period') = 'week' AND json_extract(payload_json, '$.place') = 1)` },
   exists('freethrow_join', 'freethrow', 'freethrow_sets WHERE user_id = u.id'),
-  exists('freethrow_zero', 'freethrow', `freethrow_sets WHERE user_id = u.id AND shots = ${FREETHROW_RULES.shotsPerSet} AND made = 0`),
+  exists('freethrow_zero', 'freethrow', `freethrow_sets WHERE user_id = u.id AND finished_at IS NOT NULL AND shots >= ${ACHIEVEMENT_RULES.freethrow.zeroMinShots} AND made = 0`),
   { name: 'freethrow', scope: 'freethrow', binds: context => [context.since], periodic: ACHIEVEMENT_RULES.freethrow.goals.map(goals => `freethrow_${goals}`),
     sql: `(SELECT json_group_array(json_object('d', date, 'm', made)) FROM freethrow_sets
       WHERE user_id = u.id AND date >= ? AND made >= ${ACHIEVEMENT_RULES.freethrow.goals[0]})` },
@@ -313,7 +313,7 @@ export function achievementScopesFor(pathname: string): readonly AchievementScop
     '/api/shop/kuji': ['kuji'], '/api/shop/lotto': ['lotto'], '/api/shop/speetto': ['speetto'], '/api/shop/speetto/reveal': [], '/api/shop/slot': ['slot'],
     // A buy can also be the first holding of a stock already at today's limit.
     '/api/stock/trade': ['stock-trade', 'stock-market'],
-    '/api/events/launch-gift': [], '/api/ranking/results/seen': [], '/api/games/luck/photo': [],
+    '/api/events/launch-gift': [], '/api/ranking/results/seen': [], '/api/games/luck/photo': [], '/api/notices/read': [],
   };
   if (exact[pathname]) return exact[pathname];
   const prefixes: [string, readonly AchievementScope[]][] = [

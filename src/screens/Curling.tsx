@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ARCADE_RULES } from "../../shared/balance";
-import { inHouse, type StoneInput, type StonePosition, type ThrowResult } from "../../shared/curling-physics";
+import { CURLING_ZONES, inHouse, sheetPoints, stonePoints, type StoneInput, type StonePosition, type ThrowResult } from "../../shared/curling-physics";
 import { ArcadeScreen, arcadeHours, type ArcadeCopy, type ArcadePlayProps, type ArcadeScreenProps } from "../arcade/screen";
 import { createArcadeSound, type ArcadeSound } from "../arcade/sound";
 import { PlayProgress, PlayShell, QuitDialog } from "../components/PlayShell";
@@ -9,14 +9,17 @@ import { STAGE } from "../curling/render";
 import { anim, reduced } from "../motion";
 import { SoundIcon } from "./Santa";
 
-const { tries, score, gold } = ARCADE_RULES.curling;
+const { tries, gold } = ARCADE_RULES.curling;
+const TOP = CURLING_ZONES[0].points;
+/** "빨간 원 안 10점 · 빨간 원에 걸침 8점 · …" */
+const ZONE_TEXT = CURLING_ZONES.map(zone => `${zone.label} ${zone.points}점`).join(" · ");
 
 /** What the player reads after each stone: what happened, then how to adjust. */
-export function stoneCopy(result: ThrowResult): { title: string; detail: string; good: boolean } {
+export function stoneCopy(result: ThrowResult, points = 0): { title: string; detail: string; good: boolean } {
   const bump = result.knocked ? " 그런데 하우스에 있던 내 스톤을 밀어냈어요." : "";
   switch (result.kind) {
-    case "button": return { title: "버튼에 딱!", detail: `하우스 한가운데예요. 해설자가 있었다면 지금 소리 질렀어요.${bump}`, good: true };
-    case "house": return { title: "하우스 안착!", detail: `끝날 때까지 하우스에 남아 있으면 1점이에요.${bump}`, good: true };
+    case "button": return { title: `한가운데 ${points || TOP}점!`, detail: `하우스 한가운데예요. 해설자가 있었다면 지금 소리 질렀어요.${bump}`, good: true };
+    case "house": return { title: points ? `${points}점 자리!` : "하우스 안착!", detail: `가운데에 가까울수록 점수가 커요. 엔드가 끝날 때 놓인 자리로 계산해요.${bump}`, good: true };
     case "guard": return result.hits
       ? { title: "스톤에 부딪혀 멈췄어요", detail: `앞에 있던 스톤에 막혔어요. 방향을 옮겨서 비켜 가 보세요.${bump}`, good: false }
       : { title: "하우스 앞에 멈췄어요", detail: "조금 약했어요. 살짝만 더 빠르게 밀어 보세요. 이 스톤은 길을 막는 가드가 됐어요.", good: false };
@@ -29,12 +32,14 @@ export function stoneCopy(result: ThrowResult): { title: string; detail: string;
 const aimLabel = (aim: number) => (aim === 0 ? "가운데" : `${aim < 0 ? "왼쪽" : "오른쪽"} ${Math.abs(aim)}`);
 
 const COPY: ArcadeCopy = {
-  title: "컬링", unit: "개", tries: `스톤 ${tries}개`, per: "하우스 스톤 1개마다",
+  title: "컬링", unit: "개", tries: `스톤 ${tries}개`, pay: `스톤마다 최대 ${TOP}점 + ${gold}G`,
+  rank: "points", rankUnit: "점",
+  doneTitle: set => `${set.tries.reduce((sum, entry) => sum + (entry.points ?? 0), 0)}점 · 스톤 ${set.made}개 안착`,
   practice: "마음껏 밀며 얼음 감을 익혀요 · 보상 없음", startLabel: "엔드 시작하기",
   art: "/curling/result.webp",
   nothing: "하우스에 남은 스톤이 없었어요.",
-  resultTitle: made => (made === tries ? "퍼펙트 엔드!" : `스톤 ${made}개 안착!`),
-  resultLine: made => (made >= 4 ? "얼음을 읽는 눈이 생겼어요. 오늘의 기록판을 확인해 보세요!" : made ? "다음 엔드에서는 하나 더! 연습 모드로 힘 조절을 다듬어 보세요." : "스톤들이 전부 산책을 나갔어요. 다음 엔드에서 만회해요!"),
+  resultTitle: (made, points) => (points === tries * TOP ? "퍼펙트 엔드!" : made ? `${points ? `${points}점 · ` : ""}스톤 ${made}개 안착!` : "스톤 0개 안착"),
+  resultLine: (made, points) => (points >= tries * 6 ? "얼음을 읽는 눈이 생겼어요. 오늘의 기록판을 확인해 보세요!" : made ? "다음 엔드에서는 한 칸 더 가운데로! 연습 모드로 힘 조절을 다듬어 보세요." : "스톤들이 전부 산책을 나갔어요. 다음 엔드에서 만회해요!"),
   guide: <>
     <ol>
       <li>얼음 위를 누르거나 끌어서 <b>방향</b>을 먼저 정해요. 점선이 스톤이 나갈 방향이에요. 아래 ◀ ▶ 로 조금씩 옮길 수도 있어요.</li>
@@ -42,14 +47,22 @@ const COPY: ArcadeCopy = {
       <li>스톤이 미끄러지는 동안 <b>얼음을 손가락으로 문지르면</b>(스위핑) 덜 느려져서 조금 더 멀리 가요. 약하게 밀었을 때 살리는 용도예요. 너무 세게 민 스톤은 되돌릴 수 없어요.</li>
       <li>스톤은 그대로 남아요. 먼저 놓은 스톤이 길을 막기도 하고, 부딪혀서 밀려나기도 해요.</li>
       <li>호그 라인(빨간 선)을 못 넘거나, 뒤로 지나가거나, 옆 벽에 닿은 스톤은 치워져요.</li>
-      <li>스톤 {tries}개를 다 민 뒤 하우스(동그란 과녁)에 조금이라도 걸쳐 있는 스톤 수가 점수예요.</li>
+      <li>스톤 {tries}개를 다 민 뒤, 하우스(동그란 과녁)에 놓인 스톤마다 <b>가운데에 가까울수록 높은 점수</b>를 받아요.</li>
+      <li>{ZONE_TEXT}. 스톤 한가운데가 원 안에 있으면 “안”, 가장자리만 닿아 있으면 “걸침”이에요.</li>
     </ol>
-    <p>연습 모드는 횟수 제한도 보상도 없어요. 공식 도전은 한국 시간 {arcadeHours("curling")}시마다 한 엔드예요. 시작하면 그 시간의 기회를 쓴 거예요. 스톤 {tries}개를 다 밀면 한 번에 기록되고, 하우스에 남은 스톤 1개마다 {score}점 + {gold}G를 받아요. 중간에 나가면 미완료로 끝나요.</p>
+    <p>연습 모드는 횟수 제한도 보상도 없어요. 공식 도전은 한국 시간 {arcadeHours("curling")}시마다 한 엔드예요. 시작하면 그 시간의 기회를 쓴 거예요. 스톤 {tries}개를 다 밀면 한 번에 기록되고, 스톤이 놓인 자리의 점수를 모두 더해 받아요(한 엔드 최대 {tries * TOP}점). 골드는 하우스에 남은 스톤 1개마다 {gold}G예요. 중간에 나가면 미완료로 끝나요.</p>
   </>,
 };
 
 export function Curling(props: ArcadeScreenProps) {
   return <ArcadeScreen game="curling" copy={COPY} {...props} play={play => <CurlingPlay key={`${play.mode}:${play.slot}`} {...play} />} />;
+}
+
+/** What the stone just thrown is worth where it stopped (it is the newest one left on the sheet). */
+function lastPoints(result: ThrowResult, sheet: readonly StonePosition[]): number {
+  const id = Math.max(-1, ...result.frames[0]!.stones.map(stone => stone.id));
+  const stone = sheet.find(left => left.id === id);
+  return stone ? stonePoints(stone) : 0;
 }
 
 /** The full-screen sheet. An official end's throws stay on the device until
@@ -89,10 +102,10 @@ function CurlingPlay({ mode, onFinish, onQuit }: ArcadePlayProps) {
           // The throw as it was played: its sweeping is part of what the server simulates again.
           inputs.current.push(result.input);
           setSheet(left); setLast(result); setThrown(inputs.current.length);
-          const copy = stoneCopy(result);
+          const copy = stoneCopy(result, lastPoints(result, left));
           if (copy.good) effects.cheer(result.kind === "button" ? 2 : 0); else effects.sad();
           if (!reduced()) anim(callout.current, [{ scale: ".7", opacity: 0 }, { scale: "1.06", opacity: 1, offset: .6 }, { scale: "1", opacity: 1 }], { dur: 320, ease: "spring" });
-          if (official && inputs.current.length === tries) finishRef.current(inputs.current.slice(0, tries), left.filter(inHouse).length);
+          if (official && inputs.current.length === tries) finishRef.current(inputs.current.slice(0, tries), left.filter(inHouse).length, sheetPoints(left));
         },
       }, tries);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "시트를 표시하지 못했어요."); return; }
@@ -116,14 +129,14 @@ function CurlingPlay({ mode, onFinish, onQuit }: ArcadePlayProps) {
   }
   function toggleSound() { const next = !muted; sound.current?.setMuted(next); setMuted(next); }
   const nudge = (step: number) => controller.current?.setAim(aim + step);
-  const copy = last ? stoneCopy(last) : null;
-  const housed = sheet.filter(inHouse).length;
+  const copy = last ? stoneCopy(last, lastPoints(last, sheet)) : null;
+  const housed = sheet.filter(inHouse).length, total = sheetPoints(sheet);
   // Each thrown stone is marked by whether it lies in the house right now.
   const marks = Array.from({ length: thrown }, (_, id) => sheet.some(stone => stone.id === id && inHouse(stone)));
   const waiting = sheetMode === "ready" || sheetMode === "holding";
   return <PlayShell label={official ? "컬링 공식 도전" : "컬링 연습"} theme={{ background: "#dcecf4", text: "#3a3340", tone: "light" }} onClose={askQuit}
     top={official ? <PlayProgress marks={marks} total={tries} current={over ? null : thrown} label="민 스톤" />
-      : <div className="arcade-practice-stats" aria-label="연습 기록"><strong>연습</strong><span>스톤 <b>{Math.min(thrown + 1, tries)}/{tries}</b></span><span>하우스 <b>{housed}</b></span></div>}
+      : <div className="arcade-practice-stats" aria-label="연습 기록"><strong>연습</strong><span>스톤 <b>{Math.min(thrown + 1, tries)}/{tries}</b></span><span>지금 <b>{total}점</b></span></div>}
     right={<button type="button" className="play-icon-button" aria-pressed={!muted} aria-label={muted ? "소리 켜기" : "소리 끄기"} onClick={toggleSound}><SoundIcon muted={muted} /></button>}
     stage={{ width: STAGE.width, height: STAGE.height, content: <div className="arcade-stage" data-mode={sheetMode} data-sweeping={sweeping || undefined}>
       <canvas ref={canvas} width={STAGE.width} height={STAGE.height} role="img"
@@ -133,8 +146,8 @@ function CurlingPlay({ mode, onFinish, onQuit }: ArcadePlayProps) {
       </div>
       {!thrown && waiting && <div className="arcade-coach" aria-hidden="true">방향을 정하고, 스톤을 위로 슉!</div>}
       {sheetMode === "sliding" && <div className={`arcade-coach curling-sweep ${sweeping ? "is-on" : ""}`} aria-live="polite">{sweeping ? "쓱쓱! 더 멀리 가는 중" : "얼음을 문지르면 조금 더 멀리 가요"}</div>}
-      {over && official && <div className="arcade-lock"><span>엔드 끝! 하우스에 {housed}개</span></div>}
-      {over && !official && <div className="arcade-again"><strong>이번 엔드 {housed}개 안착</strong>
+      {over && official && <div className="arcade-lock"><span>엔드 끝! {total}점 · 하우스에 {housed}개</span></div>}
+      {over && !official && <div className="arcade-again"><strong>이번 엔드 {total}점 · {housed}개 안착</strong>
         <button type="button" className="primary-button" onClick={again}>한 엔드 더</button></div>}
       {error && <p className="arcade-play-error" role="alert">{error}</p>}
     </div> }}
