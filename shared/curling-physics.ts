@@ -12,6 +12,10 @@ export interface StoneInput {
   power: number;
   /** −100–100: the direction chosen before the push. 0 is straight up the sheet. */
   aim: number;
+  /** Sweeping, as frame ranges [from, to, from, to, …] counted from the release
+   * (FRAME_DT each): while a range is on, the ice in front of the thrown stone
+   * is brushed and it slows down less. Absent when nothing was swept. */
+  sweep?: number[];
 }
 export type StoneKind = 'button' | 'house' | 'guard' | 'wide' | 'short' | 'long' | 'out';
 export interface StonePosition { id: number; x: number; y: number }
@@ -54,22 +58,38 @@ const FRICTION = 0.9;
 export const SLIDE = { teePower: 55, perPower: 0.12, min: 0.4 } as const;
 /** Full aim (±100) tilts the throw sideways by this ratio (≈ ±17°). */
 export const AIM_RATIO = 0.3;
+/** Brushing the ice takes this share off the thrown stone's friction. Swept
+ * from release to rest, a draw to the tee carries about a metre further. */
+export const SWEEP = { ease: 0.16, maxRanges: 24 } as const;
 const RESTITUTION = 0.9;
 const STEP = 1 / 240;
 const STEPS_PER_FRAME = 4;
 export const FRAME_DT = STEP * STEPS_PER_FRAME;
 /** Hard cap on simulated time (also bounds Worker CPU). */
 const MAX_STEPS = 240 * 10;
+export const MAX_FRAMES = MAX_STEPS / STEPS_PER_FRAME;
 
+/** Sweep ranges are whole frames in order, never touching or overlapping, and few enough to store. */
+export function validSweep(value: unknown): value is number[] {
+  if (!Array.isArray(value) || value.length % 2 !== 0 || value.length > SWEEP.maxRanges * 2) return false;
+  let last = -1;
+  for (const frame of value as unknown[]) {
+    if (!Number.isInteger(frame) || (frame as number) <= last || (frame as number) > MAX_FRAMES) return false;
+    last = frame as number;
+  }
+  return true;
+}
 export function clampStone(input: StoneInput): StoneInput {
   const round = (value: number, low: number, high: number) => Math.max(low, Math.min(high, Math.round(Number.isFinite(value) ? value : 0)));
-  return { power: round(input.power, 0, 100), aim: round(input.aim, -100, 100) };
+  const sweep = input.sweep?.length && validSweep(input.sweep) ? { sweep: [...input.sweep] } : {};
+  return { power: round(input.power, 0, 100), aim: round(input.aim, -100, 100), ...sweep };
 }
 export function validStone(value: unknown): value is StoneInput {
   const input = value && typeof value === 'object' ? value as Record<string, unknown> : null;
   return !!input && Number.isInteger(input.power) && Number.isInteger(input.aim)
     && (input.power as number) >= 0 && (input.power as number) <= 100
-    && (input.aim as number) >= -100 && (input.aim as number) <= 100;
+    && (input.aim as number) >= -100 && (input.aim as number) <= 100
+    && (input.sweep === undefined || validSweep(input.sweep));
 }
 /** How far a stone thrown this hard slides when nothing is in its way. */
 export const slideDistance = (power: number): number => Math.max(SLIDE.min, SHEET.tee + (power - SLIDE.teePower) * SLIDE.perPower);
@@ -92,8 +112,23 @@ const onButton = (stone: { x: number; y: number }): boolean => {
 
 interface Body { id: number; x: number; y: number; vx: number; vy: number; alive: boolean; gone: 'side' | 'back' | null }
 
-/** One throw onto a sheet that already holds `before`. The new stone gets `id`. */
-export function simulateThrow(before: readonly StonePosition[], raw: StoneInput, id: number): ThrowResult {
+/** A throw being played out frame by frame, so the sweeping can be decided as it goes. */
+export interface ThrowRun {
+  /** Everything has stopped (or the time cap was reached). */
+  readonly done: boolean;
+  /** Frames advanced so far. */
+  readonly frame: number;
+  /** Stones in play right now. */
+  stones(): StonePosition[];
+  /** The thrown stone, while it is still sliding in play. */
+  sliding(): StonePosition | null;
+  /** Moves everything on by one frame, brushing the ice or not; returns what happened in it. */
+  advance(sweeping: boolean): SheetEvent[];
+  /** The outcome, once done. Its input carries the sweeping exactly as it was applied. */
+  result(): ThrowResult;
+}
+/** Starts a throw onto a sheet that already holds `before`. The new stone gets `id`. */
+export function startThrow(before: readonly StonePosition[], raw: StoneInput, id: number): ThrowRun {
   const input = clampStone(raw);
   const r = SHEET.stoneRadius, direction = aimDirection(input.aim);
   const speed = Math.sqrt(2 * FRICTION * slideDistance(input.power));
@@ -107,65 +142,101 @@ export function simulateThrow(before: readonly StonePosition[], raw: StoneInput,
   const frames: SheetFrame[] = [snapshot()];
   const events: SheetEvent[] = [];
   const touching = new Set<string>();
-  let hits = 0;
-  for (let step = 1; step <= MAX_STEPS; step++) {
-    let moving = false;
-    for (const body of bodies) {
-      if (!body.alive) continue;
-      const fast = Math.sqrt(body.vx * body.vx + body.vy * body.vy);
-      if (fast <= 0) continue;
-      const drop = FRICTION * STEP;
-      if (fast <= drop) { body.vx = 0; body.vy = 0; continue; }
-      const keep = (fast - drop) / fast;
-      body.vx *= keep; body.vy *= keep;
-      body.x += body.vx * STEP; body.y += body.vy * STEP;
-      moving = true;
-    }
-    // Equal stones: they trade the part of their speed that points at each other.
-    for (let i = 0; i < bodies.length; i++) {
-      const a = bodies[i]!;
-      if (!a.alive) continue;
-      for (let j = i + 1; j < bodies.length; j++) {
-        const b = bodies[j]!;
-        if (!b.alive) continue;
-        const dx = b.x - a.x, dy = b.y - a.y, gap2 = dx * dx + dy * dy, key = `${a.id}:${b.id}`;
-        if (gap2 >= 4 * r * r) { touching.delete(key); continue; }
-        const gap = Math.sqrt(gap2);
-        if (gap < 1e-9) continue;
-        const nx = dx / gap, ny = dy / gap, overlap = (2 * r - gap) / 2;
-        a.x -= nx * overlap; a.y -= ny * overlap; b.x += nx * overlap; b.y += ny * overlap;
-        const closing = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
-        if (closing > 0) {
-          const push = (1 + RESTITUTION) / 2 * closing;
-          a.vx -= nx * push; a.vy -= ny * push; b.vx += nx * push; b.vy += ny * push;
-          if (!touching.has(key)) {
-            touching.add(key);
-            events.push({ t: step * STEP, type: 'hit' });
-            if (a === thrown || b === thrown) hits++;
+  const swept: number[] = [];
+  let hits = 0, step = 0, frame = 0, done = false, outcome: ThrowResult | null = null;
+  function advance(sweeping: boolean): SheetEvent[] {
+    if (done) return [];
+    const from = events.length;
+    // Brushing only helps the stone that was thrown, while it is still moving, and only as often as can be stored.
+    const brushed = sweeping && thrown.alive && (thrown.vx !== 0 || thrown.vy !== 0)
+      && (swept.length % 2 === 1 || swept.length < SWEEP.maxRanges * 2);
+    if (brushed !== (swept.length % 2 === 1)) swept.push(frame);
+    do {
+      step++;
+      let moving = false;
+      for (const body of bodies) {
+        if (!body.alive) continue;
+        const fast = Math.sqrt(body.vx * body.vx + body.vy * body.vy);
+        if (fast <= 0) continue;
+        const drop = (brushed && body === thrown ? FRICTION * (1 - SWEEP.ease) : FRICTION) * STEP;
+        if (fast <= drop) { body.vx = 0; body.vy = 0; continue; }
+        const keep = (fast - drop) / fast;
+        body.vx *= keep; body.vy *= keep;
+        body.x += body.vx * STEP; body.y += body.vy * STEP;
+        moving = true;
+      }
+      // Equal stones: they trade the part of their speed that points at each other.
+      for (let i = 0; i < bodies.length; i++) {
+        const a = bodies[i]!;
+        if (!a.alive) continue;
+        for (let j = i + 1; j < bodies.length; j++) {
+          const b = bodies[j]!;
+          if (!b.alive) continue;
+          const dx = b.x - a.x, dy = b.y - a.y, gap2 = dx * dx + dy * dy, key = `${a.id}:${b.id}`;
+          if (gap2 >= 4 * r * r) { touching.delete(key); continue; }
+          const gap = Math.sqrt(gap2);
+          if (gap < 1e-9) continue;
+          const nx = dx / gap, ny = dy / gap, overlap = (2 * r - gap) / 2;
+          a.x -= nx * overlap; a.y -= ny * overlap; b.x += nx * overlap; b.y += ny * overlap;
+          const closing = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+          if (closing > 0) {
+            const push = (1 + RESTITUTION) / 2 * closing;
+            a.vx -= nx * push; a.vy -= ny * push; b.vx += nx * push; b.vy += ny * push;
+            if (!touching.has(key)) {
+              touching.add(key);
+              events.push({ t: step * STEP, type: 'hit' });
+              if (a === thrown || b === thrown) hits++;
+            }
           }
         }
       }
-    }
-    for (const body of bodies) {
-      if (!body.alive) continue;
-      const side = body.x > SHEET.halfWidth - r || body.x < r - SHEET.halfWidth;
-      if (side || body.y > BACK_LINE + r || body.y < -1) {
-        body.alive = false; body.gone = side ? 'side' : 'back';
-        events.push({ t: step * STEP, type: 'out' });
+      for (const body of bodies) {
+        if (!body.alive) continue;
+        const side = body.x > SHEET.halfWidth - r || body.x < r - SHEET.halfWidth;
+        if (side || body.y > BACK_LINE + r || body.y < -1) {
+          body.alive = false; body.gone = side ? 'side' : 'back';
+          events.push({ t: step * STEP, type: 'out' });
+        }
       }
-    }
-    if (step % STEPS_PER_FRAME === 0) frames.push(snapshot());
-    if (!moving) break;
+      if (step % STEPS_PER_FRAME === 0) frames.push(snapshot());
+      if (!moving || step >= MAX_STEPS) done = true;
+    } while (!done && step % STEPS_PER_FRAME !== 0);
+    frame++;
+    if (done && swept.length % 2 === 1) swept.push(frame);
+    return events.slice(from);
   }
-  // The thrown stone has to clear the hog line; one that does not is taken off.
-  let short = false;
-  if (thrown.alive && thrown.y < SHEET.hog + r) { thrown.alive = false; short = true; frames.push(snapshot()); }
-  const after = bodies.filter(body => body.alive).map(body => ({ id: body.id, x: body.x, y: body.y }));
-  const kind: StoneKind = short ? 'short'
-    : !thrown.alive ? (thrown.gone === 'side' ? 'out' : 'long')
-      : onButton(thrown) ? 'button' : inHouse(thrown) ? 'house' : inLane(thrown) && thrown.y < SHEET.tee ? 'guard' : 'wide';
-  const knocked = houseBefore.filter(stone => !after.some(left => left.id === stone && inHouse(left))).length;
-  return { input, kind, hits, knocked, frames, events, after };
+  function result(): ThrowResult {
+    if (outcome) return outcome;
+    if (!done) throw new Error('The throw is still sliding');
+    // The thrown stone has to clear the hog line; one that does not is taken off.
+    let short = false;
+    if (thrown.alive && thrown.y < SHEET.hog + r) { thrown.alive = false; short = true; frames.push(snapshot()); }
+    const after = bodies.filter(body => body.alive).map(body => ({ id: body.id, x: body.x, y: body.y }));
+    const kind: StoneKind = short ? 'short'
+      : !thrown.alive ? (thrown.gone === 'side' ? 'out' : 'long')
+        : onButton(thrown) ? 'button' : inHouse(thrown) ? 'house' : inLane(thrown) && thrown.y < SHEET.tee ? 'guard' : 'wide';
+    const knocked = houseBefore.filter(stone => !after.some(left => left.id === stone && inHouse(left))).length;
+    const played: StoneInput = { power: input.power, aim: input.aim, ...(swept.length ? { sweep: [...swept] } : {}) };
+    return outcome = { input: played, kind, hits, knocked, frames, events, after };
+  }
+  return {
+    get done() { return done; }, get frame() { return frame; },
+    stones: () => snapshot().stones,
+    sliding: () => (thrown.alive && (thrown.vx !== 0 || thrown.vy !== 0) ? { id: thrown.id, x: thrown.x, y: thrown.y } : null),
+    advance, result,
+  };
+}
+/** Whether a frame lies in one of the input's sweep ranges. */
+function sweptAt(sweep: readonly number[] | undefined, frame: number): boolean {
+  if (!sweep) return false;
+  for (let i = 0; i + 1 < sweep.length; i += 2) if (frame >= sweep[i]! && frame < sweep[i + 1]!) return true;
+  return false;
+}
+/** One whole throw onto a sheet that already holds `before`, swept as its input says. */
+export function simulateThrow(before: readonly StonePosition[], raw: StoneInput, id: number): ThrowResult {
+  const run = startThrow(before, raw, id), sweep = clampStone(raw).sweep;
+  while (!run.done) run.advance(sweptAt(sweep, run.frame));
+  return run.result();
 }
 
 export interface EndResult {

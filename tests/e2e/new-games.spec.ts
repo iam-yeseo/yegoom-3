@@ -47,6 +47,13 @@ test('curling: the home tile opens the sheet, a direction is chosen and a swipe 
   await expect(shell.locator('.arcade-aim b')).not.toHaveText(aimed);
   await swipe(page, [180, 492], [0, -170]);
   await expect(shell.locator('.arcade-stage')).toHaveAttribute('data-mode', 'sliding');
+  // Rubbing the ice while the stone slides sweeps it on.
+  await expect(shell.locator('.curling-sweep')).toContainText('문지르면');
+  await page.mouse.move(stage.x + stage.width * 0.5, stage.y + stage.height * 0.5); await page.mouse.down();
+  for (let rub = 0; rub < 14; rub++) { await page.mouse.move(stage.x + stage.width * (rub % 2 ? 0.58 : 0.42), stage.y + stage.height * 0.5); await page.waitForTimeout(25); }
+  await expect(shell.locator('.arcade-stage')).toHaveAttribute('data-sweeping', 'true');
+  await expect(shell.locator('.curling-sweep')).toContainText('쓱쓱');
+  await page.mouse.up();
   // Once it stops the result is named and the next stone is ready.
   await expect(shell.locator('.arcade-callout strong')).toBeVisible({ timeout: 12000 });
   await expect(shell.locator('.arcade-practice-stats')).toContainText('2/5');
@@ -104,6 +111,10 @@ test('bingo: the leader names a topic, fills a board, and confirms a word on the
   await page.getByPlaceholder(/분식집/).fill('분식집 메뉴');
   await page.getByRole('tab', { name: '5줄' }).click();
   await create.click();
+  // While the words are being written the leader sees how far along it is.
+  const progress = page.getByRole('progressbar', { name: '단어 만들기 진행' });
+  await expect(progress).toBeVisible();
+  await expect(page.locator('.bingo-making-head')).toContainText(/단어 \d+\/30개/);
   // Filling: 30 words, 25 cells. The board cannot be handed in until it is full.
   await expect(page.locator('.bingo-chip').first()).toHaveText('5줄 빙고');
   await expect(page.locator('.bingo-pool .bingo-word')).toHaveCount(30);
@@ -162,6 +173,14 @@ test('signed in: curling is recorded by the server, and bingo opens with the lea
   await page.getByPlaceholder(/분식집/).fill('과일');
   await page.getByRole('button', { name: /AI로 단어 30개 만들기/ }).click();
   await expect(page.locator('.bingo-error')).toContainText('직접 적어서');
+  await expect(page.getByRole('progressbar', { name: '단어 만들기 진행' })).toHaveCount(0);
+  // The create call answers in lines: progress first, then the board or the refusal.
+  const refused = await page.request.post('/api/bingo/create?stream=1', { headers, data: { requestId: 'e2e-bingo-stream-0123456789', topic: '과일', lines: 3 } });
+  expect(refused.status()).toBe(200);
+  expect(refused.headers()['content-type']).toContain('ndjson');
+  const lines = (await refused.text()).trim().split('\n').map(line => JSON.parse(line));
+  expect(lines[0]).toEqual({ progress: 0, of: 30 });
+  expect(lines.at(-1)).toMatchObject({ error: { status: 503, code: 'AI_UNAVAILABLE' } });
   const words = Array.from({ length: 30 }, (_, i) => `과일${i + 1}`);
   await page.locator('.bingo-field textarea').fill(words.join('\n'));
   await expect(page.getByText('단어 직접 적기 (30/30)')).toBeVisible();

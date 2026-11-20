@@ -15,7 +15,7 @@ export interface ArcadeJudge {
 export const ARCADE_JUDGES: Record<ArcadeGame, ArcadeJudge> = {
   curling: {
     reason: '컬링 하우스 안착',
-    clean: inputs => inputs.every(validStone) ? (inputs as StoneInput[]).map(({ power, aim }) => ({ power, aim })) : null,
+    clean: inputs => inputs.every(validStone) ? (inputs as StoneInput[]).map(({ power, aim, sweep }) => ({ power, aim, ...(sweep?.length ? { sweep: [...sweep] } : {}) })) : null,
     // A stone counts when it lies in the house once the last stone has stopped.
     judge: (_slot, inputs) => {
       const end = simulateEnd(inputs as StoneInput[]);

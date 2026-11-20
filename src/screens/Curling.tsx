@@ -39,6 +39,7 @@ const COPY: ArcadeCopy = {
     <ol>
       <li>얼음 위를 누르거나 끌어서 <b>방향</b>을 먼저 정해요. 점선이 스톤이 나갈 방향이에요. 아래 ◀ ▶ 로 조금씩 옮길 수도 있어요.</li>
       <li>스톤을 잡고 위로 쓸어 올리다가 손을 떼면 밀려 나가요. 손을 떼기 직전에 빠를수록 멀리 가요.</li>
+      <li>스톤이 미끄러지는 동안 <b>얼음을 손가락으로 문지르면</b>(스위핑) 덜 느려져서 조금 더 멀리 가요. 약하게 밀었을 때 살리는 용도예요. 너무 세게 민 스톤은 되돌릴 수 없어요.</li>
       <li>스톤은 그대로 남아요. 먼저 놓은 스톤이 길을 막기도 하고, 부딪혀서 밀려나기도 해요.</li>
       <li>호그 라인(빨간 선)을 못 넘거나, 뒤로 지나가거나, 옆 벽에 닿은 스톤은 치워져요.</li>
       <li>스톤 {tries}개를 다 민 뒤 하우스(동그란 과녁)에 조금이라도 걸쳐 있는 스톤 수가 점수예요.</li>
@@ -68,6 +69,7 @@ function CurlingPlay({ mode, onFinish, onQuit }: ArcadePlayProps) {
   const [last, setLast] = useState<ThrowResult | null>(null);
   const [lastInput, setLastInput] = useState<StoneInput | null>(null);
   const [hint, setHint] = useState("");
+  const [sweeping, setSweeping] = useState(false);
   const [muted, setMuted] = useState(false);
   const [visible, setVisible] = useState(!document.hidden);
   const [confirming, setConfirming] = useState(false);
@@ -80,9 +82,12 @@ function CurlingPlay({ mode, onFinish, onQuit }: ArcadePlayProps) {
     try {
       runtime = new CurlingController(canvas.current!, effects, {
         onMode: setSheetMode, onAim: setAim,
-        onThrow: input => { inputs.current.push(input); setLastInput(input); setHint(""); },
+        onThrow: input => { setLastInput(input); setHint(""); },
+        onSweep: setSweeping,
         onCancel: () => setHint("스톤을 잡고 위로 빠르게 쓸어 올리며 놓아요."),
         onResult: (result, left) => {
+          // The throw as it was played: its sweeping is part of what the server simulates again.
+          inputs.current.push(result.input);
           setSheet(left); setLast(result); setThrown(inputs.current.length);
           const copy = stoneCopy(result);
           if (copy.good) effects.cheer(result.kind === "button" ? 2 : 0); else effects.sad();
@@ -120,20 +125,21 @@ function CurlingPlay({ mode, onFinish, onQuit }: ArcadePlayProps) {
     top={official ? <PlayProgress marks={marks} total={tries} current={over ? null : thrown} label="민 스톤" />
       : <div className="arcade-practice-stats" aria-label="연습 기록"><strong>연습</strong><span>스톤 <b>{Math.min(thrown + 1, tries)}/{tries}</b></span><span>하우스 <b>{housed}</b></span></div>}
     right={<button type="button" className="play-icon-button" aria-pressed={!muted} aria-label={muted ? "소리 켜기" : "소리 끄기"} onClick={toggleSound}><SoundIcon muted={muted} /></button>}
-    stage={{ width: STAGE.width, height: STAGE.height, content: <div className="arcade-stage" data-mode={sheetMode}>
+    stage={{ width: STAGE.width, height: STAGE.height, content: <div className="arcade-stage" data-mode={sheetMode} data-sweeping={sweeping || undefined}>
       <canvas ref={canvas} width={STAGE.width} height={STAGE.height} role="img"
         aria-label="위에서 내려다본 컬링 시트. 얼음을 눌러 방향을 정하고, 아래의 스톤을 위로 쓸어 올리며 놓으면 하우스를 향해 미끄러져요." />
       <div ref={callout} className={`arcade-callout ${copy?.good ? "is-made" : "is-miss"}`} aria-hidden={!copy || !waiting && !over}>
         {copy && sheetMode !== "sliding" && <strong>{copy.title}</strong>}
       </div>
       {!thrown && waiting && <div className="arcade-coach" aria-hidden="true">방향을 정하고, 스톤을 위로 슉!</div>}
+      {sheetMode === "sliding" && <div className={`arcade-coach curling-sweep ${sweeping ? "is-on" : ""}`} aria-live="polite">{sweeping ? "쓱쓱! 더 멀리 가는 중" : "얼음을 문지르면 조금 더 멀리 가요"}</div>}
       {over && official && <div className="arcade-lock"><span>엔드 끝! 하우스에 {housed}개</span></div>}
       {over && !official && <div className="arcade-again"><strong>이번 엔드 {housed}개 안착</strong>
         <button type="button" className="primary-button" onClick={again}>한 엔드 더</button></div>}
       {error && <p className="arcade-play-error" role="alert">{error}</p>}
     </div> }}
     bottom={<>
-      <p className="arcade-status" role="status" aria-live="polite">{hint || (copy ? copy.detail : "얼음을 눌러 방향을 정한 뒤, 스톤을 잡고 위로 쓸어 올리면서 손을 떼요.")}</p>
+      <p className="arcade-status" role="status" aria-live="polite">{sheetMode === "sliding" ? "미끄러지는 동안 얼음을 문지르면 조금 더 멀리 가요." : hint || (copy ? copy.detail : "얼음을 눌러 방향을 정한 뒤, 스톤을 잡고 위로 쓸어 올리면서 손을 떼요.")}</p>
       <div className="arcade-readout-row">
         <button type="button" className="arcade-nudge" aria-label="방향을 왼쪽으로" disabled={!waiting || over} onClick={() => nudge(-3)}>◀</button>
         <div className="arcade-readout" aria-label="방향과 방금 민 세기">

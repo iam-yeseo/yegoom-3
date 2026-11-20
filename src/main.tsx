@@ -3,12 +3,15 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { installPressFeedback, installTouchEffect } from "./motion";
 import { applyFontSize, readFontSize } from "./font-size";
+import { preventFocusZoom } from "./input-zoom";
 import "./fonts.css";
 import "./styles.css";
 import "./screens.css";
 
 // Before the first render, so the chosen size never flashes.
 applyFontSize(readFontSize());
+// Typing in a field must not leave the page zoomed in (iOS).
+preventFocusZoom();
 installPressFeedback();
 installTouchEffect();
 

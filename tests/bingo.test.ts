@@ -3,7 +3,7 @@ import { BINGO_RULES } from '../shared/balance';
 import {
   BINGO_LINES, bingoBoardProblem, bingoKey, bingoLines, bingoTopicProblem, bingoWordsProblem, firstBingoTurn, nextBingoTurn, settleBingoCall, usableBingoWords, type BingoSeat,
 } from '../shared/bingo';
-import { wordsFromAnswer } from '../worker/bingo-ai';
+import { countStreamedWords, wordsFromAnswer } from '../worker/bingo-ai';
 
 const WORDS = Array.from({ length: 30 }, (_, i) => `단어${i + 1}`);
 const board = (offset = 0) => Array.from({ length: 25 }, (_, i) => WORDS[(i + offset) % 30]!);
@@ -100,5 +100,22 @@ describe('bingo rules', () => {
     expect(wordsFromAnswer('not json')).toBeNull();
     expect(wordsFromAnswer(answer('단어'))).toBeNull();
     expect(wordsFromAnswer(null)).toBeNull();
+  });
+
+  it('counts the words that have fully arrived in a streamed answer', () => {
+    const full = JSON.stringify({ words: ['떡볶이', '순대', '"따옴표"', '김밥'] });
+    expect(countStreamedWords('')).toBe(0);
+    expect(countStreamedWords('{"words"')).toBe(0);
+    expect(countStreamedWords('{"words":["떡볶')).toBe(0);
+    // A word counts once its closing quote and the comma (or bracket) after it are in.
+    expect(countStreamedWords('{"words":["떡볶이"')).toBe(0);
+    expect(countStreamedWords('{"words":["떡볶이",')).toBe(1);
+    expect(countStreamedWords('{"words":["떡볶이", "순대" ,"')).toBe(2);
+    // An escaped quote inside a word does not end it.
+    expect(countStreamedWords(full.slice(0, full.indexOf('김밥')))).toBe(3);
+    expect(countStreamedWords(full)).toBe(4);
+    // It only ever grows as the text does.
+    let last = 0;
+    for (let end = 0; end <= full.length; end++) { const count = countStreamedWords(full.slice(0, end)); expect(count).toBeGreaterThanOrEqual(last); last = count; }
   });
 });

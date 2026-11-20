@@ -29,7 +29,7 @@ import { AchievementError, achievementScopesFor, claimAchievement, readAchieveme
 import { RankResultError, markRankResultsSeen, readRankResults, settleDueRankingRewards } from './ranking-rewards';
 import { StockError, addMarketHoliday, advanceStocks, readAdminStockNews, readMarketHolidays, readStockDetail, readStockHome, readStockMarket, readStockNews, removeMarketHoliday, runStockCron, setStockNewsHidden, stockCronDue, stockPricesMoved, stockSecret, tradeStock } from './stocks';
 import { aiWriters, isAiProvider, readAiStatus, saveAiSettings } from './stock-ai';
-import { FEATURES, PLAY_RULES, isArcadeGame, nextPredictionOpenAt, playClosed, predictionDayOff, scoreCounts } from '../shared/balance';
+import { BINGO_RULES, FEATURES, PLAY_RULES, isArcadeGame, nextPredictionOpenAt, playClosed, predictionDayOff, scoreCounts } from '../shared/balance';
 
 export interface Env { DB: D1Database; ASSETS: Fetcher; STOCK_SEED_SECRET?: string; ANTHROPIC_API_KEY?: string; OPENAI_API_KEY?: string }
 interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player' | 'admin'; active: number; character: ArtKey | null; photo_version: number | null }
@@ -806,7 +806,32 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
     const sinceText = url.searchParams.get('since');
     const since = sinceText !== null && /^\d+$/.test(sinceText) ? Number(sinceText) : undefined;
     const input = request.method === 'POST' ? await body(request) : undefined;
-    return json(await bingoRoute(env.DB, user, bingoMatch[1], request.method, input, now, openaiBingoWords(env.DB, env.OPENAI_API_KEY, kstDate(now)), since));
+    const makeWords = openaiBingoWords(env.DB, env.OPENAI_API_KEY, kstDate(now));
+    if (bingoMatch[1] === 'create' && request.method === 'POST' && url.searchParams.get('stream') === '1') {
+      // Opening a game waits on the AI for several seconds. The answer is sent
+      // as lines of JSON: {"progress": n, "of": 30} as words arrive, then one
+      // {"done": <board>} or {"error": {...}}. The status is 200 either way.
+      // The open response body keeps the request alive until the last line is
+      // written, so this is not handed to waitUntil (which a caller may await
+      // before it starts reading the body).
+      const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+      const writer = writable.getWriter(), encoder = new TextEncoder();
+      const send = (line: unknown) => writer.write(encoder.encode(`${JSON.stringify(line)}\n`)).catch(() => undefined);
+      void (async () => {
+        void send({ progress: 0, of: BINGO_RULES.words });
+        try {
+          await send({ done: await bingoRoute(env.DB, user, 'create', 'POST', input, now, topic => makeWords(topic, words => { void send({ progress: words, of: BINGO_RULES.words }); })) });
+        } catch (error) {
+          if (error instanceof BingoError) await send({ error: { status: error.status, code: error.code, message: error.message } });
+          else {
+            console.error('Bingo create failed', error instanceof Error ? error.name : 'UnknownError');
+            await send({ error: { status: 500, code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } });
+          }
+        } finally { await writer.close().catch(() => undefined); }
+      })();
+      return new Response(readable, { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+    }
+    return json(await bingoRoute(env.DB, user, bingoMatch[1], request.method, input, now, makeWords, since));
   }
   if (url.pathname === '/api/me/attendance') {
     if (request.method === 'GET') return json({ attendance: await readAttendance(env.DB, user, now, url.searchParams.get('month') ?? undefined) });

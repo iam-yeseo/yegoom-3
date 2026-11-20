@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { BACK_LINE, SHEET, inHouse, simulateEnd, simulateThrow, slideDistance, validStone } from '../shared/curling-physics';
+import { BACK_LINE, MAX_FRAMES, SHEET, SWEEP, inHouse, simulateEnd, simulateThrow, slideDistance, startThrow, validStone, validSweep } from '../shared/curling-physics';
 
 const FINGERPRINT = '2f0ced8c41ca1432a25c49320e7d441054c3d6a36d732941ae4e00e0a6468a12';
 const fingerprint = () => {
@@ -83,6 +83,56 @@ describe('curling physics', () => {
         expect(stone.y).toBeGreaterThanOrEqual(SHEET.hog + SHEET.stoneRadius - 1e-9);
       }
     }
+  });
+
+  it('carries a swept stone further: about a metre at draw weight, and nothing for a stone that has stopped', () => {
+    const plain = simulateThrow([], { power: 45, aim: 0 }, 0);
+    const swept = simulateThrow([], { power: 45, aim: 0, sweep: [0, MAX_FRAMES] }, 0);
+    const gain = swept.after[0]!.y - plain.after[0]!.y;
+    expect(gain).toBeGreaterThan(0.6); expect(gain).toBeLessThan(1.1);
+    // A weak throw that would have been a guard is brought into the house.
+    expect(simulateThrow([], { power: 40, aim: 0 }, 0).kind).toBe('guard');
+    expect(simulateThrow([], { power: 40, aim: 0, sweep: [0, MAX_FRAMES] }, 0).kind).toBe('house');
+    // Brushing for part of the slide helps less, and sooner helps more than later.
+    const early = simulateThrow([], { power: 45, aim: 0, sweep: [0, 60] }, 0).after[0]!.y, late = simulateThrow([], { power: 45, aim: 0, sweep: [120, 180] }, 0).after[0]!.y;
+    expect(early).toBeGreaterThan(late); expect(late).toBeGreaterThan(plain.after[0]!.y); expect(early).toBeLessThan(swept.after[0]!.y);
+    // It never makes a stone shorter, and brushing after everything has stopped changes nothing.
+    expect(simulateThrow([], { power: 45, aim: 0, sweep: [500, 560] }, 0).after).toEqual(plain.after);
+    // The stored input keeps only the frames that were really brushed.
+    expect(swept.input.sweep![0]).toBe(0);
+    expect(swept.input.sweep![1]).toBeGreaterThanOrEqual(swept.frames.length - 1);
+    expect(swept.input.sweep![1]).toBeLessThanOrEqual(swept.frames.length);
+    expect(simulateThrow([], { power: 45, aim: 0, sweep: [500, 560] }, 0).input.sweep).toBeUndefined();
+    expect(SWEEP.ease).toBeGreaterThan(0);
+  });
+
+  it('gives the same throw whether it is played frame by frame or simulated from its stored sweeping', () => {
+    const guard = simulateThrow([], { power: 38, aim: 0 }, 0);
+    const run = startThrow(guard.after, { power: 50, aim: 8 }, 1);
+    // Brush in bursts, as a finger would.
+    while (!run.done) run.advance(run.frame % 50 < 20 && run.frame > 10);
+    const live = run.result();
+    expect(live.input.sweep!.length).toBeGreaterThan(2);
+    expect(validStone(live.input)).toBe(true);
+    const again = simulateThrow(guard.after, live.input, 1);
+    expect(JSON.stringify(again)).toBe(JSON.stringify(live));
+    // Only the thrown stone is helped: a struck stone slides on ordinary ice.
+    const hit = simulateThrow(guard.after, { power: 55, aim: 0 }, 1), hitSwept = simulateThrow(guard.after, { power: 55, aim: 0, sweep: [200, MAX_FRAMES] }, 1);
+    expect(hit.hits).toBe(1);
+    expect(hitSwept.after.find(stone => stone.id === 0)!.y).toBeCloseTo(hit.after.find(stone => stone.id === 0)!.y, 1);
+    // No more ranges are taken than can be stored.
+    const busy = startThrow([], { power: 100, aim: 0 }, 0);
+    while (!busy.done) busy.advance(busy.frame % 2 === 0);
+    expect(busy.result().input.sweep!.length).toBeLessThanOrEqual(SWEEP.maxRanges * 2);
+    expect(validSweep(busy.result().input.sweep)).toBe(true);
+  });
+
+  it('accepts sweeping only as ordered whole-frame ranges', () => {
+    expect(validSweep([])).toBe(true);
+    expect(validSweep([0, 10, 12, 40])).toBe(true);
+    for (const bad of [[5], [10, 10], [10, 5], [0, 10, 10, 20], [0, 10, 5, 20], [-1, 4], [0, 1.5], [0, MAX_FRAMES + 1], Array.from({ length: SWEEP.maxRanges * 2 + 2 }, (_, i) => i * 2), '0,10', null]) expect(validSweep(bad), JSON.stringify(bad)).toBe(false);
+    expect(validStone({ power: 50, aim: 0, sweep: [0, 10] })).toBe(true);
+    expect(validStone({ power: 50, aim: 0, sweep: [10, 0] })).toBe(false);
   });
 
   it('accepts only whole numbers in range', () => {
