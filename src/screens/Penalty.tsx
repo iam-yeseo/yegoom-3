@@ -100,7 +100,8 @@ function PenaltyPlay({ mode, slot, onFinish, onQuit }: ArcadePlayProps) {
     return () => { clearTimeout(warmUp); runtime.destroy(); effects.dispose(); controller.current = null; document.removeEventListener("visibilitychange", visibility); };
   }, [official, slot]);
   const done = official && marks.length >= tries;
-  const running = visible && !confirming && !done;
+  // The last kick's ball and keeper keep moving behind the result; the controller stops by itself.
+  const running = visible && !confirming;
   useEffect(() => { controller.current?.setEnabled(running); }, [running]);
 
   function askQuit() {
