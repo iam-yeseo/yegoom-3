@@ -151,7 +151,7 @@ export const BINGO_RULES = {
   maxTopicLength: 40, maxWordLength: 10,
   pollIntervalMs: 5000, idlePollIntervalMs: 10000,
   /** The word list is written by OpenAI (worker/bingo-ai.ts); the daily cap is shared with stock news. */
-  ai: { reasoningEffort: 'low', maxTokens: 4000, timeoutMs: 45_000 },
+  ai: { reasoningEffort: 'low' as const, maxTokens: 4000, timeoutMs: 45_000 },
 } as const;
 /** Santa's gift delivery, a limited Christmas event (docs/plan-santa.md). One run
  * of `houses` chimneys per KST half day (오전 00–12시, 오후 12–24시). Each gift in a

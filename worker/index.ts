@@ -15,6 +15,8 @@ import { CatchmindError, catchmindRoute, readCatchmindGallery, readCatchmindImag
 import { FreeThrowError, finishFreeThrowSet, getFreeThrowState, getFreeThrowSummary, startFreeThrowSet } from './freethrow';
 import { SantaError, finishSantaRun, getSantaState, getSantaSummary, startSantaRun } from './santa';
 import { ArcadeError, finishArcadeSet, getArcadeState, getArcadeSummaries, startArcadeSet } from './arcade';
+import { BingoError, bingoRoute, readBingoSummary } from './bingo';
+import { openaiBingoWords } from './bingo-ai';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
 import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
@@ -481,7 +483,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id ${EQUIPPED_TAG_JOIN}
     WHERE (u.role = 'player' AND u.active = 1) OR u.id = ? OR u.username IN (?, ?, ?) ORDER BY u.username`)
     .bind(weekStart(now), user.id, ...GAME_IDS.map(id => GAME_RULES[id].author)).all<BootstrapProfile>().then(result => result.results);
-  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, freethrow, santa, arcade, dailyFree, launchGift, notifications, lottoNotice, rankResults, stock] = await Promise.all([
+  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, freethrow, santa, arcade, bingo, dailyFree, launchGift, notifications, lottoNotice, rankResults, stock] = await Promise.all([
     profiles,
     readGames(env.DB, user, GAME_IDS, now, profiles),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
@@ -493,6 +495,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     getFreeThrowSummary(env.DB, user, now.getTime()),
     getSantaSummary(env.DB, user, now.getTime()),
     getArcadeSummaries(env.DB, user, now.getTime()),
+    readBingoSummary(env.DB, user),
     readDailyFree(env.DB, user, now),
     getLaunchGiftState(env.DB, user, now),
     readNotificationSummary(env.DB, user.id, now),
@@ -509,7 +512,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
     inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0, tagTickets: viewer?.tagTickets ?? 0 }, dailyFree,
-    kuji, lottoNotice, catchmind, claw, freethrow, santa, arcade, launchGift, notifications, rankResults, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
+    kuji, lottoNotice, catchmind, claw, freethrow, santa, arcade, bingo, launchGift, notifications, rankResults, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {
   if (kstDate(new Date()) !== date) throw new HttpError(409, 'ROUND_CHANGED', '새로운 하루가 시작됐어요. 화면을 새로고침해 주세요.');
@@ -798,6 +801,13 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
       ? startArcadeSet(env.DB, game, user, input, now.getTime())
       : finishArcadeSet(env.DB, game, user, input, now.getTime())));
   }
+  const bingoMatch = /^\/api\/bingo(?:\/([a-z]+))?$/.exec(url.pathname);
+  if (bingoMatch) {
+    const sinceText = url.searchParams.get('since');
+    const since = sinceText !== null && /^\d+$/.test(sinceText) ? Number(sinceText) : undefined;
+    const input = request.method === 'POST' ? await body(request) : undefined;
+    return json(await bingoRoute(env.DB, user, bingoMatch[1], request.method, input, now, openaiBingoWords(env.DB, env.OPENAI_API_KEY, kstDate(now)), since));
+  }
   if (url.pathname === '/api/me/attendance') {
     if (request.method === 'GET') return json({ attendance: await readAttendance(env.DB, user, now, url.searchParams.get('month') ?? undefined) });
     if (request.method === 'POST') return claimAttendance(request, env, user, now);
@@ -956,7 +966,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env, context); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof FreeThrowError || error instanceof SantaError || error instanceof ArcadeError || error instanceof LaunchGiftError || error instanceof RankResultError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof FreeThrowError || error instanceof SantaError || error instanceof ArcadeError || error instanceof BingoError || error instanceof LaunchGiftError || error instanceof RankResultError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }

@@ -101,6 +101,7 @@ export interface BootstrapResponse {
   santa: SantaSummary;
   /** Curling and penalty home tiles. */
   arcade: { curling: ArcadeSummary; penalty: ArcadeSummary };
+  bingo: BingoSummary;
   /** Today's free uses left; each item's 이용권 count adds them to owned tickets. */
   dailyFree: DailyFreeLeft;
   launchGift: LaunchGiftState;
@@ -302,6 +303,59 @@ export interface FreeThrowFinishResponse extends FreeThrowState {
   /** The set just recorded (it may already be the previous slot's). */
   set: FreeThrowSet;
   replayed: boolean;
+}
+
+/** Bingo (worker/bingo.ts): one game at a time, read by polling like Catchmind. */
+export type BingoStatus = 'filling' | 'playing' | 'ended' | 'cancelled';
+export interface BingoCall { word: string; by: string; at: string }
+export interface BingoSeatView {
+  player: CatchmindPlayer;
+  /** Called words on this board, and how many lines they complete. */
+  marked: number; lines: number;
+  rank: number | null; points: number;
+  /** The board itself: the reader's own while the game runs, everyone's once it is over. */
+  cells: string[] | null;
+}
+export interface BingoGameView {
+  id: string; number: number; leader: CatchmindPlayer;
+  topic: string; lines: number; words: string[]; source: 'ai' | 'manual';
+  status: BingoStatus;
+  turn: CatchmindPlayer | null; turnStartedAt: string | null;
+  calls: BingoCall[]; seats: BingoSeatView[];
+  createdAt: string; startedAt: string | null; endedAt: string | null;
+}
+export interface BingoState {
+  /** The game being filled or played, or the last one that ended. */
+  game: BingoGameView | null;
+  /** Who opens the next game; null when anyone may. */
+  leader: CatchmindPlayer | null;
+  waitingSince: string | null;
+  canCreate: boolean; canFill: boolean; canStart: boolean; canCall: boolean; canSkip: boolean; canCancel: boolean;
+  /** When a player other than the leader may start a filled game. */
+  startAvailableAt: string | null;
+  /** When another player may pass the waiting turn (or the lead, between games). */
+  skipAvailableAt: string | null;
+}
+export interface BingoResponse { bingo: BingoState; version: number; viewerId: string; serverTime: string; play: CatchmindPlayWindow }
+export interface BingoUnchanged { unchanged: true; version: number; viewerId: string; serverTime: string; play: CatchmindPlayWindow }
+export type BingoPollResponse = BingoResponse | BingoUnchanged;
+export type BingoAction = 'create' | 'board' | 'start' | 'call' | 'skip' | 'cancel';
+export interface BingoCreateInput { requestId: string; topic: string; lines: number; words?: string[] }
+export interface BingoBoardInput { gameId: string; cells: string[] }
+export interface BingoCallInput { gameId: string; word: string }
+export interface BingoSkipInput { gameId: string | null; expectedTurnId: string }
+export interface BingoGameInput { gameId: string }
+export type BingoInput = BingoCreateInput | BingoBoardInput | BingoCallInput | BingoSkipInput | BingoGameInput;
+/** The home row: what the reader can do in bingo right now. */
+export interface BingoSummary {
+  status: 'idle' | BingoStatus;
+  topic: string | null;
+  leader: { username: string; displayName: string } | null;
+  turn: { username: string; displayName: string } | null;
+  winner: { username: string; displayName: string } | null;
+  /** The reader has a board in this game. */
+  joined: boolean;
+  players: number;
 }
 
 /** Curling and penalty shoot-out sets (worker/arcade.ts). The same shape as a
