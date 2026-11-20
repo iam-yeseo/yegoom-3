@@ -4,7 +4,7 @@ import { usePlayClosed } from "../play-window";
 import { ticketCount, useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
 import { arcadeTileText } from "../arcade/summary";
-import type { ArcadeSummary, CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice, SantaSummary } from "../../shared/types";
+import type { ArcadeSummary, BingoSummary, CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice, SantaSummary } from "../../shared/types";
 import { santaTileText, santaTileVisible } from "../santa/summary";
 import type { StockHomeSummary } from "../../shared/stock-types";
 import { STOCKS } from "../../shared/stocks";
@@ -61,6 +61,7 @@ export interface HomeData {
   freethrow: FreeThrowSummary;
   santa: SantaSummary;
   arcade: { curling: ArcadeSummary; penalty: ArcadeSummary };
+  bingo: BingoSummary;
   lottoNotice: LottoNotice | null;
   /** null while the market is not open to players. */
   stock: StockHomeSummary | null;
@@ -183,10 +184,24 @@ function catchmindRow(game: CatchmindSummary, me: string, displayNameOf: Display
     right: game.winner?.username === me ? game.winnerScored ? `+${CATCHMIND_RULES.score}점` : `+${CATCHMIND_RULES.gold}G` : "",
   };
 }
-export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, kuji: KujiSummary | null, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username): GameRow[] {
+/** The bingo row: what the reader can do there right now. */
+export function bingoRow(game: BingoSummary, me: string, displayNameOf: DisplayNameLookup): GameRow {
+  const row = { path: "/play/bingo", name: "빙고", icon: "bunny" as const, right: "" };
+  const who = (person: { username: string; displayName: string } | null) => (person ? honorific(displayNameOf(person.username, person.displayName)) : "");
+  if (game.status === "filling") return { ...row, chip: game.joined ? "open" : "try", sub: `「${game.topic}」 · ${game.joined ? `판 제출 완료 · ${game.players}명 참여` : "빙고판을 채워 주세요"}` };
+  if (game.status === "playing") {
+    const mine = game.turn?.username === me;
+    return { ...row, chip: mine ? "try" : "open", sub: `「${game.topic}」 · ${mine ? "내가 단어를 지울 차례" : `${who(game.turn)} 차례`}` };
+  }
+  const next = game.leader ? (game.leader.username === me ? "내가 다음 리더예요" : `다음 리더 ${who(game.leader)}`) : "주제를 정해 첫 판을 열어 보세요";
+  if (game.status === "ended") return { ...row, chip: game.leader?.username === me ? "host" : "done", sub: `「${game.topic}」 ${game.winner?.username === me ? "내가 1등" : `${who(game.winner)} 1등`} · ${next}` };
+  return { ...row, chip: !game.leader ? "try" : game.leader.username === me ? "host" : "waiting", sub: next };
+}
+export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, kuji: KujiSummary | null, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username, bingo?: BingoSummary): GameRow[] {
   return [
     ...games.map((game) => predictionRow(game, me)),
     catchmindRow(catchmind, me, displayNameOf),
+    ...(bingo ? [bingoRow(bingo, me, displayNameOf)] : []),
     {
       path: "/play/kuji",
       name: "예굼쿠지",
@@ -200,7 +215,7 @@ export function gameRows(games: GameState[], me: string, catchmind: CatchmindSum
 
 export function TodayGames({ data, go }: { data: HomeData; go: Go }) {
   const displayNameOf = useDisplayNameLookup();
-  const rows = gameRows(data.games, data.username, data.catchmind, data.kuji, displayNameOf);
+  const rows = gameRows(data.games, data.username, data.catchmind, data.kuji, displayNameOf, data.bingo);
   // Catchmind rounds can span several days; their result is not today's total.
   const earned = data.games.reduce(
     (sum, game) => sum + (game.phase === "revealed" ? game.results.find(result => result.username === data.username)?.score ?? 0 : 0),

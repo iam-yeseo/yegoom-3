@@ -11,7 +11,7 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput, FreeThrowSetInput, FreeThrowFinishInput, FreeThrowFinishResponse, FreeThrowState,
-  ArcadeFinishInput, ArcadeFinishResponse, ArcadeStartInput, ArcadeState,
+  ArcadeFinishInput, ArcadeFinishResponse, ArcadeStartInput, ArcadeState, BingoAction, BingoInput, BingoPollResponse, BingoResponse,
   SantaFinishInput, SantaFinishResponse, SantaRunInput, SantaState,
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagEvolveInput, TagResponse, NotificationsResponse, NotificationSummary,
   AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
@@ -96,6 +96,8 @@ export const api = {
   santa: () => request<SantaState>("/santa"),
   startSantaRun: (input: SantaRunInput) => request<SantaState>("/santa/runs", { method: "POST", body: JSON.stringify(input) }),
   finishSantaRun: (input: SantaFinishInput) => request<SantaFinishResponse>("/santa/finish", { method: "POST", body: JSON.stringify(input) }),
+  bingo: (since?: number) => request<BingoPollResponse>(`/bingo${since === undefined ? "" : `?since=${since}`}`),
+  bingoAction: (action: BingoAction, input: BingoInput) => request<BingoResponse>(`/bingo/${action}`, { method: "POST", body: JSON.stringify(input) }),
   catchmind: (since?: number) => request<CatchmindPollResponse>(`/catchmind${since === undefined ? "" : `?since=${since}`}`),
   catchmindGallery: (before?: number) => request<CatchmindGalleryResponse>(`/catchmind/gallery${before === undefined ? "" : `?before=${before}`}`),
   catchmindAction: (action: CatchmindAction, input: CatchmindInput) => request<CatchmindResponse>(`/catchmind/${action}`, { method: "POST", body: JSON.stringify(input) }),

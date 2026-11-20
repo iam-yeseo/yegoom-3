@@ -1,0 +1,63 @@
+/* Bingo (src/screens/Bingo.tsx). */
+.bingo-page { padding-bottom: 28px; }
+.bingo-card, .bingo-note, .bingo-error, .bingo-rules { width: calc(100% - 32px); margin: 0 auto 12px; }
+.bingo-card { display: grid; gap: 12px; padding: 16px; }
+.bingo-card h2 { margin: 0; font-size: 16px; font-weight: 800; }
+.bingo-card.is-my-turn { box-shadow: 0 0 0 2px #f47c66, 0 8px 20px rgba(244, 124, 102, 0.16); }
+.bingo-note, .bingo-error { margin-bottom: 12px; padding: 14px 16px; color: var(--muted); font-size: 13px; line-height: 1.6; word-break: keep-all; }
+.bingo-error { color: #d9604c; }
+.bingo-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.bingo-head strong { min-width: 0; font-size: 17px; font-weight: 800; word-break: keep-all; }
+.bingo-chip { flex-shrink: 0; border-radius: 999px; padding: 4px 10px; background: #eee8fc; color: #6a4fb8; font-size: 12px; font-weight: 800; }
+.bingo-count { flex-shrink: 0; color: var(--muted); font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.bingo-hint { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.6; word-break: keep-all; }
+.bingo-last { margin: 0; border-radius: 14px; padding: 10px 12px; background: #fff7e0; font-size: 13px; line-height: 1.5; word-break: keep-all; }
+.bingo-who { display: flex; align-items: center; gap: 10px; }
+.bingo-who p { margin: 0; min-width: 0; font-size: 14px; line-height: 1.5; word-break: keep-all; }
+.bingo-field { display: grid; gap: 6px; }
+.bingo-field > span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.bingo-field input, .bingo-field textarea { width: 100%; box-sizing: border-box; border: 1.5px solid #e9e1ea; border-radius: 14px; padding: 12px 14px; background: #fff; color: var(--text); font: inherit; font-size: 15px; }
+.bingo-field textarea { resize: vertical; line-height: 1.5; }
+.bingo-field input:focus, .bingo-field textarea:focus { outline: none; border-color: #f47c66; }
+.bingo-card .text-button { justify-self: center; }
+.bingo-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.bingo-actions .secondary-button { height: 46px; font-size: 14px; }
+
+.bingo-board { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
+.bingo-cell {
+  display: grid; place-items: center; aspect-ratio: 1; min-width: 0; margin: 0; padding: 3px;
+  border: 0; border-radius: 12px; background: #f6f1eb; color: var(--text);
+  font: inherit; font-size: 12.5px; font-weight: 700; line-height: 1.2; text-align: center; word-break: keep-all; overflow-wrap: anywhere; overflow: hidden;
+}
+button.bingo-cell { touch-action: manipulation; }
+.bingo-cell.is-empty { background: #fbf8f4; box-shadow: inset 0 0 0 1.5px #ece4dc; }
+.bingo-cell.is-picked { background: #fff; box-shadow: inset 0 0 0 2.5px #f47c66; color: #e0644e; }
+.bingo-cell.is-called { background: #ffe1d9; color: #c7705f; text-decoration: line-through; text-decoration-thickness: 1.5px; }
+.bingo-cell.is-called.is-line { background: #f47c66; color: #fff; text-decoration: none; }
+.bingo-board.is-small { gap: 3px; }
+.bingo-board.is-small .bingo-cell { border-radius: 8px; padding: 2px; font-size: 10px; }
+
+.bingo-pool { display: flex; flex-wrap: wrap; gap: 6px; }
+.bingo-word { border: 0; border-radius: 999px; padding: 7px 12px; background: #eee8fc; color: #5a43a3; font: inherit; font-size: 13px; font-weight: 700; touch-action: manipulation; }
+.bingo-word:disabled { background: #f3eee8; color: #b9b0bd; }
+.bingo-word[aria-pressed="true"] { text-decoration: line-through; }
+.bingo-pool.is-called .bingo-word { background: #ffe1d9; color: #c7705f; }
+
+.bingo-seats { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.bingo-seats li { display: flex; align-items: center; gap: 10px; }
+.bingo-seats li.is-turn { border-radius: 16px; margin: -6px -8px; padding: 6px 8px; background: #fff7e0; }
+.bingo-seat-name { display: grid; flex: 1; min-width: 0; }
+.bingo-seat-name strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.bingo-seats li.is-me .bingo-seat-name strong { color: #e0644e; }
+.bingo-seat-name small { color: var(--muted); font-size: 11.5px; }
+.bingo-rank { display: grid; justify-items: end; font-size: 16px; font-weight: 800; color: #e0644e; }
+.bingo-rank span { color: #2e8c6e; font-size: 12px; }
+.bingo-progress { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.bingo-progress span { margin-left: 1px; color: var(--faint); font-size: 12px; }
+
+.bingo-rules { padding: 14px 16px; font-size: 13px; line-height: 1.6; }
+.bingo-rules summary, .bingo-reveal summary { font-weight: 800; cursor: pointer; }
+.bingo-rules ol { margin: 10px 0 0; padding-left: 18px; }
+.bingo-reveal { font-size: 13px; }
+.bingo-reveal-board { display: grid; gap: 6px; margin-top: 12px; }
+.bingo-reveal-board small { color: var(--muted); font-weight: 700; }
