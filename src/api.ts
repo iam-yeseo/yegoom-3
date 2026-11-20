@@ -11,9 +11,11 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput, FreeThrowSetInput, FreeThrowFinishInput, FreeThrowFinishResponse, FreeThrowState,
+  ArcadeFinishInput, ArcadeFinishResponse, ArcadeStartInput, ArcadeState,
   SantaFinishInput, SantaFinishResponse, SantaRunInput, SantaState,
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagEvolveInput, TagResponse, NotificationsResponse, NotificationSummary,
   AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
+import type { ArcadeGame } from "../shared/balance";
 import type { RankingPeriod } from "../shared/ranking-periods";
 import type { RankResult, RankResultKey } from "../shared/ranking-rewards";
 import type { StockDetailView, StockMarketView, StockNewsPage, StockTradeInput, StockTradeResponse, StockUnchanged } from "../shared/stock-types";
@@ -88,6 +90,9 @@ export const api = {
   freeThrow: () => request<FreeThrowState>("/freethrow"),
   startFreeThrowSet: (input: FreeThrowSetInput) => request<FreeThrowState>("/freethrow/sets", { method: "POST", body: JSON.stringify(input) }),
   finishFreeThrowSet: (input: FreeThrowFinishInput) => request<FreeThrowFinishResponse>("/freethrow/finish", { method: "POST", body: JSON.stringify(input) }),
+  arcade: (game: ArcadeGame) => request<ArcadeState>(`/arcade/${game}`),
+  startArcadeSet: (game: ArcadeGame, input: ArcadeStartInput) => request<ArcadeState>(`/arcade/${game}/sets`, { method: "POST", body: JSON.stringify(input) }),
+  finishArcadeSet: (game: ArcadeGame, input: ArcadeFinishInput) => request<ArcadeFinishResponse>(`/arcade/${game}/finish`, { method: "POST", body: JSON.stringify(input) }),
   santa: () => request<SantaState>("/santa"),
   startSantaRun: (input: SantaRunInput) => request<SantaState>("/santa/runs", { method: "POST", body: JSON.stringify(input) }),
   finishSantaRun: (input: SantaFinishInput) => request<SantaFinishResponse>("/santa/finish", { method: "POST", body: JSON.stringify(input) }),

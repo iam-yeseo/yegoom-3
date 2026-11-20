@@ -50,7 +50,7 @@ export function PlayShell({ label, theme, stage, top, right, bottom, onClose, ch
 export function PlayProgress({ marks, total, current, label }: { marks: (boolean | null | undefined)[]; total: number; current: number | null; label: string }) {
   const done = marks.filter(mark => mark === true || mark === false).length;
   return <div className="play-progress" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={total} aria-valuenow={done}>
-    <span className="play-progress-bar">{Array.from({ length: total }, (_, i) => {
+    <span className="play-progress-bar" style={total === 10 ? undefined : { gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>{Array.from({ length: total }, (_, i) => {
       const mark = marks[i];
       return <i key={i} className={mark === true ? "is-hit" : mark === false ? "is-miss" : i === current ? "is-now" : ""} />;
     })}</span>

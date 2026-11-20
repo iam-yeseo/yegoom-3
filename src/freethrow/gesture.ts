@@ -24,27 +24,31 @@ export const GESTURE = {
   keepMs: 400,
 } as const;
 
+/** The numbers that turn a swipe into a shot; curling and penalties read the
+ * same swipe with their own (src/curling, src/penalty). */
+export interface GestureConfig { windowMs: number; minRise: number; minSpeed: number; fullPowerSpeed: number; fullAimSlope: number; stallMs: number }
+
 export type GestureOutcome =
   | { shot: ShotInput; speed: number; slope: number }
   | { shot: null; reason: "too-short" | "too-slow" | "downward" };
 
 /** Reads the swipe that ended at the last point. Pulling down first is only a
  * wind-up: the speed comes from the final upward flick. */
-export function readGesture(input: readonly GesturePoint[]): GestureOutcome {
+export function readGesture(input: readonly GesturePoint[], config: GestureConfig = GESTURE): GestureOutcome {
   // The release usually repeats the last move's position a few ms later. That
   // is not a stop; only a pause longer than stallMs slows the throw down.
   let end = input.length;
   while (end > 2 && input[end - 1]!.x === input[end - 2]!.x && input[end - 1]!.y === input[end - 2]!.y
-    && input[end - 1]!.t - input[end - 2]!.t < GESTURE.stallMs) end--;
+    && input[end - 1]!.t - input[end - 2]!.t < config.stallMs) end--;
   const points = input.slice(0, end);
   const last = points[points.length - 1];
   if (!last || points.length < 2) return { shot: null, reason: "too-short" };
   let lowest = last.y;
   for (const point of points) lowest = Math.max(lowest, point.y);
-  if (lowest - last.y < GESTURE.minRise) return { shot: null, reason: "too-short" };
+  if (lowest - last.y < config.minRise) return { shot: null, reason: "too-short" };
   // The oldest sample inside the window, interpolated to the window edge so
   // sparse pointer events (60 Hz vs 120 Hz screens) give the same speed.
-  const edge = last.t - GESTURE.windowMs;
+  const edge = last.t - config.windowMs;
   let start = points[0]!;
   for (let i = points.length - 1; i > 0; i--) {
     const before = points[i - 1]!, after = points[i]!;
@@ -60,11 +64,11 @@ export function readGesture(input: readonly GesturePoint[]): GestureOutcome {
   if (dt <= 0) return { shot: null, reason: "too-slow" };
   const up = (start.y - last.y) / dt, side = (last.x - start.x) / dt;
   if (up < 0) return { shot: null, reason: "downward" };
-  if (up < GESTURE.minSpeed) return { shot: null, reason: "too-slow" };
+  if (up < config.minSpeed) return { shot: null, reason: "too-slow" };
   const slope = side / up;
   const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
   return {
-    shot: { power: Math.round(clamp(up / GESTURE.fullPowerSpeed, 0, 1) * 100), aim: Math.round(clamp(slope / GESTURE.fullAimSlope, -1, 1) * 100) },
+    shot: { power: Math.round(clamp(up / config.fullPowerSpeed, 0, 1) * 100), aim: Math.round(clamp(slope / config.fullAimSlope, -1, 1) * 100) },
     speed: up, slope,
   };
 }

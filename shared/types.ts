@@ -99,6 +99,8 @@ export interface BootstrapResponse {
   claw: ClawSummary;
   freethrow: FreeThrowSummary;
   santa: SantaSummary;
+  /** Curling and penalty home tiles. */
+  arcade: { curling: ArcadeSummary; penalty: ArcadeSummary };
   /** Today's free uses left; each item's 이용권 count adds them to owned tickets. */
   dailyFree: DailyFreeLeft;
   launchGift: LaunchGiftState;
@@ -299,6 +301,45 @@ export interface FreeThrowFinishInput { setId: string; shots: { power: number; a
 export interface FreeThrowFinishResponse extends FreeThrowState {
   /** The set just recorded (it may already be the previous slot's). */
   set: FreeThrowSet;
+  replayed: boolean;
+}
+
+/** Curling and penalty shoot-out sets (worker/arcade.ts). The same shape as a
+ * free-throw set: played on the device, recorded in one request. Times are epoch ms. */
+export interface ArcadeSummary {
+  /** A new official set can start now. */
+  available: boolean;
+  /** This slot's set was started. */
+  played: boolean;
+  /** This slot's set was recorded in full. */
+  completed: boolean;
+  made: number;
+  nextSlotAt: number; serverNow: number; isAdmin: boolean;
+}
+export interface ArcadeTryRecord { index: number; made: boolean; kind: string }
+export interface ArcadeSet {
+  id: string; requestId: string; slot: number; slotStart: number;
+  /** The set can be recorded until this time (slot end plus grace). */
+  deadline: number; engine: number;
+  made: number; tries: ArcadeTryRecord[];
+  completed: boolean;
+  /** Completed, or past the deadline. */
+  finished: boolean;
+  points: number; gold: number;
+}
+export interface ArcadeBoardEntry { username: string; slot: number; slotStart: number; made: number; completed: boolean }
+export interface ArcadeState extends ArcadeSummary {
+  game: 'curling' | 'penalty';
+  date: string; slot: number; slotStart: number;
+  /** This slot's set, or the previous slot's while it can still be recorded. */
+  current: ArcadeSet | null;
+  /** Every active player's recorded sets that started on this KST date, oldest first. */
+  today: ArcadeBoardEntry[];
+}
+export interface ArcadeStartInput { requestId: string }
+export interface ArcadeFinishInput { setId: string; inputs: unknown[] }
+export interface ArcadeFinishResponse extends ArcadeState {
+  set: ArcadeSet;
   replayed: boolean;
 }
 

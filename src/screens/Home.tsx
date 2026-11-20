@@ -3,7 +3,8 @@ import { ATTENDANCE_RULES, attendanceRewardLabel, CATCHMIND_RULES, KUJI_RULES, L
 import { usePlayClosed } from "../play-window";
 import { ticketCount, useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
-import type { CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice, SantaSummary } from "../../shared/types";
+import { arcadeTileText } from "../arcade/summary";
+import type { ArcadeSummary, CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice, SantaSummary } from "../../shared/types";
 import { santaTileText, santaTileVisible } from "../santa/summary";
 import type { StockHomeSummary } from "../../shared/stock-types";
 import { STOCKS } from "../../shared/stocks";
@@ -59,6 +60,7 @@ export interface HomeData {
   claw: ClawSummary;
   freethrow: FreeThrowSummary;
   santa: SantaSummary;
+  arcade: { curling: ArcadeSummary; penalty: ArcadeSummary };
   lottoNotice: LottoNotice | null;
   /** null while the market is not open to players. */
   stock: StockHomeSummary | null;
@@ -249,7 +251,7 @@ export function freeThrowTileText(summary: FreeThrowSummary): string {
   const next = `다음 세트 ${String(new Date(summary.nextSlotAt + 9 * 3_600_000).getUTCHours()).padStart(2, "0")}시`;
   return summary.completed ? `이번 세트 ${summary.made}골 · ${next}` : next;
 }
-export function SoloGames({ go, claw, freethrow, santa, stock }: { go: Go; claw: ClawSummary; freethrow: FreeThrowSummary; santa: SantaSummary; stock: StockHomeSummary | null }) {
+export function SoloGames({ go, claw, freethrow, santa, arcade, stock }: { go: Go; claw: ClawSummary; freethrow: FreeThrowSummary; santa: SantaSummary; arcade: { curling: ArcadeSummary; penalty: ArcadeSummary }; stock: StockHomeSummary | null }) {
   const nextGrant = formatTime(new Date(claw.nextGrantAt).toISOString());
   const open = !!stock?.open;
   const pnl = stock ? stock.value - stock.cost : 0;
@@ -284,6 +286,31 @@ export function SoloGames({ go, claw, freethrow, santa, stock }: { go: Go; claw:
           <span className="solo-text">
             <strong>자유투 대결</strong>
             <small>{freeThrowTileText(freethrow)}</small>
+          </span>
+        </button>
+        <button className="card solo-tile" onClick={() => go("/play/curling")}>
+          <span className="solo-icon" style={{ background: "#DCECF4" }}>
+            <svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true">
+              <ellipse cx="18" cy="23" rx="13" ry="8" fill="#B5AFBD" /><ellipse cx="18" cy="20" rx="13" ry="8" fill="#E9E6EC" />
+              <ellipse cx="18" cy="19" rx="8" ry="4.6" fill="#F47C66" /><path d="M13 14.5c0-4 2-6 5-6h6" fill="none" stroke="#C95D49" strokeWidth="3.4" strokeLinecap="round" />
+            </svg>
+          </span>
+          <span className="solo-text">
+            <strong>컬링</strong>
+            <small>{arcadeTileText(arcade.curling, "개")}</small>
+          </span>
+        </button>
+        <button className="card solo-tile" onClick={() => go("/play/penalty")}>
+          <span className="solo-icon" style={{ background: "#DDF3E2" }}>
+            <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+              <circle cx="17" cy="17" r="14" fill="#fff" stroke="#3A3340" strokeWidth="2" />
+              <path d="M17 11l5.4 3.9-2 6.3h-6.8l-2-6.3z" fill="#3A3340" />
+              <path d="M17 11V4M22.4 14.9l6.6-2.4M20.4 21.2l4 5.8M13.6 21.2l-4 5.8M11.6 14.9L5 12.5" stroke="#3A3340" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </span>
+          <span className="solo-text">
+            <strong>승부차기</strong>
+            <small>{arcadeTileText(arcade.penalty, "골")}</small>
           </span>
         </button>
         <button className="card solo-tile" onClick={() => go("/stock")}>
@@ -635,7 +662,7 @@ export function Home({ data, go }: { data: HomeData; go: Go }) {
         />
         <LottoNoticeCard data={data} go={go} />
         <TodayGames data={data} go={go} />
-        <SoloGames go={go} claw={data.claw} freethrow={data.freethrow} santa={data.santa} stock={data.stock} />
+        <SoloGames go={go} claw={data.claw} freethrow={data.freethrow} santa={data.santa} arcade={data.arcade} stock={data.stock} />
         <SectionTitle title="상점" right="전체" onClick={() => go("/shop")} />
         <ShopCards go={go} />
         <SectionTitle title="이번 주 랭킹" right={settleText()} />

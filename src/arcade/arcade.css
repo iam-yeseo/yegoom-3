@@ -1,0 +1,70 @@
+/* Shared by the curling and penalty screens (src/arcade/screen.tsx); the same layout as the free throw. */
+.arcade-page { padding-bottom: 28px; }
+.arcade-mode, .arcade-official, .arcade-sync, .arcade-today, .arcade-guide { width: calc(100% - 32px); margin: 0 auto 12px; }
+.arcade-mode { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; }
+.arcade-mode > div { flex: 1; min-width: 0; word-break: keep-all; }
+.arcade-mode strong { display: block; font-size: 16px; font-weight: 800; }
+.arcade-mode small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.arcade-callout { position: absolute; left: 50%; top: 50%; translate: -50% 0; display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; }
+.arcade-callout strong { border-radius: 999px; padding: 8px 16px; background: rgba(255, 255, 255, 0.94); color: var(--text); font-size: 18px; font-weight: 800; white-space: nowrap; box-shadow: 0 6px 18px rgba(58, 51, 64, 0.12); }
+.arcade-callout.is-made strong { background: #f47c66; color: #fff; }
+.arcade-callout em { border-radius: 999px; padding: 4px 10px; background: #ffd866; color: #6b4e00; font-size: 13px; font-style: normal; font-weight: 800; }
+.arcade-status { min-height: 38px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: center; word-break: keep-all; }
+.arcade-readout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 10px 14px; border-radius: 18px; padding: 12px 16px; background: #fff; }
+.arcade-readout small { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; }
+.arcade-meter { display: grid; grid-template-columns: minmax(0, 1fr) 32px; align-items: center; column-gap: 8px; }
+.arcade-meter small { grid-column: 1 / -1; }
+.arcade-meter-bar { position: relative; height: 10px; border-radius: 999px; background: linear-gradient(90deg, #e3f6ee, #fff4cc 50%, #ffd9cf); }
+.arcade-meter-bar i { position: absolute; top: 50%; width: 14px; height: 14px; border: 3px solid #fff; border-radius: 50%; background: #f47c66; translate: -50% -50%; box-shadow: 0 2px 6px rgba(58, 51, 64, 0.2); transition: left var(--dur-m) var(--ease-out); }
+.arcade-meter b, .arcade-aim b { font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.arcade-meter b { text-align: right; }
+.arcade-balls { display: grid; grid-template-columns: repeat(5, 28px); gap: 8px; }
+.arcade-balls i { aspect-ratio: 1; border-radius: 50%; background: #f6f1eb; }
+.arcade-balls i.is-made { background: #f47c66; }
+.arcade-balls i.is-miss { background: #fff; box-shadow: inset 0 0 0 2px #e4dce6; }
+.arcade-guide { padding: 14px 16px; font-size: 13px; line-height: 1.6; }
+.arcade-guide summary { font-weight: 800; cursor: pointer; }
+.arcade-guide ol { margin: 10px 0 8px; padding-left: 18px; }
+.arcade-guide p { margin: 0; color: var(--muted); word-break: keep-all; }
+.arcade-official { display: grid; gap: 12px; padding: 16px; }
+.arcade-official-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.arcade-official-head strong { flex-shrink: 0; font-size: 18px; font-weight: 800; white-space: nowrap; }
+.arcade-official-head small { color: var(--muted); font-size: 12px; text-align: right; word-break: keep-all; }
+.arcade-official-head.is-done strong { color: #e0644e; font-size: 22px; }
+.arcade-official-note { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; word-break: keep-all; }
+.arcade-official-warn, .arcade-official-best { color: var(--muted); font-size: 12px; text-align: center; word-break: keep-all; }
+.arcade-official-best { text-align: right; }
+.arcade-start { width: 100%; }
+.arcade-official-next { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 13px; font-weight: 700; }
+.arcade-lock { position: absolute; inset: auto 0 6% 0; display: flex; justify-content: center; pointer-events: none; }
+.arcade-lock span { border-radius: 999px; padding: 8px 14px; background: rgba(58, 51, 64, 0.78); color: #fff; font-size: 13px; font-weight: 800; }
+.arcade-today { padding: 16px; }
+.arcade-today h2 { margin: 0 0 10px; font-size: 15px; font-weight: 800; }
+.arcade-today ol { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.arcade-today li { display: flex; align-items: center; gap: 10px; }
+.arcade-today li.is-me .arcade-today-name strong { color: #e0644e; }
+.arcade-today-name { display: grid; flex: 1; min-width: 0; }
+.arcade-today-name strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.arcade-today-name small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.arcade-today li > b { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.arcade-today li > b span { margin-left: 1px; color: var(--faint); font-size: 12px; }
+.arcade-mode .arcade-practice { flex-shrink: 0; width: auto; height: 42px; padding: 0 18px; font-size: 14px; }
+.arcade-sync { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 16px; color: var(--muted); font-size: 13px; text-align: center; word-break: keep-all; }
+.arcade-sync[role="alert"] { color: #d9604c; }
+.arcade-practice-stats { display: flex; align-items: baseline; gap: 12px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+.arcade-practice-stats strong { color: var(--text); font-size: 16px; font-weight: 800; }
+.arcade-practice-stats b { color: var(--text); font-weight: 800; }
+.arcade-play-error { position: absolute; inset: auto 12px 12px; margin: 0; border-radius: 12px; padding: 8px 12px; background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 13px; }
+.arcade-stage { position: absolute; inset: 0; overflow: hidden; }
+.arcade-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.arcade-callout { top: 38%; }
+.arcade-coach { position: absolute; left: 50%; bottom: 3%; translate: -50% 0; border-radius: 999px; padding: 5px 12px; background: rgba(255, 255, 255, 0.88); color: var(--muted); font-size: 12px; font-weight: 800; white-space: nowrap; pointer-events: none; }
+.arcade-readout-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 8px; align-items: stretch; }
+.arcade-nudge { border: 0; border-radius: 16px; background: #fff; color: var(--text); font-size: 18px; font-weight: 800; touch-action: manipulation; }
+.arcade-nudge:disabled { opacity: .4; }
+.arcade-again { position: absolute; inset: auto 0 8% 0; display: grid; justify-items: center; gap: 8px; }
+.arcade-again strong { border-radius: 999px; padding: 8px 16px; background: rgba(58, 51, 64, 0.8); color: #fff; font-size: 15px; font-weight: 800; }
+.arcade-again button { width: auto; min-height: 44px; padding: 0 22px; }
+.arcade-status.is-dark { color: rgba(255, 255, 255, 0.88); }
+.arcade-practice-stats.is-dark, .arcade-practice-stats.is-dark strong, .arcade-practice-stats.is-dark b { color: #fff; }
+.arcade-readout { color: var(--text); }
