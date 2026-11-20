@@ -32,6 +32,7 @@ const aimLabel = (aim: number) => (aim === 0 ? "가운데" : `${aim < 0 ? "왼�
 const COPY: ArcadeCopy = {
   title: "승부차기", unit: "골", tries: `킥 ${tries}번`, per: "1골마다",
   practice: "마음껏 차며 골키퍼 읽는 법을 익혀요 · 보상 없음", startLabel: "승부차기 시작하기",
+  art: "/penalty/tile.webp",
   nothing: "이번엔 골이 없었어요.",
   resultTitle: made => (made === tries ? "5골 전부 성공!" : `${made}골 성공!`),
   resultLine: made => (made >= 4 ? "골키퍼가 조용히 장갑을 벗었어요. 오늘의 기록판을 확인해 보세요!" : made ? "다음엔 한 골 더! 골키퍼가 움직이는 반대쪽을 노려 보세요." : "골키퍼가 오늘 인생 경기를 했어요. 다음 세트에서 만회해요!"),

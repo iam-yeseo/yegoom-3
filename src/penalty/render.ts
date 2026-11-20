@@ -1,4 +1,5 @@
 import { GOAL } from "../../shared/penalty-engine";
+import { KEEPER_ART } from "./art";
 
 /** Logical canvas size; the buffer is scaled by devicePixelRatio (max 2). */
 export const STAGE = { width: 360, height: 560 } as const;
@@ -33,15 +34,29 @@ export interface Scene {
   netAt: { x: number; y: number } | null;
 }
 const POST = 5;
+export const ART = { ball: "/penalty/ball.webp", ready: "/penalty/keeper-ready.webp", dive: "/penalty/keeper-dive.webp" } as const;
+/** How tall the standing keeper picture is, and how long the diving one, in metres.
+ * Standing, the open arms span about the reach the engine gives a keeper who does not move. */
+const KEEPER_HEIGHT = 1.95, DIVE_LENGTH = 2.3;
+/** Past this lean the diving picture replaces the standing one. */
+const DIVE_LEAN = 0.75;
 
 export class PenaltyRenderer {
   private ctx: CanvasRenderingContext2D;
   private backdrop: HTMLCanvasElement | null = null;
   private ratio = 1;
+  /** Pictures as they finish loading; anything missing is drawn with shapes instead. */
+  private art: Partial<Record<keyof typeof ART, HTMLImageElement>> = {};
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("이 브라우저에서는 경기장을 그릴 수 없어요.");
     this.ctx = ctx;
+    if (typeof Image !== "undefined") for (const key of Object.keys(ART) as (keyof typeof ART)[]) {
+      const image = new Image();
+      image.decoding = "async";
+      image.onload = () => { this.art[key] = image; };
+      image.src = ART[key];
+    }
   }
   /** Matches the buffer to the displayed size; returns true when it changed. */
   resize(): boolean {
@@ -149,6 +164,28 @@ export class PenaltyRenderer {
     // Shadow stays on the grass under the keeper.
     ctx.fillStyle = "rgba(58, 51, 64, 0.18)";
     ctx.beginPath(); ctx.ellipse(feet.x, GROUND + 3, 20 - Math.min(8, pose.lift * 8), 5, 0, 0, Math.PI * 2); ctx.fill();
+    const lean = Math.abs(pose.lean), { ready, dive } = this.art;
+    if (dive && lean > DIVE_LEAN) {
+      // Flying sideways: the picture dives to the right and is mirrored for the left.
+      // Early in the dive it is still tipped up; at full stretch it lies level.
+      const width = DIVE_LENGTH * unit, height = width / KEEPER_ART.dive;
+      const centre = toScreen(pose.x, Math.max(height / unit / 2 - 0.05, 0.3 + pose.lift));
+      ctx.translate(centre.x, centre.y);
+      if (pose.lean < 0) ctx.scale(-1, 1);
+      ctx.rotate((lean - 1.3) * 0.5);
+      ctx.drawImage(dive, -width / 2, -height / 2, width, height);
+      ctx.restore();
+      return;
+    }
+    if (ready) {
+      // Standing, stepping or jumping: the picture turns a little about its feet.
+      const height = KEEPER_HEIGHT * unit, width = height * KEEPER_ART.ready;
+      ctx.translate(feet.x, feet.y);
+      ctx.rotate(pose.lean * 0.6);
+      ctx.drawImage(ready, -width / 2, -height, width, height);
+      ctx.restore();
+      return;
+    }
     // The body turns about its hips.
     // A keeper lying sideways has their hips near the grass, not at standing height.
     const hip = { x: feet.x, y: feet.y - (0.25 + 0.6 * Math.cos(pose.lean)) * unit };
@@ -175,6 +212,12 @@ export class PenaltyRenderer {
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(x, y);
+    if (this.art.ball) {
+      ctx.rotate(spin);
+      ctx.drawImage(this.art.ball, -radius, -radius, radius * 2, radius * 2);
+      ctx.restore();
+      return;
+    }
     const shade = ctx.createRadialGradient(-radius * 0.3, -radius * 0.35, radius * 0.1, 0, 0, radius);
     shade.addColorStop(0, "#ffffff"); shade.addColorStop(1, "#d8d3de");
     ctx.beginPath(); ctx.arc(0, 0, radius, 0, Math.PI * 2); ctx.fillStyle = shade; ctx.fill();

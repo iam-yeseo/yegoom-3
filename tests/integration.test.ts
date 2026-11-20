@@ -62,8 +62,12 @@ const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds
  * the merged 이용권 counts read today's free uses (four partial-index probes; the
  * allowance covers a player who used all twelve).
  * The ranking result dialog reads the player's unseen results of the newest
- * finished week and month (one partial-index probe, at most 2 rows). */
-const STOCK_HOME = { prepares: 1 + 1 + 1 + 1, queries: 1 + 1 + 1 + 1, bindingCalls: 1 + 1 + 1 + 1, rowsRead: 12 + 2 + 12 + 2, rowsWritten: 0 } as const;
+ * finished week and month (one partial-index probe, at most 2 rows).
+ * The curling and penalty tiles share one indexed range of the player's last
+ * two slots of each game (at most 4 rows), and the bingo row reads the one
+ * state row with its game, the three people it names and its boards (one
+ * statement; the allowance covers a table of four). */
+const STOCK_HOME = { prepares: 1 + 1 + 1 + 1 + 1 + 1, queries: 1 + 1 + 1 + 1 + 1 + 1, bindingCalls: 1 + 1 + 1 + 1 + 1 + 1, rowsRead: 12 + 2 + 12 + 2 + 4 + 14, rowsWritten: 0 } as const;
 const stockAllowance = (route: string, field: keyof typeof STOCK_HOME) => route.includes('bootstrap') ? STOCK_HOME[field] : 0;
 /** Every successful player write is followed by the achievement check of that
  * write's activity: one batch that reads the player and the rows they already

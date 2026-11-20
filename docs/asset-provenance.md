@@ -70,3 +70,24 @@ python3 scripts/prepare-santa-art.py /path/to/santa-images
 
 - `public/tags/evolve-{working,success,fail,lost}.webp` 4장은 사용자가 2026-11-17에 제공한 이미지다. 사용자가 [이미지 프롬프트](tag-evolution-image-prompts.md)로 이미지 생성기에서 만들었다(원본 1254×1254 PNG).
 - `scripts/prepare-tag-evolution-art.py`가 알파 24 이하의 옅은 잡티를 지우고 투명 여백을 자른 뒤 정사각형 가운데에 두어 360px WebP(quality 85, 알파 무손실)로 줄였다. 각 20~28KB.
+
+## 컬링·승부차기·빙고 그림
+
+- `public/curling/{tile,stone}.webp`, `public/penalty/{tile,ball,keeper-ready,keeper-dive}.webp`, `public/bingo/tile.webp` 7장은 사용자가 2026-11-20에 제공한 이미지다. 사용자가 [이미지 프롬프트](arcade-image-prompts.md)로 이미지 생성기에서 만들었다. 지인용 비공개 서비스 전용이다.
+- 원본 PNG(1024×1024, 골키퍼 다이빙만 1536×1024, 장당 0.7~1.7MB)는 커밋 `91a0e84`의 `public/arcade/`에 있다. 그대로 두면 서비스 워커가 미리 받아 두는 파일에 들어가므로 변환한 뒤 작업 트리에서는 지웠다.
+- `scripts/prepare-arcade-art.py`가 알파 24 이하의 옅은 잡티를 지우고 투명 여백을 자른 뒤 WebP(RGB quality 85, 알파 무손실)로 줄인다. 골키퍼 두 장의 가로세로 비율은 `src/penalty/art.ts`로 쓴다. 그림을 바꾸면 스크립트를 다시 돌린다.
+
+| 파일 | 원본 | WebP 바이트 | 크기 |
+| --- | --- | ---: | --- |
+| curling/tile | curling-tile.png 1024×1024 | 11,928 | 210×210 |
+| penalty/tile | penalty-tile.png 1024×1024 | 13,072 | 210×210 |
+| bingo/tile | bingo-tile.png 1024×1024 | 10,974 | 210×210 |
+| curling/stone | curling-stone.png 1024×1024 | 3,362 | 96×96 |
+| penalty/ball | penalty-ball.png 1024×1024 | 5,400 | 128×128 |
+| penalty/keeper-ready | keeper-ready.png 1024×1024 | 16,346 | 252×256 |
+| penalty/keeper-dive | keeper-dive.png 1536×1024 | 16,274 | 320×165 |
+
+```sh
+git show 91a0e84 --stat   # 원본 PNG가 들어 있는 커밋
+python3 scripts/prepare-arcade-art.py /path/to/arcade-images
+```

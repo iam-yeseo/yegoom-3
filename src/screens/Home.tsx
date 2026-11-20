@@ -87,6 +87,8 @@ interface GameRow {
   path: string;
   name: string;
   icon: ArtKey;
+  /** A picture of its own instead of a character, with the colour behind it. */
+  image?: { src: string; tint: string };
   chip: ChipKind;
   sub: string;
   right: string;
@@ -186,14 +188,14 @@ function catchmindRow(game: CatchmindSummary, me: string, displayNameOf: Display
 }
 /** The bingo row: what the reader can do there right now. */
 export function bingoRow(game: BingoSummary, me: string, displayNameOf: DisplayNameLookup): GameRow {
-  const row = { path: "/play/bingo", name: "빙고", icon: "bunny" as const, right: "" };
+  const row = { path: "/play/bingo", name: "빙고", icon: "bunny" as const, image: { src: "/bingo/tile.webp", tint: "#FFF1D6" }, right: "" };
   const who = (person: { username: string; displayName: string } | null) => (person ? honorific(displayNameOf(person.username, person.displayName)) : "");
   if (game.status === "filling") return { ...row, chip: game.joined ? "open" : "try", sub: `「${game.topic}」 · ${game.joined ? `판 제출 완료 · ${game.players}명 참여` : "빙고판을 채워 주세요"}` };
   if (game.status === "playing") {
     const mine = game.turn?.username === me;
     return { ...row, chip: mine ? "try" : "open", sub: `「${game.topic}」 · ${mine ? "내가 단어를 지울 차례" : `${who(game.turn)} 차례`}` };
   }
-  const next = game.leader ? (game.leader.username === me ? "내가 다음 리더예요" : `다음 리더 ${who(game.leader)}`) : "주제를 정해 첫 판을 열어 보세요";
+  const next = game.leader ? (game.leader.username === me ? "내가 다음 리더예요" : `다음 리더 ${who(game.leader)}`) : "첫 판을 열어 보세요";
   if (game.status === "ended") return { ...row, chip: game.leader?.username === me ? "host" : "done", sub: `「${game.topic}」 ${game.winner?.username === me ? "내가 1등" : `${who(game.winner)} 1등`} · ${next}` };
   return { ...row, chip: !game.leader ? "try" : game.leader.username === me ? "host" : "waiting", sub: next };
 }
@@ -240,8 +242,8 @@ function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
   useOnChange(label, () => flip(chip.current));
   return (
           <button className="card game-row" onClick={() => go(row.path)}>
-            <span className="game-row-icon" style={{ background: art[row.icon].tint }}>
-              <img className="character" src={artSrc(row.icon)} alt="" />
+            <span className="game-row-icon" style={{ background: row.image?.tint ?? art[row.icon].tint }}>
+              <img className="character" src={row.image?.src ?? artSrc(row.icon)} alt="" />
             </span>
             <span className="game-row-text">
               <strong>{row.name}</strong>
@@ -305,10 +307,7 @@ export function SoloGames({ go, claw, freethrow, santa, arcade, stock }: { go: G
         </button>
         <button className="card solo-tile" onClick={() => go("/play/curling")}>
           <span className="solo-icon" style={{ background: "#DCECF4" }}>
-            <svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true">
-              <ellipse cx="18" cy="23" rx="13" ry="8" fill="#B5AFBD" /><ellipse cx="18" cy="20" rx="13" ry="8" fill="#E9E6EC" />
-              <ellipse cx="18" cy="19" rx="8" ry="4.6" fill="#F47C66" /><path d="M13 14.5c0-4 2-6 5-6h6" fill="none" stroke="#C95D49" strokeWidth="3.4" strokeLinecap="round" />
-            </svg>
+            <img className="character" src="/curling/tile.webp" alt="" />
           </span>
           <span className="solo-text">
             <strong>컬링</strong>
@@ -317,11 +316,7 @@ export function SoloGames({ go, claw, freethrow, santa, arcade, stock }: { go: G
         </button>
         <button className="card solo-tile" onClick={() => go("/play/penalty")}>
           <span className="solo-icon" style={{ background: "#DDF3E2" }}>
-            <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
-              <circle cx="17" cy="17" r="14" fill="#fff" stroke="#3A3340" strokeWidth="2" />
-              <path d="M17 11l5.4 3.9-2 6.3h-6.8l-2-6.3z" fill="#3A3340" />
-              <path d="M17 11V4M22.4 14.9l6.6-2.4M20.4 21.2l4 5.8M13.6 21.2l-4 5.8M11.6 14.9L5 12.5" stroke="#3A3340" strokeWidth="2" strokeLinecap="round" />
-            </svg>
+            <img className="character" src="/penalty/tile.webp" alt="" />
           </span>
           <span className="solo-text">
             <strong>승부차기</strong>

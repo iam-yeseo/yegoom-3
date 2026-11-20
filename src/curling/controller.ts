@@ -44,7 +44,7 @@ export class CurlingController {
   private destroyed = false;
 
   constructor(private canvas: HTMLCanvasElement, private sound: ArcadeSound, private callbacks: SheetCallbacks, private stones: number) {
-    this.renderer = new CurlingRenderer(canvas);
+    this.renderer = new CurlingRenderer(canvas, () => { if (!this.destroyed) this.paint(); });
     canvas.addEventListener("pointerdown", this.down);
     canvas.addEventListener("pointermove", this.move);
     canvas.addEventListener("pointerup", this.up);

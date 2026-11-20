@@ -96,7 +96,7 @@ test('penalty: the whistle starts the clock, a swipe kicks, and the result is ex
 test('bingo: the leader names a topic, fills a board, and confirms a word on their turn', async ({ page }) => {
   await open(page);
   const row = page.locator('.game-row', { hasText: '빙고' });
-  await expect(row).toContainText('주제를 정해 첫 판을 열어 보세요');
+  await expect(row).toContainText('첫 판을 열어 보세요');
   await row.click();
   await expect(page).toHaveURL(/#\/preview\/play\/bingo$/);
   const create = page.getByRole('button', { name: /AI로 단어 30개 만들기/ });

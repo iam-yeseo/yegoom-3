@@ -17,16 +17,26 @@ export interface Scene {
   /** The newest stone, ringed so it is easy to follow. */
   latest: number | null;
 }
+export const STONE_SRC = "/curling/stone.webp";
 const COLORS = { ice: "#eaf6fb", edge: "#cfe6f0", line: "#b9d3df", hog: "#f47c66", blue: "#8cc4ea", white: "#ffffff", red: "#f69a88", text: "#8aa5b3" };
 
 export class CurlingRenderer {
   private ctx: CanvasRenderingContext2D;
   private backdrop: HTMLCanvasElement | null = null;
   private ratio = 1;
-  constructor(private canvas: HTMLCanvasElement) {
+  private sprite: HTMLImageElement | null = null;
+  /** onReady repaints once the stone picture has loaded; until then (or if it
+   * fails) the stone is drawn with gradients. */
+  constructor(private canvas: HTMLCanvasElement, onReady?: () => void) {
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("이 브라우저에서는 시트를 그릴 수 없어요.");
     this.ctx = ctx;
+    if (typeof Image !== "undefined") {
+      const sprite = new Image();
+      sprite.decoding = "async";
+      sprite.onload = () => { this.sprite = sprite; onReady?.(); };
+      sprite.src = STONE_SRC;
+    }
   }
   /** Matches the buffer to the displayed size; returns true when it changed. */
   resize(): boolean {
@@ -101,6 +111,8 @@ export class CurlingRenderer {
     ctx.fillStyle = "rgba(58, 51, 64, 0.16)";
     ctx.beginPath(); ctx.ellipse(x + 1.5, y + 3, r, r * 0.92, 0, 0, Math.PI * 2); ctx.fill();
     if (latest) { ctx.beginPath(); ctx.arc(x, y, r + 3, 0, Math.PI * 2); ctx.fillStyle = held ? "rgba(255, 216, 102, 0.95)" : "rgba(255, 216, 102, 0.7)"; ctx.fill(); }
+    // The picture is a stone seen from straight above, its handle pointing up the sheet.
+    if (this.sprite) { ctx.drawImage(this.sprite, x - r, y - r, r * 2, r * 2); return; }
     const body = ctx.createRadialGradient(x - r * 0.3, y - r * 0.35, r * 0.1, x, y, r);
     body.addColorStop(0, "#f4f2f6"); body.addColorStop(1, "#b5afbd");
     ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = body; ctx.fill();

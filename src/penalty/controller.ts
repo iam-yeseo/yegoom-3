@@ -10,6 +10,8 @@ const KEEP_MS = 400;
 /** The walk-up before the whistle, and how long a result stays before the next kick. */
 const INTRO_MS = 1100;
 const AFTER_MS = 1500;
+/** How far the gloves are from the middle of a diving keeper (metres). */
+const DIVE_ARM = 1.1;
 
 export type KickMode = "intro" | "aiming" | "holding" | "flying" | "after" | "over";
 export interface KickCallbacks {
@@ -211,7 +213,8 @@ export class PenaltyController {
     // Up to meet the ball as it arrives, then back down to the grass.
     const u = t / result.flight, air = u < 1 ? Math.sin(Math.PI / 2 * u) : Math.max(0, 1 - (u - 1) * 2.2);
     const pose: KeeperPose = {
-      x: result.keeper.x + travel * eased,
+      // A keeper at full stretch reaches the ball with the gloves, not the belly: the body stops short of it.
+      x: result.keeper.x + (travel - Math.sign(travel) * far * Math.min(Math.abs(travel), DIVE_ARM)) * eased,
       lift: air * (far * Math.max(0.1, dive.y - 0.3) + (1 - far) * Math.max(0, dive.y - 1.9)),
       lean: Math.sign(travel) * far * 1.3 * eased,
       stretch: 0.15 + 0.85 * eased * Math.min(1, dive.y / 1.5 + far * 0.8),
