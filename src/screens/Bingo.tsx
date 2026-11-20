@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BINGO_RULES } from "../../shared/balance";
 import { CELLS, bingoWordsProblem, completedLines, BINGO_LINES, usableBingoWords } from "../../shared/bingo";
-import type { BingoAction, BingoGameView, BingoInput, BingoPollResponse, BingoResponse, BingoState, BingoSummary, CatchmindPlayer, LedgerEntry, User } from "../../shared/types";
+import type { BingoAction, BingoCreateInput, BingoGameView, BingoInput, BingoPollResponse, BingoResponse, BingoState, BingoSummary, CatchmindPlayer, LedgerEntry, User } from "../../shared/types";
 import { api, ApiFailure } from "../api";
 import { previewBingo } from "../bingo-preview";
 import { Avatar, Segmented, Toolbar, honorific, useDisplayNameLookup } from "../components/UI";
@@ -74,17 +74,27 @@ export function Bingo({ user, onBack, demo = false, onSummary, onPreviewChange, 
     return () => { clearInterval(timer); document.removeEventListener("visibilitychange", tick); };
   }, [refresh, live, engine]);
 
-  const act = useCallback(async (action: BingoAction, input: BingoInput): Promise<boolean> => {
+  /** Opening a game reports the AI's words as they arrive (signed in); the preview
+   * has no AI, so it only acts the wait out. */
+  const create = useCallback(async (input: BingoCreateInput, onProgress: (words: number, of: number) => void) => {
+    if (!engine) return api.bingoCreate(input, onProgress);
+    if (!input.words) for (let words = 0; words <= BINGO_RULES.words; words += 3) { onProgress(words, BINGO_RULES.words); await new Promise(resolve => setTimeout(resolve, words ? 70 : 500)); }
+    return engine.mutate("create", input);
+  }, [engine]);
+  const act = useCallback(async (action: BingoAction, input: BingoInput, onProgress?: (words: number, of: number) => void): Promise<boolean> => {
     if (writing.current) return false;
     writing.current = true; setBusy(true); setError("");
-    try { apply(engine ? await engine.mutate(action, input) : await api.bingoAction(action, input)); return true; }
+    try {
+      apply(action === "create" ? await create(input as BingoCreateInput, onProgress ?? (() => {})) : engine ? await engine.mutate(action, input) : await api.bingoAction(action, input));
+      return true;
+    }
     catch (failure) {
       setError(failure instanceof Error ? failure.message : "요청을 처리하지 못했어요.");
       // The board moved on under this request: show where it is now.
       if (failure instanceof ApiFailure && failure.status === 409) { writing.current = false; void refresh(); }
       throw failure;
     } finally { writing.current = false; setBusy(false); }
-  }, [apply, engine, refresh]);
+  }, [apply, engine, refresh, create]);
   const attempt = (action: BingoAction, input: BingoInput) => { void act(action, input).catch(() => {}); };
 
   const game = state?.game ?? null;
@@ -120,9 +130,11 @@ function Rules() {
 /** Between games: the leader names a topic, or everyone waits for them. */
 function Lead({ state, me, admin, busy, now, act, attempt }: {
   state: BingoState; me: string; admin: boolean; busy: boolean; now: number;
-  act: (action: BingoAction, input: BingoInput) => Promise<boolean>; attempt: (action: BingoAction, input: BingoInput) => void;
+  act: (action: BingoAction, input: BingoInput, onProgress?: (words: number, of: number) => void) => Promise<boolean>; attempt: (action: BingoAction, input: BingoInput) => void;
 }) {
   const name = useDisplayNameLookup();
+  /** The AI's progress while a game is being opened: words received so far. */
+  const [making, setMaking] = useState<{ words: number; of: number; since: number } | null>(null);
   const [topic, setTopic] = useState("");
   const [lines, setLines] = useState<number>(BINGO_RULES.lineChoices[0]);
   const [manual, setManual] = useState(false);
@@ -144,18 +156,22 @@ function Lead({ state, me, admin, busy, now, act, attempt }: {
   }
   const topicReady = topic.trim().length > 0;
   async function open(words?: string[]) {
-    try { if (await act("create", { requestId: requestId.current, topic, lines, ...(words ? { words } : {}) })) requestId.current = crypto.randomUUID(); }
+    if (!words) setMaking({ words: 0, of: BINGO_RULES.words, since: Date.now() });
+    try {
+      const report = (count: number, of: number) => setMaking(current => (current ? { ...current, words: Math.max(current.words, count), of } : current));
+      if (await act("create", { requestId: requestId.current, topic, lines, ...(words ? { words } : {}) }, report)) requestId.current = crypto.randomUUID();
+    }
     catch (failure) {
       // No AI today (no key, over budget, or it could not answer): the leader writes the words.
       if (failure instanceof ApiFailure && failure.status === 503) setManual(true);
       requestId.current = crypto.randomUUID();
-    }
+    } finally { setMaking(null); }
   }
   return <section className="bingo-card card" aria-label="새 빙고 열기">
     <h2>{state.leader ? "내가 이번 리더예요" : "첫 빙고를 열어 보세요"}</h2>
     <p className="bingo-hint">주제를 정하면 AI가 단어 {BINGO_RULES.words}개를 만들고, 모두가 그중 {CELLS}개로 판을 채워요.</p>
     <label className="bingo-field"><span>주제</span>
-      <input type="text" value={topic} maxLength={BINGO_RULES.maxTopicLength} placeholder="예: 분식집 메뉴, 놀이공원, 겨울 하면 생각나는 것" onChange={event => setTopic(event.target.value)} /></label>
+      <input type="text" value={topic} maxLength={BINGO_RULES.maxTopicLength} placeholder="예: 분식집 메뉴, 놀이공원, 겨울 하면 생각나는 것" disabled={!!making} onChange={event => setTopic(event.target.value)} /></label>
     <div className="bingo-field"><span>몇 줄을 먼저 채우면 이길까요?</span>
       <Segmented label="승리 줄 수" value={lines} options={BINGO_RULES.lineChoices.map(choice => ({ value: choice, label: `${choice}줄` }))} onChange={setLines} /></div>
     {manual && <label className="bingo-field"><span>단어 직접 적기 ({typed.length}/{BINGO_RULES.words})</span>
@@ -163,9 +179,30 @@ function Lead({ state, me, admin, busy, now, act, attempt }: {
       {typed.length > 0 && bingoWordsProblem(typed) && <small className="bingo-hint">{bingoWordsProblem(typed)}</small>}</label>}
     {manual
       ? <button type="button" className="primary-button" disabled={busy || !topicReady || !!bingoWordsProblem(typed)} onClick={() => void open(typed)}>{busy ? "여는 중…" : "이 단어로 빙고 열기"}</button>
-      : <button type="button" className="primary-button" disabled={busy || !topicReady} onClick={() => void open()}>{busy ? "AI가 단어를 만드는 중…" : `AI로 단어 ${BINGO_RULES.words}개 만들기`}</button>}
-    <button type="button" className="text-button" onClick={() => setManual(value => !value)}>{manual ? "AI에게 맡기기" : "단어를 직접 적을래요"}</button>
+      : making ? <MakingProgress making={making} />
+        : <button type="button" className="primary-button" disabled={busy || !topicReady} onClick={() => void open()}>{`AI로 단어 ${BINGO_RULES.words}개 만들기`}</button>}
+    <button type="button" className="text-button" disabled={busy} onClick={() => setManual(value => !value)}>{manual ? "AI에게 맡기기" : "단어를 직접 적을래요"}</button>
   </section>;
+}
+
+/** How far the AI is with the word list. Before the first word arrives the
+ * model is still thinking: that part of the bar creeps forward with time (it
+ * is an estimate); from then on the bar follows the words actually received. */
+const THINKING_SHARE = 0.2, THINKING_PACE_MS = 6000;
+function MakingProgress({ making }: { making: { words: number; of: number; since: number } }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 200); return () => clearInterval(timer); }, []);
+  const thinking = THINKING_SHARE * (1 - Math.exp(-(now - making.since) / THINKING_PACE_MS));
+  const share = making.words ? THINKING_SHARE + (1 - THINKING_SHARE) * making.words / making.of : thinking;
+  const percent = Math.min(99, Math.round(share * 100)), left = making.of - making.words;
+  return <div className="bingo-making" role="status" aria-live="polite">
+    <div className="bingo-making-head">
+      <strong>{making.words ? `단어 ${making.words}/${making.of}개` : "AI가 주제에 맞는 단어를 떠올리는 중…"}</strong>
+      <span>{making.words ? (left > 0 ? `${left}개 남았어요` : "판을 여는 중…") : `${percent}%`}</span>
+    </div>
+    <div className="bingo-making-bar" role="progressbar" aria-label="단어 만들기 진행" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ width: `${percent}%` }} /></div>
+    <small className="bingo-hint">보통 10초 안팎이면 끝나요. 화면을 닫지 말고 기다려 주세요.</small>
+  </div>;
 }
 
 function Seats({ game, me, turn }: { game: BingoGameView; me: string; turn?: string | null }) {

@@ -1,7 +1,7 @@
-import { AIM_RATIO, FRAME_DT, inHouse, simulateThrow, type StoneInput, type StonePosition, type ThrowResult } from "../../shared/curling-physics";
+import { AIM_RATIO, FRAME_DT, inHouse, startThrow, type StoneInput, type StonePosition, type ThrowResult, type ThrowRun } from "../../shared/curling-physics";
 import type { ArcadeSound } from "../arcade/sound";
 import { readGesture, type GestureConfig, type GesturePoint } from "../freethrow/gesture";
-import { CurlingRenderer, RELEASE, STAGE, STONE_RADIUS, type Scene } from "./render";
+import { CurlingRenderer, RELEASE, STAGE, STONE_RADIUS, toScreen, type Scene } from "./render";
 
 /** The swipe that pushes a stone: the same reading as a free throw, power only
  * (the direction is chosen before the push). */
@@ -10,14 +10,22 @@ const KEEP_MS = 400;
 const PULL = { down: 0.11, up: 0.04 };
 /** A touch this near the waiting stone picks it up; anywhere else turns the aim. */
 const GRAB_RADIUS = STONE_RADIUS * 2.6;
+/** Sweeping: rubbing the ice while the stone slides. The finger has to keep
+ * moving: this much travel (logical pixels) within `windowMs` counts as
+ * brushing, and it lasts `holdMs` past the last such moment. */
+const SWEEP_TOUCH = { travel: 14, windowMs: 140, holdMs: 110 };
+/** If the page stalls, the slide resumes from where it was rather than jumping ahead. */
+const MAX_CATCH_UP = 8;
 
 export type SheetMode = "ready" | "holding" | "sliding" | "over";
 export interface SheetCallbacks {
   onMode?(mode: SheetMode): void;
   onAim?(aim: number): void;
-  /** The stone has left the hand (input already decided). */
+  /** The stone has left the hand. */
   onThrow?(input: StoneInput): void;
-  /** Everything has stopped. `sheet` is what is left in play. */
+  /** The player started or stopped brushing the ice. */
+  onSweep?(sweeping: boolean): void;
+  /** Everything has stopped. `result.input` is the throw as played, sweeping included. `sheet` is what is left in play. */
   onResult(result: ThrowResult, sheet: StonePosition[]): void;
   /** The finger let go without a real push, so the stone stayed. */
   onCancel?(): void;
@@ -36,7 +44,10 @@ export class CurlingController {
   private points: GesturePoint[] = [];
   private grabbed: GesturePoint | null = null;
   private offset = 0;
-  private slide: { result: ThrowResult; start: number; event: number } | null = null;
+  private slide: { run: ThrowRun; start: number } | null = null;
+  /** The finger rubbing the ice during a slide: where it has been lately. */
+  private brush: { pointer: number; trail: { x: number; y: number; t: number }[]; until: number } | null = null;
+  private sweeping = false;
   private frame = 0;
   private observer: ResizeObserver | null = null;
   private rect: DOMRect | null = null;
@@ -72,9 +83,11 @@ export class CurlingController {
     if (this.mode !== "ready" || !this.enabled) return;
     this.launch({ power, aim: this.aim });
   }
+  /** Brushes (or stops brushing) without a finger: used by tests and the keyboard. */
+  sweep(on: boolean) { this.brush = on ? { pointer: -1, trail: [], until: Infinity } : null; }
   /** A new end: the sheet is swept clean. */
   reset() {
-    this.sheet = []; this.thrown = 0; this.slide = null; this.offset = 0;
+    this.sheet = []; this.thrown = 0; this.slide = null; this.offset = 0; this.brush = null; this.setSweeping(false);
     this.setMode("ready"); this.paint();
   }
   destroy() {
@@ -106,7 +119,32 @@ export class CurlingController {
     const ahead = Math.max(60, RELEASE.y - pixel.y);
     this.setAim((pixel.x - RELEASE.x) / ahead / AIM_RATIO * 100);
   }
+  private setSweeping(value: boolean) { if (this.sweeping !== value) { this.sweeping = value; this.callbacks.onSweep?.(value); } }
+  /** Whether the finger is rubbing right now: recent travel, not just resting on the ice. */
+  private brushing(now: number): boolean {
+    const brush = this.brush;
+    if (!brush || !this.enabled) return false;
+    if (brush.pointer === -1) return true;
+    return now < brush.until;
+  }
+  private rub(event: PointerEvent) {
+    const brush = this.brush!, pixel = this.toPixels(this.stagePoint(event)), now = performance.now();
+    brush.trail.push({ x: pixel.x, y: pixel.y, t: now });
+    while (brush.trail.length > 1 && now - brush.trail[0]!.t > SWEEP_TOUCH.windowMs) brush.trail.shift();
+    let travel = 0;
+    for (let i = 1; i < brush.trail.length; i++) travel += Math.hypot(brush.trail[i]!.x - brush.trail[i - 1]!.x, brush.trail[i]!.y - brush.trail[i - 1]!.y);
+    if (travel >= SWEEP_TOUCH.travel) brush.until = now + SWEEP_TOUCH.holdMs;
+  }
   private down = (event: PointerEvent) => {
+    if (this.mode === "sliding" && event.isPrimary && event.button <= 0 && this.enabled) {
+      // Anywhere on the ice: the finger becomes the broom.
+      event.preventDefault();
+      this.rect = null;
+      try { this.canvas.setPointerCapture(event.pointerId); } catch { /* Synthetic events. */ }
+      this.brush = { pointer: event.pointerId, trail: [], until: 0 };
+      this.rub(event);
+      return;
+    }
     if (!event.isPrimary || event.button > 0 || this.mode !== "ready" || !this.enabled) return;
     this.rect = null;
     const point = this.stagePoint(event), pixel = this.toPixels(point);
@@ -120,6 +158,7 @@ export class CurlingController {
     this.loop();
   };
   private move = (event: PointerEvent) => {
+    if (this.brush && event.pointerId === this.brush.pointer) { this.rub(event); return; }
     if (event.pointerId === this.aiming) { this.aimToward(this.toPixels(this.stagePoint(event))); return; }
     if (event.pointerId !== this.pointer || this.mode !== "holding") return;
     const samples = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [];
@@ -129,6 +168,7 @@ export class CurlingController {
     this.offset = Math.max(-PULL.up, Math.min(PULL.down, last.y - this.grabbed!.y)) * STAGE.height;
   };
   private up = (event: PointerEvent) => {
+    if (this.brush && event.pointerId === this.brush.pointer) { this.brush = null; return; }
     if (event.pointerId === this.aiming) { this.aiming = null; return; }
     if (event.pointerId !== this.pointer || this.mode !== "holding") return;
     this.points.push(this.stagePoint(event));
@@ -139,16 +179,16 @@ export class CurlingController {
   };
   private cancel = () => {
     this.aiming = null;
+    if (this.brush && this.brush.pointer !== -1) this.brush = null;
     if (this.mode !== "holding") return;
     this.pointer = null; this.offset = 0;
     this.setMode("ready"); this.paint();
   };
   private launch(input: StoneInput) {
-    const result = simulateThrow(this.sheet, input, this.thrown);
-    this.slide = { result, start: performance.now(), event: 0 };
-    this.offset = 0;
+    this.slide = { run: startThrow(this.sheet, input, this.thrown), start: performance.now() };
+    this.offset = 0; this.brush = null;
     this.sound.activate(); this.sound.noise(.5, .05, 500, "lowpass");
-    this.callbacks.onThrow?.(result.input);
+    this.callbacks.onThrow?.(input);
     this.setMode("sliding");
     this.loop();
   }
@@ -162,25 +202,25 @@ export class CurlingController {
     this.paint();
     if (moving && !this.destroyed) this.frame = requestAnimationFrame(this.tick);
   };
-  private live: StonePosition[] | null = null;
-  /** Advances the recorded slide; returns whether it is still playing. */
+  private lastSwish = 0;
+  /** Plays the slide on in real time, one physics frame at a time, brushing
+   * whenever the finger is rubbing; returns whether it is still going. */
   private advance(now: number): boolean {
-    const slide = this.slide!, { result } = slide, frames = result.frames;
-    const t = Math.max(0, (now - slide.start) / 1000), index = t / FRAME_DT;
-    const base = Math.min(frames.length - 1, Math.floor(index)), next = Math.min(frames.length - 1, base + 1), share = Math.min(1, index - base);
-    const later = frames[next]!.stones;
-    // A stone taken off the sheet simply stops being drawn at its last frame.
-    this.live = frames[base]!.stones.map(stone => {
-      const to = later.find(candidate => candidate.id === stone.id);
-      return to ? { id: stone.id, x: stone.x + (to.x - stone.x) * share, y: stone.y + (to.y - stone.y) * share } : stone;
-    });
-    while (slide.event < result.events.length && result.events[slide.event]!.t <= t) {
-      const event = result.events[slide.event++]!;
-      if (event.type === "hit") { this.sound.tone(520, { duration: .09, type: "square", gain: .04, to: 380 }); this.sound.noise(.05, .1, 1800); this.sound.vibrate(16); }
-      else this.sound.tone(140, { duration: .12, type: "sine", gain: .06, to: 90 });
+    const slide = this.slide!, { run } = slide;
+    let due = Math.floor(Math.max(0, now - slide.start) / (FRAME_DT * 1000)) - run.frame;
+    if (due > MAX_CATCH_UP) { slide.start = now - (run.frame + 1) * FRAME_DT * 1000; due = 1; }
+    for (; due > 0 && !run.done; due--) {
+      const brushing = this.brushing(now) && !!run.sliding();
+      this.setSweeping(brushing);
+      if (brushing && now - this.lastSwish > 130) { this.lastSwish = now; this.sound.noise(.12, .05, 2600, "highpass"); }
+      for (const event of run.advance(brushing)) {
+        if (event.type === "hit") { this.sound.tone(520, { duration: .09, type: "square", gain: .04, to: 380 }); this.sound.noise(.05, .1, 1800); this.sound.vibrate(16); }
+        else this.sound.tone(140, { duration: .12, type: "sine", gain: .06, to: 90 });
+      }
     }
-    if (index < frames.length - 1) return true;
-    this.slide = null; this.live = null;
+    if (!run.done) return true;
+    const result = run.result();
+    this.slide = null; this.brush = null; this.setSweeping(false);
     this.sheet = result.after; this.thrown++;
     this.setMode(this.thrown >= this.stones ? "over" : "ready");
     this.callbacks.onResult(result, this.sheet);
@@ -188,8 +228,11 @@ export class CurlingController {
   }
   private paint() {
     const waiting = this.mode === "ready" || this.mode === "holding";
+    const brush = this.sweeping && this.brush ? this.brush.trail[this.brush.trail.length - 1] : null;
+    const sliding = this.sweeping ? this.slide?.run.sliding() : null;
     const scene: Scene = {
-      stones: this.live ?? this.sheet, aim: this.aim,
+      stones: this.slide?.run.stones() ?? this.sheet, aim: this.aim,
+      sweep: this.sweeping ? { at: brush ? { x: brush.x, y: brush.y } : sliding ? { x: toScreen(sliding.x, sliding.y).x, y: toScreen(sliding.x, sliding.y).y - STONE_RADIUS * 2.2 } : null, phase: performance.now() } : null,
       ready: waiting ? { id: this.thrown, offset: this.offset, held: this.mode === "holding" } : null,
       latest: this.slide ? this.thrown : this.thrown ? this.thrown - 1 : null,
     };

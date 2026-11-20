@@ -68,3 +68,5 @@
 .arcade-status.is-dark { color: rgba(255, 255, 255, 0.88); }
 .arcade-practice-stats.is-dark, .arcade-practice-stats.is-dark strong, .arcade-practice-stats.is-dark b { color: #fff; }
 .arcade-readout { color: var(--text); }
+.curling-sweep { bottom: auto; top: 3%; transition: background var(--dur-m) var(--ease-out), color var(--dur-m) var(--ease-out); }
+.curling-sweep.is-on { background: #f47c66; color: #fff; }

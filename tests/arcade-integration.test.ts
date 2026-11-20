@@ -148,6 +148,24 @@ describe('curling and penalty official sets', () => {
     expect(judgeShootout(set.slot + 1, inputs).kicks.map(kick => kick.kind)).not.toEqual(expected.kicks.map(kick => kick.kind));
   });
 
+  it('simulates the sweeping that was recorded with each stone, and refuses sweeping it cannot have happened', async () => {
+    const set = await start('curling');
+    // Five weak throws stop short of the house; brushed all the way, the first reaches it.
+    const weak = Array.from({ length: 5 }, (_, i) => ({ power: 40, aim: [0, -60, 60, -30, 30][i]! }));
+    expect(simulateEnd(weak).counted[0]).toBe(false);
+    const brushed = simulateEnd([{ ...weak[0]!, sweep: [0, 600] }, ...weak.slice(1)]);
+    expect(brushed.counted[0]).toBe(true);
+    const inputs = brushed.throws.map(result => result.input);
+    await rejects(finish('curling', 'min', set.id, [{ ...weak[0]!, sweep: [30, 10] }, ...weak.slice(1)]), 400, 'INVALID_SET');
+    await rejects(finish('curling', 'min', set.id, [{ ...weak[0]!, sweep: [0, 9999] }, ...weak.slice(1)]), 400, 'INVALID_SET');
+    const done = await finish('curling', 'min', set.id, inputs);
+    expect(done.set.made).toBe(brushed.score);
+    expect(done.set.tries[0]).toMatchObject({ made: true, kind: brushed.throws[0]!.kind });
+    expect(JSON.parse(await db.prepare('SELECT inputs_json FROM arcade_sets WHERE id = ?').bind(set.id).first('inputs_json') as string)[0].sweep).toEqual(inputs[0]!.sweep);
+    // The same throws without the sweeping are a different end.
+    await rejects(finish('curling', 'min', set.id, weak), 409, 'SET_CONFLICT');
+  });
+
   it('pays nothing for a set without a score', async () => {
     const set = await start('curling');
     expect((await finish('curling', 'min', set.id, stones(0))).set).toMatchObject({ made: 0, completed: true, points: 0, gold: 0 });

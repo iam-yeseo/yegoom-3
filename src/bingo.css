@@ -62,3 +62,10 @@ button.bingo-cell { touch-action: manipulation; }
 .bingo-reveal-board { display: grid; gap: 6px; margin-top: 12px; }
 .bingo-reveal-board small { color: var(--muted); font-weight: 700; }
 .bingo-result-art { display: block; width: 132px; height: 132px; margin: 0 auto -4px; }
+.bingo-making { display: grid; gap: 8px; border-radius: 18px; padding: 14px 16px; background: #f6f1fd; }
+.bingo-making-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 14px; }
+.bingo-making-head strong { min-width: 0; font-weight: 800; color: #5a43a3; word-break: keep-all; }
+.bingo-making-head span { flex-shrink: 0; color: var(--muted); font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bingo-making-bar { height: 12px; overflow: hidden; border-radius: 999px; background: #e4dbf7; }
+.bingo-making-bar i { display: block; height: 100%; min-width: 12px; border-radius: 999px; background: linear-gradient(90deg, #a98bf0, #f47c66); transition: width 260ms var(--ease-out); }
+@media (prefers-reduced-motion: reduce) { .bingo-making-bar i { transition: none; } }

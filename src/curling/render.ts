@@ -16,6 +16,8 @@ export interface Scene {
   aim: number;
   /** The newest stone, ringed so it is easy to follow. */
   latest: number | null;
+  /** The ice is being brushed: where the broom is (logical pixels) and a clock for its wiggle. */
+  sweep: { at: { x: number; y: number } | null; phase: number } | null;
 }
 export const STONE_SRC = "/curling/stone.webp";
 const COLORS = { ice: "#eaf6fb", edge: "#cfe6f0", line: "#b9d3df", hog: "#f47c66", blue: "#8cc4ea", white: "#ffffff", red: "#f69a88", text: "#8aa5b3" };
@@ -56,6 +58,23 @@ export class CurlingRenderer {
     if (scene.ready) this.aimLine(scene.aim);
     for (const stone of scene.stones) { const at = toScreen(stone.x, stone.y); this.stone(at.x, at.y, stone.id === scene.latest, false); }
     if (scene.ready) this.stone(RELEASE.x, RELEASE.y + scene.ready.offset, true, scene.ready.held);
+    if (scene.sweep?.at) this.broom(scene.sweep.at.x, scene.sweep.at.y, scene.sweep.phase);
+  }
+  /** A little broom scrubbing side to side, with the polished streaks it leaves. */
+  private broom(x: number, y: number, phase: number) {
+    const { ctx } = this, swing = Math.sin(phase / 38) * 9;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.95)"; ctx.lineWidth = 3;
+    for (const [dx, dy, length] of [[-14, 10, 16], [2, 16, 20], [14, 9, 14]] as const) {
+      ctx.beginPath(); ctx.moveTo(x + dx - length / 2 - swing * 0.4, y + dy); ctx.lineTo(x + dx + length / 2 - swing * 0.4, y + dy); ctx.stroke();
+    }
+    ctx.translate(x + swing, y);
+    ctx.strokeStyle = "#8d6e4f"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(10, -30); ctx.stroke();
+    ctx.fillStyle = "#f47c66"; ctx.beginPath(); ctx.roundRect(-15, -5, 30, 10, 5); ctx.fill();
+    ctx.fillStyle = "#ffd866"; ctx.beginPath(); ctx.roundRect(-15, 3, 30, 4, 2); ctx.fill();
+    ctx.restore();
   }
   /** The ice, the house and the lines never change: they are painted once. */
   private paintBackdrop(): HTMLCanvasElement {

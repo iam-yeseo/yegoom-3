@@ -11,7 +11,7 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput, FreeThrowSetInput, FreeThrowFinishInput, FreeThrowFinishResponse, FreeThrowState,
-  ArcadeFinishInput, ArcadeFinishResponse, ArcadeStartInput, ArcadeState, BingoAction, BingoInput, BingoPollResponse, BingoResponse,
+  ArcadeFinishInput, ArcadeFinishResponse, ArcadeStartInput, ArcadeState, BingoAction, BingoCreateInput, BingoInput, BingoPollResponse, BingoResponse,
   SantaFinishInput, SantaFinishResponse, SantaRunInput, SantaState,
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagEvolveInput, TagResponse, NotificationsResponse, NotificationSummary,
   AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
@@ -70,6 +70,42 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     );
   return body as T;
 }
+/** Opens a bingo game. The server answers in lines while the AI writes the
+ * words: `onProgress(words, of)` is called as they arrive, then the board (or
+ * the refusal) comes last. */
+async function bingoCreate(input: BingoCreateInput, onProgress: (words: number, of: number) => void): Promise<BingoResponse> {
+  if (!navigator.onLine) throw new ApiFailure(0, "인터넷 연결을 확인해 주세요. 입력한 내용은 아직 저장되지 않았어요.", "OFFLINE");
+  let response: Response;
+  try {
+    response = await fetch("/api/bingo/create?stream=1", { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+  } catch { throw new ApiFailure(0, "서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.", "NETWORK"); }
+  if (!response.ok || !response.body || !response.headers.get("Content-Type")?.includes("ndjson")) {
+    const body = await response.json().catch(() => null) as (ApiError & BingoResponse) | null;
+    if (response.ok && body?.bingo) return body;
+    throw new ApiFailure(response.status, body?.error?.message ?? "요청을 처리하지 못했어요. 다시 시도해 주세요.", body?.error?.code);
+  }
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let buffer = "", done: BingoResponse | null = null;
+  const take = (line: string) => {
+    if (!line.trim()) return;
+    const message = JSON.parse(line) as { progress?: number; of?: number; done?: BingoResponse; error?: { status: number; code: string; message: string } };
+    if (message.error) throw new ApiFailure(message.error.status, message.error.message, message.error.code);
+    if (message.done) done = message.done;
+    else if (typeof message.progress === "number") onProgress(message.progress, message.of ?? 30);
+  };
+  for (;;) {
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try { chunk = await reader.read(); } catch { throw new ApiFailure(0, "응답이 끊겼어요. 빙고판을 다시 확인해 주세요.", "NETWORK"); }
+    buffer += decoder.decode(chunk.value ?? new Uint8Array(), { stream: !chunk.done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) take(line);
+    if (chunk.done) break;
+  }
+  take(buffer);
+  if (!done) throw new ApiFailure(0, "응답이 끊겼어요. 빙고판을 다시 확인해 주세요.", "NETWORK");
+  return done;
+}
 export const api = {
   admin: () => request<AdminState>("/admin"),
   saveGameSettings: (id: GameId, rules: PredictionRules, effectiveFrom: string, expectedUserId: string) => request<AdminState>(`/admin/games/${id}`, {
@@ -97,6 +133,7 @@ export const api = {
   startSantaRun: (input: SantaRunInput) => request<SantaState>("/santa/runs", { method: "POST", body: JSON.stringify(input) }),
   finishSantaRun: (input: SantaFinishInput) => request<SantaFinishResponse>("/santa/finish", { method: "POST", body: JSON.stringify(input) }),
   bingo: (since?: number) => request<BingoPollResponse>(`/bingo${since === undefined ? "" : `?since=${since}`}`),
+  bingoCreate,
   bingoAction: (action: BingoAction, input: BingoInput) => request<BingoResponse>(`/bingo/${action}`, { method: "POST", body: JSON.stringify(input) }),
   catchmind: (since?: number) => request<CatchmindPollResponse>(`/catchmind${since === undefined ? "" : `?since=${since}`}`),
   catchmindGallery: (before?: number) => request<CatchmindGalleryResponse>(`/catchmind/gallery${before === undefined ? "" : `?before=${before}`}`),
