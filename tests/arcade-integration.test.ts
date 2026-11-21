@@ -43,7 +43,7 @@ const HOUSE = [{ power: 55, aim: 0 }, { power: 52, aim: -45 }, { power: 52, aim:
 const stones = (made: number) => HOUSE.map((stone, i) => (i < made ? stone : { power: 100, aim: 70 * (i % 2 ? 1 : -1) }));
 /** Kicks for a slot's keepers: `made` goals away from the keeper, the rest rolled at them. */
 function kicks(slot: number, made: number): KickInput[] {
-  return penaltyKeepers(slot, 5).map((keeper, i) => {
+  return penaltyKeepers(slot, ARCADE_RULES.penalty.tries).map((keeper, i) => {
     if (i >= made) return { power: 12, aim: 0, t: 500 };
     for (let t = 300; t < 6000; t += 20) for (const aim of [-66, 66]) {
       const stand = keeperAt(keeper, t);
@@ -119,14 +119,18 @@ describe('curling and penalty official sets', () => {
     const set = await start('curling');
     const inputs = stones(3), expected = simulateEnd(inputs);
     expect(expected.score).toBe(3);
+    // Each stone is worth what its place in the house says (10 in the middle … 1 on the edge), not 1 a stone.
+    expect(expected.points.filter(Boolean)).toHaveLength(3);
+    expect(expected.total).toBe(expected.points.reduce((sum, value) => sum + value, 0));
+    expect(expected.total).toBeGreaterThan(3);
     const done = await finish('curling', 'min', set.id, inputs);
     expect(done.replayed).toBe(false);
-    expect(done.set).toMatchObject({ made: 3, completed: true, finished: true, points: 3, gold: 30 });
-    expect(done.set.tries).toEqual(expected.throws.map((result, index) => ({ index, made: expected.counted[index], kind: result.kind })));
+    expect(done.set).toMatchObject({ made: 3, completed: true, finished: true, points: expected.total, gold: 30 });
+    expect(done.set.tries).toEqual(expected.throws.map((result, index) => ({ index, made: expected.counted[index], kind: result.kind, points: expected.points[index] })));
     expect(done).toMatchObject({ game: 'curling', available: false, played: true, completed: true, made: 3 });
     expect(await ledger('curling', set.id)).toEqual([
       { currency: 'gold', amount: 30, reason: '컬링 하우스 안착', reference: `curling:set:${set.id}:gold`, week_start: null },
-      { currency: 'score', amount: 3, reason: '컬링 하우스 안착', reference: `curling:set:${set.id}:score`, week_start: '2026-11-02' },
+      { currency: 'score', amount: expected.total, reason: '컬링 하우스 안착', reference: `curling:set:${set.id}:score`, week_start: '2026-11-02' },
     ]);
     expect(scoreSource(`curling:set:${set.id}:score`, '')).toEqual({ game: 'curling', label: '컬링' });
     // A lost response is retried with the same end: no second payment. A different end is refused.
@@ -137,12 +141,13 @@ describe('curling and penalty official sets', () => {
 
   it('judges penalty kicks against the keepers of the set\'s slot', async () => {
     const set = await start('penalty');
-    const inputs = kicks(set.slot, 4), expected = judgeShootout(set.slot, inputs);
-    expect(expected.goals).toBe(4);
+    const inputs = kicks(set.slot, 7), expected = judgeShootout(set.slot, inputs);
+    expect(inputs).toHaveLength(10);
+    expect(expected.goals).toBe(7);
     const done = await finish('penalty', 'min', set.id, inputs);
-    expect(done.set).toMatchObject({ made: 4, completed: true, points: 4, gold: 40 });
+    expect(done.set).toMatchObject({ made: 7, completed: true, points: 7, gold: 70 });
     expect(done.set.tries.map(entry => entry.kind)).toEqual(expected.kicks.map(kick => kick.kind));
-    expect((await ledger('penalty', set.id)).map(row => [row.currency, row.amount, row.reason])).toEqual([['gold', 40, '승부차기 골'], ['score', 4, '승부차기 골']]);
+    expect((await ledger('penalty', set.id)).map(row => [row.currency, row.amount, row.reason])).toEqual([['gold', 70, '승부차기 골'], ['score', 7, '승부차기 골']]);
     expect(scoreSource(`penalty:set:${set.id}:score`, '')).toEqual({ game: 'penalty', label: '승부차기' });
     // The same kicks against another slot's keepers are a different set: nothing is taken from the client.
     expect(judgeShootout(set.slot + 1, inputs).kicks.map(kick => kick.kind)).not.toEqual(expected.kicks.map(kick => kick.kind));
@@ -176,6 +181,8 @@ describe('curling and penalty official sets', () => {
     const set = await start('curling');
     await rejects(finish('curling', 'siwon', set.id, stones(3)), 404, 'SET_NOT_FOUND');
     await rejects(finish('penalty', 'min', set.id, kicks(set.slot, 2)), 404, 'SET_NOT_FOUND');
+    // Five kicks were a set before; now a set is ten.
+    await rejects(finish('penalty', 'min', set.id, kicks(set.slot, 2).slice(0, 5)), 400, 'INVALID_SET');
     await rejects(finishArcadeSet(d1(), 'curling', admin, { setId: set.id, inputs: stones(3) }, NOW), 403, 'CANNOT_PLAY');
     for (const inputs of [stones(3).slice(0, 4), [...stones(3), HOUSE[0]], [...stones(3).slice(0, 4), { power: 101, aim: 0 }], [...stones(3).slice(0, 4), { power: 50, aim: 0.5 }], [...stones(3).slice(0, 4), null]]) {
       await rejects(finish('curling', 'min', set.id, inputs), 400, 'INVALID_SET');
@@ -183,7 +190,7 @@ describe('curling and penalty official sets', () => {
     await rejects(finishArcadeSet(d1(), 'curling', player('min'), { setId: 'nope', inputs: stones(3) }, NOW), 400, 'INVALID_SET');
     const kick = await start('penalty');
     await rejects(finish('penalty', 'min', kick.id, stones(3)), 400, 'INVALID_SET');
-    await rejects(finish('penalty', 'min', kick.id, [...kicks(kick.slot, 2).slice(0, 4), { power: 50, aim: 10, t: -1 }]), 400, 'INVALID_SET');
+    await rejects(finish('penalty', 'min', kick.id, [...kicks(kick.slot, 2).slice(0, 9), { power: 50, aim: 10, t: -1 }]), 400, 'INVALID_SET');
     expect((await db.prepare('SELECT SUM(tries) AS n FROM arcade_sets').first('n'))).toBe(0);
   });
 
@@ -200,7 +207,7 @@ describe('curling and penalty official sets', () => {
     await finish('curling', 'min', set.id, stones(2));
     const left = await start('curling', 'siwon');
     const board = await getArcadeState(d1(), 'curling', admin, NOW);
-    expect(board.today).toEqual([{ username: 'min', slot: set.slot, slotStart: set.slotStart, made: 2, completed: true }]);
+    expect(board.today).toEqual([{ username: 'min', slot: set.slot, slotStart: set.slotStart, made: 2, points: simulateEnd(stones(2)).total, completed: true }]);
     expect(board.current).toBeNull();
     expect((await getArcadeState(d1(), 'penalty', admin, NOW)).today).toEqual([]);
     await rejects(finish('curling', 'siwon', left.id, stones(5), arcadeDeadline('curling', left.slot)), 409, 'SET_CLOSED');
@@ -221,7 +228,7 @@ describe('curling and penalty official sets', () => {
     expect(kstHour(arcadeSlotStart('curling', arcadeSlot('curling', afterMidnight)))).toBe(22);
     const set = await start('curling', 'min', afterMidnight);
     expect(await db.prepare('SELECT date FROM arcade_sets WHERE id = ?').bind(set.id).first('date')).toBe('2026-11-08');
-    expect((await finish('curling', 'min', set.id, stones(2), afterMidnight + 120_000)).set).toMatchObject({ points: 2, gold: 20 });
+    expect((await finish('curling', 'min', set.id, stones(2), afterMidnight + 120_000)).set).toMatchObject({ points: simulateEnd(stones(2)).total, gold: 20 });
     // Started before the 23:50 close but recorded after it: gold, no score.
     const late = await start('curling', 'siwon', Date.parse('2026-11-07T23:45:00+09:00'));
     const done = await finishArcadeSet(d1(), 'curling', player('siwon'), { setId: late.id, inputs: stones(3) }, Date.parse('2026-11-07T23:55:00+09:00'));

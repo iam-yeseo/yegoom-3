@@ -103,6 +103,25 @@ export const inHouse = (stone: { x: number; y: number }): boolean => {
   const dx = stone.x, dy = stone.y - SHEET.tee, reach = SHEET.houseRadius + SHEET.stoneRadius;
   return dx * dx + dy * dy <= reach * reach;
 };
+/** What a stone is worth by where it lies when the end is over, from the centre
+ * outwards: inside a circle (the stone's centre is in it), then only touching
+ * it (걸침). `reach` is the farthest the stone's centre may be from the tee. */
+export const CURLING_ZONES = [
+  { points: 10, label: '빨간 원 안', reach: SHEET.rings[2] },
+  { points: 8, label: '빨간 원에 걸침', reach: SHEET.rings[2] + SHEET.stoneRadius },
+  { points: 6, label: '흰 원 안', reach: SHEET.rings[1] },
+  { points: 4, label: '흰 원에 걸침', reach: SHEET.rings[1] + SHEET.stoneRadius },
+  { points: 2, label: '파란 원 안', reach: SHEET.rings[0] },
+  { points: 1, label: '파란 원에 걸침', reach: SHEET.rings[0] + SHEET.stoneRadius },
+] as const;
+/** Points for a stone lying here: 10 in the middle down to 1 on the edge of the house, 0 outside it. */
+export function stonePoints(stone: { x: number; y: number }): number {
+  const dx = stone.x, dy = stone.y - SHEET.tee, gap2 = dx * dx + dy * dy;
+  for (const zone of CURLING_ZONES) if (gap2 <= zone.reach * zone.reach) return zone.points;
+  return 0;
+}
+/** The points of every stone on a sheet. */
+export const sheetPoints = (sheet: readonly { x: number; y: number }[]): number => sheet.reduce((sum, stone) => sum + stonePoints(stone), 0);
 /** In front of the house rather than beside it. */
 const inLane = (stone: { x: number }): boolean => (stone.x < 0 ? -stone.x : stone.x) <= SHEET.houseRadius + SHEET.stoneRadius;
 const onButton = (stone: { x: number; y: number }): boolean => {
@@ -243,13 +262,19 @@ export interface EndResult {
   throws: ThrowResult[];
   /** For each thrown stone, whether it lies in the house when the end is over. */
   counted: boolean[];
+  /** For each thrown stone, what it is worth where it lies when the end is over. */
+  points: number[];
+  /** Stones in the house. */
   score: number;
+  /** The end's points. */
+  total: number;
 }
 /** A whole end: every stone thrown in order onto the stones left before it. */
 export function simulateEnd(inputs: readonly StoneInput[]): EndResult {
   const throws: ThrowResult[] = [];
   let sheet: StonePosition[] = [];
   inputs.forEach((input, id) => { const result = simulateThrow(sheet, input, id); throws.push(result); sheet = result.after; });
-  const counted = inputs.map((_, id) => sheet.some(stone => stone.id === id && inHouse(stone)));
-  return { throws, counted, score: counted.filter(Boolean).length };
+  const points = inputs.map((_, id) => { const stone = sheet.find(left => left.id === id); return stone ? stonePoints(stone) : 0; });
+  const counted = points.map(value => value > 0);
+  return { throws, counted, points, score: counted.filter(Boolean).length, total: points.reduce((sum, value) => sum + value, 0) };
 }

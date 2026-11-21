@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { ARCADE_RULES } from '../shared/balance';
 import { GOAL, KICK, judgeKick, judgeShootout, keeperAt, kickTarget, penaltyKeepers, validKick, type Keeper } from '../shared/penalty-engine';
 
 const FINGERPRINT = 'ae90aa3be49bf68bc13cdbba710be6761af534e0e497808e50109fcf5e49e392';
@@ -20,6 +21,11 @@ describe('penalty engine', () => {
   it('gives the same keepers and the same result for the same seed and kick', () => {
     expect(penaltyKeepers(42, 5)).toEqual(penaltyKeepers(42, 5));
     expect(penaltyKeepers(42, 5)).not.toEqual(penaltyKeepers(43, 5));
+    // A set is ten kicks now: ten keepers, each a step wider-reaching than the one before.
+    const ten = penaltyKeepers(42, ARCADE_RULES.penalty.tries);
+    expect(ten).toHaveLength(10);
+    ten.slice(1).forEach((keeper, i) => expect(keeper.reach).toBeGreaterThan(ten[i]!.reach));
+    expect(judgeShootout(42, Array.from({ length: 10 }, () => ({ power: 0, aim: 0, t: -1 }))).kicks.map(kick => kick.kind)).toEqual(Array(10).fill('timeout'));
     const kicks = [{ power: 70, aim: 60, t: 1234 }, { power: 20, aim: 0, t: 400 }, { power: 100, aim: -100, t: 0 }, { power: 0, aim: 0, t: -1 }, { power: 66, aim: -58, t: 9999 }];
     expect(JSON.stringify(judgeShootout(42, kicks))).toBe(JSON.stringify(judgeShootout(42, kicks.map(kick => ({ ...kick })))));
   });

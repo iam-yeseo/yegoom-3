@@ -424,6 +424,10 @@ export function Chevron({
     </svg>
   );
 }
+/** The bar on top of a pushed screen: back, title, gold. It sits in the page
+ * until the page scrolls past it, then stays fixed at the top (a little more
+ * compact) so back and gold are always in reach. The slot keeps its place in
+ * the page, so nothing below jumps when it lets go. */
 export function Toolbar({
   title,
   onBack,
@@ -435,18 +439,31 @@ export function Toolbar({
   gold?: number;
   right?: ReactNode;
 }) {
+  const slot = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    let frame = 0;
+    const measure = () => { frame = 0; const node = slot.current; if (node) setStuck(node.getBoundingClientRect().top < 0); };
+    const queue = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    measure();
+    window.addEventListener("scroll", queue, { passive: true });
+    window.addEventListener("resize", queue);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener("scroll", queue); window.removeEventListener("resize", queue); };
+  }, []);
   return (
-    <header className="game-toolbar">
-      <button
-        className="icon-button"
-        onClick={onBack}
-        aria-label="뒤로 가기"
-      >
-        <Chevron />
-      </button>
-      <h1>{title}</h1>
-      {right ?? (gold !== undefined ? <Gold value={gold} /> : <span />)}
-    </header>
+    <div className="game-toolbar-slot" ref={slot}>
+      <header className={`game-toolbar${stuck ? " is-stuck" : ""}`}>
+        <button
+          className="icon-button"
+          onClick={onBack}
+          aria-label="뒤로 가기"
+        >
+          <Chevron />
+        </button>
+        <h1>{title}</h1>
+        {right ?? (gold !== undefined ? <Gold value={gold} /> : <span />)}
+      </header>
+    </div>
   );
 }
 
@@ -574,7 +591,8 @@ export function Segmented<T extends string | number>({
   colors,
   label,
 }: {
-  options: readonly { value: T; label: string }[];
+  /** `badge` is a count shown next to the label while it is above zero (unread posts). */
+  options: readonly { value: T; label: string; badge?: number }[];
   value: T;
   onChange: (value: T) => void;
   colors?: Partial<Record<string, string>>;
@@ -605,6 +623,7 @@ export function Segmented<T extends string | number>({
           onClick={() => onChange(option.value)}
         >
           {option.label}
+          {!!option.badge && <span className="segmented-badge" aria-label={`새 글 ${option.badge}개`}>{option.badge}</span>}
         </button>
       ))}
     </div>

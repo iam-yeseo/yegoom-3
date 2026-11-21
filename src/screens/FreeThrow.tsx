@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FREETHROW_RULES } from "../../shared/balance";
 import type { ShotInput, ShotResult } from "../../shared/freethrow-physics";
-import type { FreeThrowFinishInput, FreeThrowFinishResponse, FreeThrowSet, FreeThrowSetInput, FreeThrowState, FreeThrowSummary, LedgerEntry, User } from "../../shared/types";
+import type { FreeThrowFinishInput, FreeThrowFinishResponse, FreeThrowSet, FreeThrowSetInput, FreeThrowShotInput, FreeThrowState, FreeThrowSummary, LedgerEntry, User } from "../../shared/types";
 import { api, ApiFailure } from "../api";
-import { PlayProgress, PlayShell, QuitDialog, ResultDialog, type RecordStatus } from "../components/PlayShell";
+import { PlayShell, QuitDialog, ResultDialog, type RecordStatus } from "../components/PlayShell";
 import { Avatar, Toolbar, useDisplayNameLookup } from "../components/UI";
 import { previewEngine } from "../freethrow/preview";
 import { anim, reduced } from "../motion";
@@ -13,7 +13,8 @@ import { createFreeThrowSound, type FreeThrowSound } from "../freethrow/sound";
 import { SoundIcon } from "./Santa";
 import "../freethrow/freethrow.css";
 
-const { shotsPerSet, goalScore, goalGold, graceMs } = FREETHROW_RULES;
+const { durationMs, reloadMs, goalScore, goalGold, graceMs } = FREETHROW_RULES;
+const SECONDS = durationMs / 1000;
 const HOURS = Array.from({ length: 24 * 60 * 60 * 1000 / FREETHROW_RULES.setIntervalMs }, (_, i) => String(i * FREETHROW_RULES.setIntervalMs / 3_600_000).padStart(2, "0")).join("·");
 
 /** What the player reads after each shot: what happened, then how to adjust. */
@@ -153,13 +154,13 @@ export function FreeThrow({ user, onBack, demo = false, transact, onSummary, onP
       const state = await source.start({ requestId: crypto.randomUUID() });
       apply(state);
       const set = state.current;
-      if (set && !set.completed && !set.finished && !set.shots.length) setPlaying({ mode: "official", set });
+      if (set && !set.completed && !set.finished) setPlaying({ mode: "official", set });
     } catch (failure) { setLoadError(failure instanceof Error ? failure.message : "세트를 시작하지 못했어요."); void load(); }
     finally { setStarting(false); }
   }
-  function finished(setId: string, shots: ShotInput[], made: number) {
+  function finished(setId: string, shots: FreeThrowShotInput[], made: number) {
     setResult({ setId, made, points: made * goalScore, gold: made * goalGold, status: "saving", message: "" });
-    void send({ setId, shots: shots.map(shot => ({ power: shot.power, aim: shot.aim })) });
+    void send({ setId, shots: shots.map(shot => ({ power: shot.power, aim: shot.aim, t: shot.t })) });
   }
   function quit() { setPlaying(null); void load(); }
 
@@ -182,15 +183,16 @@ export function FreeThrow({ user, onBack, demo = false, transact, onSummary, onP
       <li>손을 떼기 직전에 빠를수록 세게 날아가요. 짧으면 더 빠르게, 길면 더 천천히.</li>
       <li>위로 곧게 올리면 가운데로, 기울여 올리면 그쪽으로 빗나가요.</li>
       <li>같은 동작이면 언제나 같은 슛이 나가요. 아래에 나오는 방금 슛의 세기와 방향을 보고 조절해 보세요.</li>
+      <li>던진 공이 날아가는 동안 다음 공이 바로 손에 들어와요. 기다리지 말고 계속 던지세요!</li>
       <li>PC에서는 마우스로 공을 끌어서 똑같이 던져요.</li>
     </ol>
-    <p>연습 모드는 횟수 제한도 보상도 없어요. 공식 도전은 한국 시간 {HOURS}시마다 {shotsPerSet}구 한 세트예요. 세트를 시작하면 그 시간의 기회를 쓴 거예요. {shotsPerSet}구를 다 던지면 한 번에 기록되고, 1골마다 {goalScore}점 + {goalGold}G를 받아 랭킹 점수에도 들어가요. <strong>중간에 나가면 그 세트는 미완료로 끝나고</strong> 점수·골드를 받지 못해요. 늦게 시작했다면 시간이 끝난 뒤 {graceMs / 60_000}분 안에 마치면 돼요. 밤 11시 50분 이후 기록은 골드만 받고 점수에는 들어가지 않아요.</p></details>
+    <p>연습 모드는 횟수 제한도 보상도 없어요. 공식 도전은 한국 시간 {HOURS}시마다 {SECONDS}초 한 세트예요. 세트를 시작하면 그 시간의 기회를 쓴 거예요. 첫 공을 잡는 순간부터 {SECONDS}초 동안 던진 공이 모두 세어지고, 넣은 공 1개마다 {goalScore}점 + {goalGold}G를 받아요(30골이면 {30 * goalScore}점). 점수는 랭킹에도 들어가요. <strong>중간에 나가면 그 세트는 미완료로 끝나고</strong> 점수·골드를 받지 못해요. 늦게 시작했다면 시간이 끝난 뒤 {graceMs / 60_000}분 안에 마치면 돼요. 밤 11시 50분 이후 기록은 골드만 받고 점수에는 들어가지 않아요.</p></details>
     {playing && <FreeThrowPlay key={playing.mode === "official" ? playing.set.id : "practice"} mode={playing.mode}
       onFinish={(shots, made) => { if (playing.mode === "official") finished(playing.set.id, shots, made); }} onQuit={quit} />}
-    {result && <ResultDialog title={result.made === shotsPerSet ? "퍼펙트!" : `${result.made}골 성공!`} art="/freethrow/tile.webp"
+    {result && <ResultDialog title={`${result.made}골 성공!`} art="/freethrow/tile.webp"
       lines={<>
         <strong>{result.made ? `${result.points ? `+${result.points}점 · ` : ""}+${result.gold}G` : "이번엔 골이 없었어요"}</strong>
-        <span>{result.made >= 7 ? "손끝이 살아 있어요. 오늘의 기록판을 확인해 보세요!" : result.made ? "다음 세트에서는 몇 골 더! 연습 모드로 감을 다듬어 보세요." : "내 손가락을 탓하지 말아주세요. 다음 세트에서 만회해요!"}</span>
+        <span>{result.made >= 15 ? "손끝이 살아 있어요. 오늘의 기록판을 확인해 보세요!" : result.made ? "다음 세트에서는 몇 골 더! 연습 모드로 감을 다듬어 보세요." : "내 손가락을 탓하지 말아주세요. 다음 세트에서 만회해요!"}</span>
       </>}
       status={result.status} message={result.message} onRetry={() => pending.current && void send(pending.current)}
       onClose={() => { setResult(null); setPlaying(null); }} />}
@@ -198,26 +200,31 @@ export function FreeThrow({ user, onBack, demo = false, transact, onSummary, onP
 }
 
 interface Stats { shots: number; made: number; streak: number; best: number }
-/** The full-screen court: progress (or practice stats) on top, the last shot's
- * power and direction below. An official set's balls stay on the device until
- * the tenth lands; then the whole set is handed over. */
-function FreeThrowPlay({ mode, onFinish, onQuit }: { mode: "practice" | "official"; onFinish: (shots: ShotInput[], made: number) => void; onQuit: () => void }) {
+/** The full-screen court. Practice shows running stats; an official set shows
+ * the 30 seconds running out. The clock starts with the first ball picked up
+ * and never pauses; balls already in the air when it ends still count. The
+ * set's balls stay on the device until the last one lands, then the whole set
+ * is handed over. */
+function FreeThrowPlay({ mode, onFinish, onQuit }: { mode: "practice" | "official"; onFinish: (shots: FreeThrowShotInput[], made: number) => void; onQuit: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const controller = useRef<FreeThrowController | null>(null);
   const sound = useRef<FreeThrowSound | null>(null);
   const callout = useRef<HTMLDivElement>(null);
-  const shots = useRef<ShotInput[]>([]);
-  const marksRef = useRef<boolean[]>([]);
+  const shots = useRef<FreeThrowShotInput[]>([]);
   const finishRef = useRef(onFinish); finishRef.current = onFinish;
+  /** performance.now() when the first ball was picked up. */
+  const startedAt = useRef<number | null>(null);
+  const handed = useRef(false);
   const official = mode === "official";
   const [throwMode, setThrowMode] = useState<ThrowMode>("idle");
-  const [marks, setMarks] = useState<boolean[]>([]);
   const [stats, setStats] = useState<Stats>({ shots: 0, made: 0, streak: 0, best: 0 });
   const [last, setLast] = useState<{ result: ShotResult; streak: number } | null>(null);
   const [lastInput, setLastInput] = useState<ShotInput | null>(null);
   const [hint, setHint] = useState("");
   const [muted, setMuted] = useState(false);
   const [thrown, setThrown] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [left, setLeft] = useState<number>(durationMs);
   const [visible, setVisible] = useState(!document.hidden);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
@@ -226,23 +233,29 @@ function FreeThrowPlay({ mode, onFinish, onQuit }: { mode: "practice" | "officia
   useEffect(() => {
     const effects = createFreeThrowSound();
     sound.current = effects; setMuted(effects.muted);
+    const elapsed = () => (startedAt.current === null ? 0 : performance.now() - startedAt.current);
+    const begin = () => { if (official && startedAt.current === null) { startedAt.current = performance.now(); setRunning(true); } };
     let runtime: FreeThrowController;
     try {
       runtime = new FreeThrowController(canvas.current!, effects, {
-        onMode: setThrowMode,
-        onThrow: input => { shots.current.push(input); setLastInput(input); setHint(""); setThrown(shots.current.length); },
+        onMode: next => { if (next === "holding") begin(); setThrowMode(next); },
+        // A ball let go after the last second goes back to the hand.
+        canThrow: () => !official || elapsed() <= durationMs,
+        onThrow: input => {
+          begin();
+          if (official) shots.current.push({ power: input.power, aim: input.aim, t: Math.min(durationMs, Math.round(elapsed())) });
+          setLastInput(input); setHint(""); setThrown(count => count + 1);
+        },
         onCancel: () => setHint("공을 아래로 당겼다가 위로 빠르게 쓸어 올리며 놓아요."),
         onResult: result => {
           streak.current = result.made ? streak.current + 1 : 0;
           const current = streak.current;
-          marksRef.current = [...marksRef.current, result.made]; setMarks(marksRef.current);
           setStats(value => ({ shots: value.shots + 1, made: value.made + Number(result.made), streak: current, best: Math.max(value.best, current) }));
           setLast({ result, streak: current });
           if (result.made) effects.cheer(current); else if (result.kind !== "rim-out") effects.sad();
           if (!reduced()) anim(callout.current, [{ scale: ".7", opacity: 0 }, { scale: "1.06", opacity: 1, offset: .6 }, { scale: "1", opacity: 1 }], { dur: 320, ease: "spring" });
-          if (official && marksRef.current.length === shotsPerSet) finishRef.current(shots.current.slice(0, shotsPerSet), marksRef.current.filter(Boolean).length);
         },
-      });
+      }, reloadMs);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "코트를 표시하지 못했어요."); return; }
     controller.current = runtime;
     const warmUp = window.setTimeout(() => effects.prepare(), 120);
@@ -250,48 +263,67 @@ function FreeThrowPlay({ mode, onFinish, onQuit }: { mode: "practice" | "officia
     document.addEventListener("visibilitychange", visibility);
     return () => { clearTimeout(warmUp); runtime.destroy(); effects.dispose(); controller.current = null; document.removeEventListener("visibilitychange", visibility); };
   }, [official]);
-  const done = official && thrown >= shotsPerSet;
-  const throwable = visible && !confirming && !done;
+  // The clock: it runs on from the first ball whatever else happens on screen.
+  useEffect(() => {
+    if (!running) return;
+    const tick = () => setLeft(Math.max(0, durationMs - (performance.now() - (startedAt.current ?? performance.now()))));
+    tick();
+    const timer = window.setInterval(tick, 100);
+    return () => clearInterval(timer);
+  }, [running]);
+  const timeUp = official && left <= 0;
+  const throwable = visible && !confirming && !timeUp;
   useEffect(() => { controller.current?.setEnabled(throwable); }, [throwable]);
+  // Time is up and the last ball has landed: hand the set over, once.
+  const done = timeUp && stats.shots >= thrown;
+  useEffect(() => {
+    if (!done || handed.current) return;
+    handed.current = true;
+    finishRef.current(shots.current, stats.made);
+  }, [done, stats.made]);
 
   function askQuit() {
-    if (!official || marks.length >= shotsPerSet) { onQuit(); return; }
+    if (!official || done) { onQuit(); return; }
     setConfirming(true);
   }
   function toggleSound() { const next = !muted; sound.current?.setMuted(next); setMuted(next); }
   const copy = last ? shotCopy(last.result) : null;
   const rate = stats.shots ? Math.round((stats.made / stats.shots) * 100) : 0;
+  const seconds = Math.ceil(left / 1000);
   return <PlayShell label={official ? "자유투 공식 도전" : "자유투 연습"} theme={{ background: "#eee8fc", text: "#3a3340", tone: "light" }} onClose={askQuit}
-    top={official ? <PlayProgress marks={marks} total={shotsPerSet} current={done ? null : marks.length} label="던진 공" />
+    top={official ? <div className={`freethrow-clock${running && seconds <= 5 ? " is-ending" : ""}`} role="timer" aria-label={`남은 시간 ${seconds}초, ${stats.made}골`}>
+        <span className="freethrow-clock-bar"><i style={{ width: `${(left / durationMs) * 100}%` }} /></span>
+        <b className="freethrow-clock-time">{seconds}<span>초</span></b>
+        <b className="freethrow-clock-goals">{stats.made}<span>골</span></b>
+      </div>
       : <div className="freethrow-practice-stats" aria-label="연습 기록"><strong>연습</strong><span>성공 <b>{stats.made}/{stats.shots}</b></span><span>{rate}%</span><span>연속 <b>{stats.streak}</b></span></div>}
     right={<button type="button" className="play-icon-button" aria-pressed={!muted} aria-label={muted ? "소리 켜기" : "소리 끄기"} onClick={toggleSound}><SoundIcon muted={muted} /></button>}
-    stage={{ width: STAGE.width, height: STAGE.height, content: <div className="freethrow-court" data-mode={throwMode}>
+    stage={{ width: STAGE.width, height: STAGE.height, content: <div className="freethrow-court" data-mode={throwMode} data-thrown={thrown} data-decided={stats.shots}>
       <canvas ref={canvas} width={STAGE.width} height={STAGE.height} role="img"
         aria-label="정면에서 본 농구 골대와 손에 든 농구공. 공을 아래로 당겼다가 위로 쓸어 올리며 놓으면 슛이 나가요." />
       <div ref={callout} className={`freethrow-callout ${last?.result.made ? "is-made" : "is-miss"}`} aria-hidden={!copy}>
         {copy && <><strong>{copy.title}</strong>{last!.streak >= 2 && <em>{last!.streak}연속!</em>}</>}
       </div>
-      {!thrown && throwMode === "idle" && <div className="freethrow-coach" aria-hidden="true"><i /><span>당겼다가 위로 슉!</span></div>}
-      {done && throwMode === "idle" && <div className="freethrow-lock"><span>세트 끝!</span></div>}
+      {!thrown && throwMode === "idle" && <div className="freethrow-coach" aria-hidden="true"><i /><span>{official ? `공을 잡으면 ${SECONDS}초 시작!` : "당겼다가 위로 슉!"}</span></div>}
+      {timeUp && <div className="freethrow-lock"><span>{done ? `시간 끝! ${stats.made}골` : "시간 끝! 마지막 공이 날아가는 중…"}</span></div>}
       {error && <p className="freethrow-play-error" role="alert">{error}</p>}
     </div> }}
     bottom={<>
-      <p className="freethrow-status" role="status" aria-live="polite">{hint || (copy ? copy.detail : "공을 잡고 아래로 살짝 당긴 뒤, 위로 쓸어 올리면서 손을 떼요.")}</p>
+      <p className="freethrow-status" role="status" aria-live="polite">{hint || (copy ? copy.detail : official ? `첫 공을 잡는 순간부터 ${SECONDS}초예요. 넣을 수 있는 만큼 계속 던지세요!` : "공을 잡고 아래로 살짝 당긴 뒤, 위로 쓸어 올리면서 손을 떼요.")}</p>
       <div className="freethrow-readout" aria-label="방금 던진 슛">
         <div className="freethrow-meter"><small>세기</small><span className="freethrow-meter-bar"><i style={{ left: `${lastInput?.power ?? 0}%`, opacity: lastInput ? 1 : 0 }} /></span><b>{lastInput ? lastInput.power : "—"}</b></div>
         <div className="freethrow-aim"><small>방향</small><b>{lastInput ? aimLabel(lastInput.aim) : "—"}</b></div>
       </div>
     </>}>
-    {confirming && <QuitDialog title="세트를 그만둘까요?" detail="지금 나가면 이번 세트는 미완료로 끝나요. 점수와 골드를 받지 못하고, 이번 시간에는 다시 시작할 수 없어요."
+    {confirming && <QuitDialog title="세트를 그만둘까요?" detail="지금 나가면 이번 세트는 미완료로 끝나요. 점수와 골드를 받지 못하고, 이번 시간에는 다시 시작할 수 없어요. 고민하는 동안에도 시간은 흘러요!"
       stay="계속 던지기" onStay={() => setConfirming(false)} onQuit={() => { setConfirming(false); onQuit(); }} />}
   </PlayShell>;
 }
 
-function BallRow({ results, total = shotsPerSet }: { results: boolean[]; total?: number }) {
-  return <span className="freethrow-balls">{Array.from({ length: total }, (_, i) => {
-    const made = results[i];
-    return <i key={i} className={made === undefined ? "" : made ? "is-made" : "is-miss"} />;
-  })}</span>;
+/** Every ball of a recorded set, in the order thrown. */
+function BallRow({ results }: { results: boolean[] }) {
+  return <span className="freethrow-balls" role="img" aria-label={`${results.length}구 중 ${results.filter(Boolean).length}골`}>
+    {results.map((made, i) => <i key={i} className={made ? "is-made" : "is-miss"} />)}</span>;
 }
 
 function OfficialPanel({ official, admin, unfinished, starting, error, onStart, myBest }: {
@@ -303,13 +335,14 @@ function OfficialPanel({ official, admin, unfinished, starting, error, onStart, 
   if (!official) body = <p className="freethrow-official-note">{error || "공식 도전 기록을 불러오는 중…"}</p>;
   else if (admin) body = <p className="freethrow-official-note">운영자는 공식 도전에 참여하지 않아요. 친구들의 오늘 기록만 볼 수 있어요.</p>;
   else if (official.available) body = <>
-    <div className="freethrow-official-head"><strong>{kstHour(official.slotStart)} 세트</strong><small>{shotsPerSet}구 · 1골마다 {goalScore}점 + {goalGold}G</small></div>
+    <div className="freethrow-official-head"><strong>{kstHour(official.slotStart)} 세트</strong><small>{SECONDS}초 · 1골마다 {goalScore}점 + {goalGold}G</small></div>
     <button type="button" className="primary-button freethrow-start" onClick={onStart} disabled={starting}>{starting ? "준비 중…" : "세트 시작하기"}</button>
-    <small className="freethrow-official-warn">시작하면 이번 시간의 기회를 써요. {shotsPerSet}구를 끝까지 던져야 기록돼요!</small>
+    <small className="freethrow-official-warn">시작하면 이번 시간의 기회를 써요. {SECONDS}초를 끝까지 던져야 기록돼요!</small>
   </>;
   else if (set && set.completed) body = <>
     <div className="freethrow-official-head is-done"><strong>{set.made}골 성공!</strong><small>{set.made ? `${set.points ? `+${set.points}점 · ` : ""}+${set.gold}G 받았어요${set.points < set.made * goalScore ? " (밤 11시 50분 이후 기록은 점수에 들어가지 않아요)" : ""}` : "이번엔 골이 없었어요. 다음 세트에서 만회해요!"}</small></div>
-    <BallRow results={set.shots.map(shot => shot.made)} />
+    {set.shots.length > 0 && <BallRow results={set.shots.map(shot => shot.made)} />}
+    <small className="freethrow-official-count">{set.shots.length}구를 던졌어요</small>
     {next}
   </>;
   else if (set && unfinished) body = <>

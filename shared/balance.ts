@@ -109,15 +109,21 @@ export const CLAW_RULES = {
   playDurationMs: 6000, controlDurationMs: 10000, engine: 2,
 } as const;
 /** Free-throw duel (docs/plan-freethrow.md). Practice is unlimited and pays
- * nothing. An official set of shotsPerSet balls opens every setIntervalMs (KST
- * 00·03·06·…·21시, like the claw's coins) and each goal pays goalScore + goalGold.
- * A set started near the end of its slot may finish within graceMs after it.
- * engine is stored with each set; bump it whenever shared/freethrow-physics.ts
- * changes outcomes. */
+ * nothing. An official set opens every setIntervalMs (KST 00·03·06·…·21시, like
+ * the claw's coins) and lasts durationMs from the first ball picked up: every
+ * ball released in that time counts, and each goal pays goalScore + goalGold
+ * (30 goals are 15 points). The next ball is in the hand reloadMs after a
+ * release; the server accepts releases at least minGapMs apart, which also
+ * bounds how many balls a set can hold. A set started near the end of its slot
+ * may finish within graceMs after it. engine is stored with each set; bump it
+ * whenever shared/freethrow-physics.ts or these rules change outcomes. */
 export const FREETHROW_RULES = {
-  shotsPerSet: 10, setIntervalMs: 3 * 60 * 60 * 1000, graceMs: 10 * 60 * 1000,
-  goalScore: 1, goalGold: 5, engine: 1, officialOpen: true,
+  durationMs: 30_000, reloadMs: 300, minGapMs: 250,
+  setIntervalMs: 3 * 60 * 60 * 1000, graceMs: 10 * 60 * 1000,
+  goalScore: 0.5, goalGold: 5, engine: 2, officialOpen: true,
 } as const;
+/** The most balls one set can hold. */
+export const FREETHROW_MAX_SHOTS = Math.floor(FREETHROW_RULES.durationMs / FREETHROW_RULES.minGapMs) + 1;
 export const freeThrowSlot = (now: number): number => Math.floor(now / FREETHROW_RULES.setIntervalMs);
 export const freeThrowSlotStart = (slot: number): number => slot * FREETHROW_RULES.setIntervalMs;
 export const freeThrowDeadline = (slot: number): number => (slot + 1) * FREETHROW_RULES.setIntervalMs + FREETHROW_RULES.graceMs;
@@ -125,13 +131,15 @@ export const freeThrowDeadline = (slot: number): number => (slot + 1) * FREETHRO
  * Like the free throw, each opens one set every three hours, but an hour apart
  * so a new solo game opens every hour: free throw at KST 00·03·…·21시, curling
  * at 01·04·…·22시 and penalties at 02·05·…·23시. A set is `tries` throws or
- * kicks, recorded in one request; each one that counts pays score + gold. A set
+ * kicks, recorded in one request. A penalty goal pays score + gold. A curling
+ * stone pays gold when it lies in the house at the end, and points by how
+ * close to the centre it lies (CURLING_ZONES in shared/curling-physics.ts). A set
  * started near the end of its slot may finish within graceMs after it. engine
  * is stored with each set; bump it whenever the game's shared engine changes
  * outcomes. */
 export const ARCADE_RULES = {
-  curling: { tries: 5, slotMs: 3 * 60 * 60 * 1000, offsetMs: 1 * 60 * 60 * 1000, graceMs: 10 * 60 * 1000, score: 1, gold: 10, engine: 1 },
-  penalty: { tries: 5, slotMs: 3 * 60 * 60 * 1000, offsetMs: 2 * 60 * 60 * 1000, graceMs: 10 * 60 * 1000, score: 1, gold: 10, engine: 1 },
+  curling: { tries: 5, slotMs: 3 * 60 * 60 * 1000, offsetMs: 1 * 60 * 60 * 1000, graceMs: 10 * 60 * 1000, score: 1, gold: 10, engine: 2 },
+  penalty: { tries: 10, slotMs: 3 * 60 * 60 * 1000, offsetMs: 2 * 60 * 60 * 1000, graceMs: 10 * 60 * 1000, score: 1, gold: 10, engine: 2 },
 } as const;
 export type ArcadeGame = keyof typeof ARCADE_RULES;
 export const ARCADE_GAMES = Object.keys(ARCADE_RULES) as ArcadeGame[];

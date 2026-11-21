@@ -131,6 +131,11 @@ button svg {
   margin: 0 auto;
   background: var(--cream);
   overflow: hidden;
+  /* clip keeps the rounded column without making it a scroll container, so
+     sticky headers inside follow the page scroll. flow-root keeps what hidden
+     also gave: children's margins do not collapse out of the shell. */
+  overflow: clip;
+  display: flow-root;
   padding-bottom: env(safe-area-inset-bottom);
 }
 .desktop-brand {
@@ -193,15 +198,39 @@ button svg {
   letter-spacing: 0;
   transform: rotate(-8deg);
 }
+/* The slot holds the toolbar's place in the page; the bar itself lies over it
+   and becomes fixed once the page has scrolled past (Toolbar in UI.tsx). */
+.game-toolbar-slot {
+  position: relative;
+  z-index: 20;
+  height: var(--toolbar-height, 98px);
+}
 .game-toolbar {
-  height: 98px;
-  padding: 28px 12px 18px;
+  position: absolute;
+  inset: 0 0 auto;
+  height: 100%;
+  padding: var(--toolbar-pad-top, 28px) 12px var(--toolbar-pad-bottom, 18px);
   display: grid;
   grid-template-columns: 86px minmax(0, 1fr) 86px;
   align-items: center;
-  position: relative;
-  z-index: 2;
   gap: 0;
+  transition: padding var(--dur-s) var(--ease-out), box-shadow var(--dur-s) var(--ease-out);
+}
+/* Fixed like the tab bar: centred without a transform, inside the app column.
+   Its colour follows the top of the screen (--top-color, set in App.tsx), so
+   the title and gold stay readable over whatever scrolls beneath. */
+.game-toolbar.is-stuck {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  max-width: var(--app-width);
+  margin: 0 auto;
+  height: calc(60px + env(safe-area-inset-top));
+  padding: calc(10px + env(safe-area-inset-top)) 12px 10px;
+  background: var(--top-color, #fff9ee);
+  box-shadow: 0 6px 18px rgba(58, 51, 64, 0.08);
 }
 .game-toolbar h1 {
   font-size: 17px;

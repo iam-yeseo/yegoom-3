@@ -305,13 +305,16 @@ export function tween(from: number, to: number, ms: number, step: (v: number) =>
   return () => cancelAnimationFrame(id);
 }
 /** The displayed value of `value`, counting from the previous value when it changes. */
+/** A counting number on its way to `target`: whole steps, or tenths when the
+ * target has a fraction (free-throw goals are worth half a point). */
+export const countStep = (value: number, target: number) => (Number.isInteger(target) ? Math.round(value) : Math.round(value * 10) / 10);
 export function useCountUp(value: number, ms = 700) {
   const [shown, setShown] = useState(value);
   const last = useRef(value);
   useEffect(() => {
     const from = last.current;
     last.current = value;
-    return tween(from, value, ms, (v) => setShown(Math.round(v)));
+    return tween(from, value, ms, (v) => setShown(countStep(v, value)));
   }, [value, ms]);
   return shown;
 }

@@ -80,7 +80,7 @@
   /* Leave room for the wallet and controls before the first viewport ends.
      A short, wide viewport letterboxes the 600:420 canvas inside the full-width
      cabinet instead of stretching its physics coordinates. */
-  .claw-page .game-toolbar { height: 78px; padding-top: 16px; padding-bottom: 12px; }
+  .claw-page { --toolbar-height: 78px; --toolbar-pad-top: 16px; --toolbar-pad-bottom: 12px; }
   .claw-wallet { padding: 12px; margin-bottom: 12px; }
   .claw-wallet-heading strong { font-size: 25px; }
   .claw-coin-purchases { margin-top: 10px; }

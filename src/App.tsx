@@ -20,6 +20,8 @@ import { normalizeNickname } from "../shared/profile";
 import type { AdminState, AdminClawConfig, PredictionRules } from "../shared/admin";
 import { createAdminPreview, savePreviewGame, savePreviewClaw } from "./admin-preview";
 import { NotificationToast } from "./NotificationToast";
+import { unreadNoticeCount } from "../shared/notices";
+import { NOTICES_PATH } from "./screens/notices-path";
 import { previewNotificationSummary } from "./notifications-preview";
 import { FEATURES } from "../shared/balance";
 import { ApiFailure, api } from "./api";
@@ -775,6 +777,15 @@ export default function App() {
   }
   const catchmindReadKey = useRef("");
   const signedIn = !demo && !loading && data !== null;
+  // 공지: which posts this reader has opened. The preview keeps it for the page session only.
+  const [previewNoticesRead, setPreviewNoticesRead] = useState<string[]>([]);
+  const noticesRead = demo ? previewNoticesRead : data?.noticesRead ?? [];
+  const markNoticesRead = useCallback((ids: string[]) => {
+    if (demo) { setPreviewNoticesRead(current => [...new Set([...current, ...ids])]); return; }
+    // Shown as read at once; the server's list replaces it when it answers.
+    setData(current => current ? { ...current, noticesRead: [...new Set([...current.noticesRead, ...ids])] } : current);
+    void api.readNotices(ids).then(result => setData(current => current ? { ...current, noticesRead: result.noticesRead } : current), () => undefined);
+  }, [demo]);
   const previewExtras = ARCADE_GAMES.map(game => previewArcade[game]);
   const previewExtraGold = previewExtras.reduce((sum, extra) => sum + extra.gold, 0), previewExtraScore = previewExtras.reduce((sum, extra) => sum + extra.score, 0) + previewBingoState.score;
   const previewArcadeView = { curling: previewArcade.curling.summary, penalty: previewArcade.penalty.summary };
@@ -959,8 +970,9 @@ export default function App() {
         onBack={home}
       />
     );
-  else if (path === "/notifications")
-    content = <Notifications demo={demo} viewerId={me.id} onBack={home} go={go} />;
+  else if (path === "/notifications" || path === NOTICES_PATH)
+    content = <Notifications demo={demo} viewerId={me.id} onBack={home} go={go} tab={path === NOTICES_PATH ? "notices" : "notifications"}
+      noticesRead={noticesRead} onNoticesRead={markNoticesRead} />;
   else if (path === "/attendance")
     content = (
       <Attendance attendanceKey={view.attendanceKey} gold={me.gold} onBack={home} />
@@ -1040,7 +1052,7 @@ export default function App() {
   else if (path === "/shop/tag" || path === "/shop/tag/inventory")
     content = <NicknameTagShop key={path} username={view.username} displayName={view.displayName} inventory={path === "/shop/tag/inventory"}
       onBack={() => go(path === "/shop/tag/inventory" ? "/profile" : "/shop")} />;
-  else content = <Home data={view} go={go} />;
+  else content = <Home data={view} go={go} unreadNotices={unreadNoticeCount(noticesRead)} />;
   // Sub-pages have their own back button instead of the tab bar.
   const subPage =
  !!play || !!gameId || !!stockId ||

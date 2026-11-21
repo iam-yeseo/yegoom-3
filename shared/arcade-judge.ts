@@ -12,20 +12,24 @@ export interface ArcadeJudge {
   clean(inputs: unknown[]): unknown[] | null;
   judge(slot: number, inputs: unknown[]): ArcadeTryRecord[];
 }
+/** A set's points: each try's own points where the game gives them, else `score` for each one that counts. */
+export const arcadePoints = (tries: readonly ArcadeTryRecord[], score: number): number =>
+  tries.reduce((sum, entry) => sum + (entry.points ?? (entry.made ? score : 0)), 0);
 export const ARCADE_JUDGES: Record<ArcadeGame, ArcadeJudge> = {
   curling: {
     reason: '컬링 하우스 안착',
     clean: inputs => inputs.every(validStone) ? (inputs as StoneInput[]).map(({ power, aim, sweep }) => ({ power, aim, ...(sweep?.length ? { sweep: [...sweep] } : {}) })) : null,
-    // A stone counts when it lies in the house once the last stone has stopped.
+    // A stone counts when it lies in the house once the last stone has stopped,
+    // and is worth more the closer to the centre it lies.
     judge: (_slot, inputs) => {
       const end = simulateEnd(inputs as StoneInput[]);
-      return end.throws.map((result, index) => ({ index, made: end.counted[index]!, kind: result.kind }));
+      return end.throws.map((result, index) => ({ index, made: end.counted[index]!, kind: result.kind, points: end.points[index]! }));
     },
   },
   penalty: {
     reason: '승부차기 골',
     clean: inputs => inputs.every(validKick) ? (inputs as KickInput[]).map(({ power, aim, t }) => ({ power, aim, t })) : null,
-    // Everyone in a slot faces the same five keepers.
+    // Everyone in a slot faces the same keepers.
     judge: (slot, inputs) => judgeShootout(slot, inputs as KickInput[]).kicks.map((kick, index) => ({ index, made: kick.made, kind: kick.kind })),
   },
 };

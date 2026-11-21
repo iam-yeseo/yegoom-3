@@ -78,7 +78,7 @@ test('curling: an official end is recorded after the fifth stone and uses this s
   await expect(result).toBeVisible();
   await expect(result.locator('.play-result-status')).toHaveText('기록했어요');
   await result.getByRole('button', { name: '확인' }).click();
-  await expect(page.locator('.arcade-official')).toContainText('성공!');
+  await expect(page.locator('.arcade-official')).toContainText('안착');
   await expect(page.getByRole('button', { name: '엔드 시작하기' })).toHaveCount(0);
   await expect(page.locator('.arcade-official')).toContainText('다음 세트');
 });
@@ -98,6 +98,19 @@ test('penalty: the whistle starts the clock, a swipe kicks, and the result is ex
   await page.screenshot({ path: 'docs/screenshots/penalty-play-390.png' });
   // The next keeper walks in by themselves.
   await expect(shell.locator('.arcade-practice-stats')).toContainText('골키퍼 2번', { timeout: 6000 });
+});
+
+test('penalty: an official set is ten kicks', async ({ page }) => {
+  await open(page);
+  await page.goto('/#/preview/play/penalty');
+  await expect(page.locator('.arcade-official')).toContainText('킥 10번');
+  await page.getByRole('button', { name: '승부차기 시작하기' }).click();
+  const shell = page.getByRole('region', { name: '승부차기 공식 도전' });
+  await expect(shell.locator('.play-progress')).toContainText('0/10');
+  await expect(shell.locator('.play-progress-bar i')).toHaveCount(10);
+  await expect(shell.locator('.arcade-stage')).toHaveAttribute('data-mode', 'aiming', { timeout: 4000 });
+  await swipe(page, [180, 462], [70, -180], 70);
+  await expect(shell.locator('.play-progress')).toContainText('1/10', { timeout: 6000 });
 });
 
 test('bingo: the leader names a topic, fills a board, and confirms a word on their turn', async ({ page }) => {
@@ -159,14 +172,24 @@ test('signed in: curling is recorded by the server, and bingo opens with the lea
   expect(finished.status()).toBe(200);
   const recorded = await finished.json();
   // The third goes through the back and the fourth stops short of the hog line; three stay in the house.
-  expect(recorded.set).toMatchObject({ made: 3, completed: true, points: 3, gold: 30 });
+  // The one in the middle is worth 10, the two touching the white ring 4 each; gold is 10G a stone as before.
+  expect(recorded.set).toMatchObject({ made: 3, completed: true, points: 18, gold: 30 });
   expect(recorded.set.tries.map((entry: { kind: string }) => entry.kind)).toEqual(['button', 'house', 'long', 'short', 'house']);
+  expect(recorded.set.tries.map((entry: { points: number }) => entry.points)).toEqual([10, 4, 0, 0, 4]);
+
+  // Penalties through the API: a set is ten kicks now, and five are refused.
+  const kicking = await (await page.request.post('/api/arcade/penalty/sets', { headers, data: { requestId: 'e2e-penalty-0123456789abcdef' } })).json();
+  const rolled = Array.from({ length: 10 }, () => ({ power: 0, aim: 0, t: -1 }));
+  expect((await page.request.post('/api/arcade/penalty/finish', { headers, data: { setId: kicking.current.id, inputs: rolled.slice(0, 5) } })).status()).toBe(400);
+  const kicked = await (await page.request.post('/api/arcade/penalty/finish', { headers, data: { setId: kicking.current.id, inputs: rolled } })).json();
+  expect(kicked.set).toMatchObject({ made: 0, completed: true, points: 0, gold: 0 });
+  expect(kicked.set.tries).toHaveLength(10);
   expect((await page.request.post('/api/arcade/nothing/sets', { headers, data: {} })).status()).toBe(404);
   await page.goto('/#/');
   await expect(page.locator('.solo-tile', { hasText: '컬링' })).toContainText('이번 세트 3개');
   await page.locator('.solo-tile', { hasText: '컬링' }).click();
-  await expect(page.locator('.arcade-official')).toContainText('3개 성공!');
-  await expect(page.locator('.arcade-today')).toContainText('3개');
+  await expect(page.locator('.arcade-official')).toContainText('18점 · 스톤 3개 안착');
+  await expect(page.locator('.arcade-today li.is-me')).toContainText('18점');
 
   // Bingo: no OpenAI key on the test server, so the AI path answers 503 and the leader types the words.
   await page.goto('/#/play/bingo');

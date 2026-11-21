@@ -1,10 +1,12 @@
 import { FRAME_DT, simulateShot, type ShotFrame, type ShotInput, type ShotResult } from "../../shared/freethrow-physics";
 import { reduced } from "../motion";
 import { GESTURE, holdOffset, readGesture, type GestureOutcome, type GesturePoint } from "./gesture";
-import { BALL_REST_RADIUS, FreeThrowRenderer, REST, STAGE, restScene, type Scene } from "./render";
+import { BALL_REST_RADIUS, FreeThrowRenderer, REST, STAGE, restBall, restScene, type BallState, type Scene } from "./render";
 import type { FreeThrowSound } from "./sound";
 
-export type ThrowMode = "idle" | "holding" | "flying";
+/** What the hand is doing: a ball waits in it, it is being pulled, or the next
+ * ball is on its way. Balls already thrown fly on by themselves. */
+export type ThrowMode = "idle" | "holding" | "reloading";
 export interface ThrowCallbacks {
   /** The shot has left the hand (input already decided). */
   onThrow?(input: ShotInput): void;
@@ -13,10 +15,15 @@ export interface ThrowCallbacks {
   /** The finger let go without a real flick, so the ball went back. */
   onCancel?(reason: Exclude<GestureOutcome, { shot: ShotInput }>["reason"]): void;
   onMode?(mode: ThrowMode): void;
+  /** Asked as the finger lets go: false puts the ball back (the time is up). */
+  canThrow?(): boolean;
 }
 const RETURN_MS = 260;
 const RELEASE_BLEND = 0.16;
-const FADE_IN = 0.28;
+const FADE_IN = 0.16;
+/** The next ball is in the hand this long after a release (FREETHROW_RULES.reloadMs by default). */
+const RELOAD_MS = 300;
+interface Flight { result: ShotResult; start: number; release: { x: number; y: number }; decideAt: number; event: number; reported: boolean; state: BallState }
 const FADE_BELOW = 1.05;
 
 /** Owns the canvas: pointer input, the flight playback and the draw loop.
@@ -28,7 +35,8 @@ export class FreeThrowController {
   private pointer: number | null = null;
   private points: GesturePoint[] = [];
   private grabbed: GesturePoint | null = null;
-  private flight: { result: ShotResult; start: number; release: { x: number; y: number }; decideAt: number; event: number; reported: boolean } | null = null;
+  private flights: Flight[] = [];
+  private reloadAt: number | null = null;
   private returning: { from: { x: number; y: number }; start: number } | null = null;
   private fadeStart: number | null = null;
   private effectsUntil = 0;
@@ -39,7 +47,7 @@ export class FreeThrowController {
   private enabled = true;
   private destroyed = false;
 
-  constructor(private canvas: HTMLCanvasElement, private sound: FreeThrowSound, private callbacks: ThrowCallbacks) {
+  constructor(private canvas: HTMLCanvasElement, private sound: FreeThrowSound, private callbacks: ThrowCallbacks, private reloadMs = RELOAD_MS) {
     this.renderer = new FreeThrowRenderer(canvas, () => { if (!this.destroyed) this.paint(); });
     canvas.addEventListener("pointerdown", this.down);
     canvas.addEventListener("pointermove", this.move);
@@ -55,6 +63,8 @@ export class FreeThrowController {
     this.paint();
   }
   get current() { return this.mode; }
+  /** Balls still in the air. */
+  get flying() { return this.flights.length; }
   /** Stops new throws (a dialog is open, the page is hidden…). */
   setEnabled(value: boolean) { this.enabled = value; if (!value) this.cancel(); }
   /** Throws without a gesture: used by tests and the keyboard. */
@@ -98,7 +108,7 @@ export class FreeThrowController {
     if (Math.hypot(pixel.x - REST.x, pixel.y - REST.y) > BALL_REST_RADIUS * 1.8) return;
     event.preventDefault();
     // A ball still sliding back from a cancelled swipe can be grabbed again.
-    this.returning = null; this.scene.offset = { x: 0, y: 0 };
+    this.returning = null; this.hand().offset = { x: 0, y: 0 };
     try { this.canvas.setPointerCapture(event.pointerId); } catch { /* Synthetic events. */ }
     this.pointer = event.pointerId; this.grabbed = point; this.points = [point];
     this.sound.activate(); this.sound.grab();
@@ -111,8 +121,10 @@ export class FreeThrowController {
     for (const sample of samples.length ? samples : [event]) this.points.push(this.stagePoint(sample));
     const last = this.points[this.points.length - 1]!;
     while (this.points.length > 2 && last.t - this.points[0]!.t > GESTURE.keepMs) this.points.shift();
-    this.scene.offset = this.heldOffset(last);
+    this.hand().offset = this.heldOffset(last);
   };
+  /** The ball in the hand (there always is one while idle or holding). */
+  private hand(): BallState { return this.scene.hand ??= restBall(); }
   private heldOffset(point: GesturePoint) {
     const offset = holdOffset(this.grabbed!, point);
     return { x: offset.x * STAGE.height, y: offset.y * STAGE.height };
@@ -123,7 +135,8 @@ export class FreeThrowController {
     this.pointer = null;
     const outcome = readGesture(this.points);
     if (!outcome.shot) { this.callbacks.onCancel?.(outcome.reason); this.giveBack(); return; }
-    this.launch(outcome.shot, this.scene.offset);
+    if (this.callbacks.canThrow?.() === false) { this.giveBack(); return; }
+    this.launch(outcome.shot, this.hand().offset);
   };
   private cancel = () => {
     if (this.mode !== "holding") return;
@@ -131,7 +144,7 @@ export class FreeThrowController {
     this.giveBack();
   };
   private giveBack() {
-    this.returning = { from: { ...this.scene.offset }, start: performance.now() };
+    this.returning = { from: { ...this.hand().offset }, start: performance.now() };
     this.setMode("idle");
     this.loop();
   }
@@ -140,10 +153,14 @@ export class FreeThrowController {
     const floor = result.events.find(event => event.type === "floor");
     const end = (result.frames.length - 1) * FRAME_DT;
     const decideAt = result.made ? result.madeAt! : floor?.t ?? end;
-    this.flight = { result, start: performance.now(), release: { ...release }, decideAt, event: 0, reported: false };
+    const now = performance.now();
+    this.flights.push({ result, start: now, release: { ...release }, decideAt, event: 0, reported: false, state: { ...restBall(), offset: { ...release } } });
+    // The hand is empty until the next ball arrives; the one just thrown flies on by itself.
+    this.scene.hand = null; this.returning = null; this.fadeStart = null;
+    this.reloadAt = now + this.reloadMs;
     this.sound.activate(); this.sound.throw();
     this.callbacks.onThrow?.(result.input);
-    this.setMode("flying");
+    this.setMode("reloading");
     this.loop();
   }
   private loop() {
@@ -152,15 +169,24 @@ export class FreeThrowController {
   }
   private tick = (now: number) => {
     let moving = this.mode === "holding";
-    if (this.returning) {
+    if (this.returning && this.scene.hand) {
       const share = Math.max(0, Math.min(1, (now - this.returning.start) / RETURN_MS)), ease = 1 - (1 - share) ** 3;
-      this.scene.offset = { x: this.returning.from.x * (1 - ease), y: this.returning.from.y * (1 - ease) };
+      this.scene.hand.offset = { x: this.returning.from.x * (1 - ease), y: this.returning.from.y * (1 - ease) };
       if (share >= 1) this.returning = null; else moving = true;
     }
-    if (this.flight) moving = this.fly(now) || moving;
-    if (this.fadeStart !== null) {
+    if (this.flights.length) {
+      this.flights = this.flights.filter(flight => this.fly(flight, now));
+      this.scene.flying = this.flights.map(flight => flight.state);
+      moving = true;
+    }
+    if (this.reloadAt !== null) {
+      // The next ball appears in the hand.
+      if (now >= this.reloadAt) { this.reloadAt = null; this.scene.hand = { ...restBall(), alpha: 0 }; this.fadeStart = now; this.setMode("idle"); }
+      moving = true;
+    }
+    if (this.fadeStart !== null && this.scene.hand) {
       const share = Math.min(1, (now - this.fadeStart) / 1000 / FADE_IN);
-      this.scene.alpha = share;
+      this.scene.hand.alpha = share;
       if (share >= 1) this.fadeStart = null; else moving = true;
     }
     const calm = reduced();
@@ -170,9 +196,9 @@ export class FreeThrowController {
     this.paint();
     if (moving) this.frame = requestAnimationFrame(this.tick);
   };
-  /** Advances the recorded flight; returns whether it is still playing. */
-  private fly(now: number): boolean {
-    const flight = this.flight!, { result } = flight;
+  /** Advances one ball's recorded flight; returns whether it is still playing. */
+  private fly(flight: Flight, now: number): boolean {
+    const { result, state } = flight;
     // A frame's timestamp is when the frame began, which can be a few ms before
     // the release that started this flight. Unclamped, that first frame asked
     // for a position before the flight (frames[-1]), threw, and stopped the
@@ -183,9 +209,9 @@ export class FreeThrowController {
     const a = frames[base]!, b = frames[next]!;
     const ball: ShotFrame = { x: a.x + (b.x - a.x) * share, y: a.y + (b.y - a.y) * share, z: a.z + (b.z - a.z) * share };
     const blend = Math.max(0, 1 - t / RELEASE_BLEND);
-    this.scene.ball = ball;
-    this.scene.offset = { x: flight.release.x * blend, y: flight.release.y * blend };
-    this.scene.spin = -t * 9;
+    state.ball = ball;
+    state.offset = { x: flight.release.x * blend, y: flight.release.y * blend };
+    state.spin = -t * 9;
     while (flight.event < result.events.length && result.events[flight.event]!.t <= t) {
       const event = result.events[flight.event++]!;
       if (event.type === "rim") { this.sound.rim(); this.rimAt = now; this.effectsUntil = Math.max(this.effectsUntil, now + 400); }
@@ -195,16 +221,11 @@ export class FreeThrowController {
     }
     // The stylised court has no real floor under the hoop, so a falling ball
     // fades out below hand height instead of bouncing in the painted lane.
-    this.scene.alpha = t < 0.3 ? 1 : Math.max(0, Math.min(1, (ball.y - FADE_BELOW) / 0.7));
+    state.alpha = t < 0.3 ? 1 : Math.max(0, Math.min(1, (ball.y - FADE_BELOW) / 0.7));
     if (!flight.reported && t >= flight.decideAt) { flight.reported = true; this.callbacks.onResult(result); }
-    if (index < frames.length - 1 && (this.scene.alpha > 0 || !flight.reported)) return true;
+    if (index < frames.length - 1 && (state.alpha > 0 || !flight.reported)) return true;
     if (!flight.reported) { flight.reported = true; this.callbacks.onResult(result); }
-    // The next ball appears in the hand.
-    this.flight = null;
-    this.scene = { ...restScene(), alpha: 0 };
-    this.fadeStart = now;
-    this.setMode("idle");
-    return true;
+    return false;
   }
   private paint() { this.renderer.draw(this.scene); }
 }

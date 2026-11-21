@@ -30,19 +30,19 @@ export function kickCopy(result: KickResult): { title: string; detail: string } 
 const aimLabel = (aim: number) => (aim === 0 ? "가운데" : `${aim < 0 ? "왼쪽" : "오른쪽"} ${Math.abs(aim)}`);
 
 const COPY: ArcadeCopy = {
-  title: "승부차기", unit: "골", tries: `킥 ${tries}번`, per: "1골마다",
+  title: "승부차기", unit: "골", tries: `킥 ${tries}번`, pay: `1골마다 ${score}점 + ${gold}G`,
   practice: "마음껏 차며 골키퍼 읽는 법을 익혀요 · 보상 없음", startLabel: "승부차기 시작하기",
   art: "/penalty/result.webp",
   nothing: "이번엔 골이 없었어요.",
-  resultTitle: made => (made === tries ? "5골 전부 성공!" : `${made}골 성공!`),
-  resultLine: made => (made >= 4 ? "골키퍼가 조용히 장갑을 벗었어요. 오늘의 기록판을 확인해 보세요!" : made ? "다음엔 한 골 더! 골키퍼가 움직이는 반대쪽을 노려 보세요." : "골키퍼가 오늘 인생 경기를 했어요. 다음 세트에서 만회해요!"),
+  resultTitle: made => (made === tries ? `${tries}골 전부 성공!` : `${made}골 성공!`),
+  resultLine: made => (made >= tries * 0.8 ? "골키퍼가 조용히 장갑을 벗었어요. 오늘의 기록판을 확인해 보세요!" : made ? "다음엔 한 골 더! 골키퍼가 움직이는 반대쪽을 노려 보세요." : "골키퍼가 오늘 인생 경기를 했어요. 다음 세트에서 만회해요!"),
   guide: <>
     <ol>
       <li>휘슬이 울리면 골키퍼가 좌우로 움직여요. {KICK.windowMs / 1000}초 안에 공을 잡고 차고 싶은 쪽으로 쓸어 올리며 놓으면 슛!</li>
       <li>쓸어 올린 방향으로 날아가요. 너무 기울이면 골대를 벗어나요.</li>
       <li>빠르게 쓸어 올릴수록 공이 빠르고 높게 가요. 너무 세면 골대를 넘기고, 약하면 골키퍼가 여유 있게 막아요.</li>
       <li>골키퍼는 움직이던 쪽으로 몸이 쏠려 있어요. <b>골키퍼가 가는 반대쪽</b>으로 차면 손이 훨씬 덜 닿아요.</li>
-      <li>뒤로 갈수록 골키퍼가 더 빠르고 더 멀리 닿아요. 같은 시간대에는 모두 같은 골키퍼 다섯 명을 만나요.</li>
+      <li>뒤로 갈수록 골키퍼가 더 빠르고 더 멀리 닿아요. 같은 시간대에는 모두 같은 골키퍼 {tries}명을 만나요.</li>
     </ol>
     <p>연습 모드는 횟수 제한도 보상도 없어요. 공식 도전은 한국 시간 {arcadeHours("penalty")}시마다 킥 {tries}번이에요. 시작하면 그 시간의 기회를 쓴 거예요. {tries}번을 다 차면 한 번에 기록되고, 1골마다 {score}점 + {gold}G를 받아요. 중간에 나가면 미완료로 끝나요.</p>
   </>,
@@ -53,7 +53,7 @@ export function Penalty(props: ArcadeScreenProps) {
 }
 
 /** The full-screen goal. An official set's kicks stay on the device until the
- * fifth is over; then the whole set is handed over. */
+ * last one is over; then the whole set is handed over. */
 function PenaltyPlay({ mode, slot, onFinish, onQuit }: ArcadePlayProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const controller = useRef<PenaltyController | null>(null);
@@ -76,7 +76,7 @@ function PenaltyPlay({ mode, slot, onFinish, onQuit }: ArcadePlayProps) {
   useEffect(() => {
     const effects = createArcadeSound("yegoom3:penalty:muted");
     sound.current = effects; setMuted(effects.muted);
-    // An official set meets its slot's keepers; practice meets new ones every five kicks.
+    // An official set meets its slot's keepers; practice meets new ones every set of kicks.
     const keepersFor = () => penaltyKeepers(official ? slot : Math.floor(Math.random() * 0x7fffffff), tries);
     let runtime: PenaltyController;
     try {

@@ -68,7 +68,7 @@ export const LEGACY_FACTS_SQL = `SELECT
       FROM catchmind_rounds WHERE status = 'ended' AND round_date >= ? AND winner_id IS NOT NULL
         AND (drawer_id = u.id OR winner_id = u.id)) AS catchmind,
     EXISTS (SELECT 1 FROM freethrow_sets WHERE user_id = u.id) AS freethrow_join,
-    EXISTS (SELECT 1 FROM freethrow_sets WHERE user_id = u.id AND shots = ${FREETHROW_RULES.shotsPerSet} AND made = 0) AS freethrow_zero,
+    EXISTS (SELECT 1 FROM freethrow_sets WHERE user_id = u.id AND finished_at IS NOT NULL AND shots >= ${ACHIEVEMENT_RULES.freethrow.zeroMinShots} AND made = 0) AS freethrow_zero,
     (SELECT json_group_array(json_object('d', date, 'm', made)) FROM freethrow_sets
       WHERE user_id = u.id AND date >= ? AND made >= ${ACHIEVEMENT_RULES.freethrow.goals[0]}) AS freethrow,
     EXISTS (SELECT 1 FROM stock_trades WHERE user_id = u.id AND side = 'buy') AS stock_buy,

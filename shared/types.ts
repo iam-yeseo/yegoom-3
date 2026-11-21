@@ -106,6 +106,8 @@ export interface BootstrapResponse {
   dailyFree: DailyFreeLeft;
   launchGift: LaunchGiftState;
   notifications: NotificationSummary;
+  /** Ids of the notices (shared/notices.ts) this reader has opened. */
+  noticesRead: string[];
   /** Unseen settled places for the newest finished week/month (the result dialog). */
   rankResults: RankResult[];
   /** Home tile summary; null while the stock market is not open to players. */
@@ -278,12 +280,14 @@ export interface FreeThrowSummary {
   nextSlotAt: number; serverNow: number; isAdmin: boolean;
 }
 export interface FreeThrowShotRecord { index: number; power: number; aim: number; made: boolean; kind: string }
+/** One ball of a timed set: its swipe and when it left the hand (ms from the first ball picked up). */
+export interface FreeThrowShotInput { power: number; aim: number; t: number }
 export interface FreeThrowSet {
   id: string; requestId: string; slot: number; slotStart: number;
   /** The set can be recorded until this time (slot end plus grace). */
   deadline: number; engine: number;
   made: number; shots: FreeThrowShotRecord[];
-  /** All 10 shots were recorded. */
+  /** The set was recorded. */
   completed: boolean;
   /** Completed, or past the deadline. */
   finished: boolean;
@@ -298,7 +302,7 @@ export interface FreeThrowState extends FreeThrowSummary {
   today: FreeThrowBoardEntry[];
 }
 export interface FreeThrowSetInput { requestId: string }
-export interface FreeThrowFinishInput { setId: string; shots: { power: number; aim: number }[] }
+export interface FreeThrowFinishInput { setId: string; shots: FreeThrowShotInput[] }
 export interface FreeThrowFinishResponse extends FreeThrowState {
   /** The set just recorded (it may already be the previous slot's). */
   set: FreeThrowSet;
@@ -370,7 +374,8 @@ export interface ArcadeSummary {
   made: number;
   nextSlotAt: number; serverNow: number; isAdmin: boolean;
 }
-export interface ArcadeTryRecord { index: number; made: boolean; kind: string }
+/** `points` is set by games that score each try by itself (curling: 0–10 by where the stone lies). */
+export interface ArcadeTryRecord { index: number; made: boolean; kind: string; points?: number }
 export interface ArcadeSet {
   id: string; requestId: string; slot: number; slotStart: number;
   /** The set can be recorded until this time (slot end plus grace). */
@@ -381,7 +386,7 @@ export interface ArcadeSet {
   finished: boolean;
   points: number; gold: number;
 }
-export interface ArcadeBoardEntry { username: string; slot: number; slotStart: number; made: number; completed: boolean }
+export interface ArcadeBoardEntry { username: string; slot: number; slotStart: number; made: number; points: number; completed: boolean }
 export interface ArcadeState extends ArcadeSummary {
   game: 'curling' | 'penalty';
   date: string; slot: number; slotStart: number;

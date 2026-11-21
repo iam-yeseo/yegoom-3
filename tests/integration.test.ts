@@ -7,6 +7,7 @@ import { deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
+import { NOTICES } from '../shared/notices';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword, hashToken, verifyPassword } from '../worker/crypto';
 import { PASSWORD_RULES } from '../shared/password';
@@ -2665,6 +2666,30 @@ describe('Worker and D1 integration', () => {
       expect(after.recent.every(notice => Date.parse(notice.createdAt) <= now)).toBe(true);
       expect((await (await request('/api/notifications', { cookie: min.cookie })).json() as NotificationsResponse)
         .notifications[0]).toMatchObject({ unread: true });
+    });
+
+    it('keeps a 공지 unread until that notice is opened, per reader and whatever the alarm list does', async () => {
+      const min = await login('min'); const siwon = await login('siwon');
+      const id = NOTICES[0]!.id;
+      expect((await bootstrap(min.cookie)).noticesRead).toEqual([]);
+      // Opening the alarm list does not read a notice.
+      await request('/api/notifications', { cookie: min.cookie });
+      expect((await bootstrap(min.cookie)).noticesRead).toEqual([]);
+      const read = await request('/api/notices/read', { method: 'POST', cookie: min.cookie, body: { ids: [id] } });
+      expect(read.status).toBe(200);
+      expect(await read.json()).toEqual({ noticesRead: [id] });
+      // Reading it again changes nothing, and it stays read for this reader only.
+      expect(await (await request('/api/notices/read', { method: 'POST', cookie: min.cookie, body: { ids: [id, id] } })).json()).toEqual({ noticesRead: [id] });
+      expect((await bootstrap(min.cookie)).noticesRead).toEqual([id]);
+      expect((await bootstrap(siwon.cookie)).noticesRead).toEqual([]);
+      for (const body of [{ ids: [] }, { ids: ['no-such-notice'] }, { ids: id }, {}]) {
+        expect((await request('/api/notices/read', { method: 'POST', cookie: siwon.cookie, body })).status).toBe(400);
+      }
+      expect((await request('/api/notices/read', { cookie: siwon.cookie })).status).toBe(405);
+      expect((await request('/api/notices/read', { method: 'POST', body: { ids: [id] } })).status).toBe(401);
+      // An id that is no longer a notice (a removed post) is simply not reported.
+      await db.prepare("UPDATE users SET notices_read_json = '[\"gone\"]' WHERE username = 'siwon'").run();
+      expect((await bootstrap(siwon.cookie)).noticesRead).toEqual([]);
     });
 
     it('pages the centre oldest-ward and keeps personal notices to their owner', async () => {

@@ -113,7 +113,7 @@ async function seedHistory(userId = 'min') {
     db.prepare(`INSERT INTO claw_plays (id, user_id, request_id, generation, version, claw_x, stop, caught, score, gold, clear_bonus, result_json, created_at) VALUES
       ('c1', ?, 'c1', 1, 1, 0.5, NULL, 2, 2, 20, 0, '{}', ?)`).bind(userId, at(day(4))),
     // Free throws: a zero set once, a seven-goal set yesterday.
-    db.prepare("INSERT INTO freethrow_sets (id, user_id, request_id, slot, date, engine, shots, made, created_at) VALUES ('f1', ?1, 'f1', 1, ?2, 1, 10, 0, ?3), ('f2', ?1, 'f2', 2, ?4, 1, 10, 7, ?5)")
+    db.prepare("INSERT INTO freethrow_sets (id, user_id, request_id, slot, date, engine, shots, made, created_at, finished_at) VALUES ('f1', ?1, 'f1', 1, ?2, 1, 10, 0, ?3, ?3), ('f2', ?1, 'f2', 2, ?4, 1, 10, 7, ?5, ?5)")
       .bind(userId, day(30), at(day(30)), day(1), at(day(1))),
     // Catchmind: drew a round solved at the first guess two days ago, and one that ended on misses.
     db.prepare(`INSERT INTO catchmind_rounds (id, number, drawer_id, word, normalized_word, word_history, status, round_date, published_at, ended_at, wrong_count, winner_id, end_reason, created_at) VALUES
