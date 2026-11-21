@@ -30,11 +30,11 @@ beforeAll(async () => {
   const at = '2026-11-19T03:10:00.000Z';
   // A recorded 10-ball set (7 goals), a set that was left, and one recorded ball by ball under the first rule.
   await db.batch([
-    db.prepare("INSERT INTO freethrow_sets (id, user_id, request_id, slot, date, engine, shots, made, created_at) VALUES ('set-done', 'min', 'r1', 165050, '2026-11-19', 1, 10, 7, ?), ('set-left', 'siwon', 'r2', 165050, '2026-11-19', 1, 0, 0, ?), ('set-old', 'siwon', 'r3', 165000, '2026-11-13', 1, 3, 1, ?)").bind(at, at, at),
-    ...Array.from({ length: 10 }, (_, i) => db.prepare("INSERT INTO freethrow_shots (id, set_id, shot_index, power, aim, made, kind, created_at) VALUES (?, 'set-done', ?, ?, 0, ?, ?, ?)")
+    db.prepare("INSERT INTO freethrow_sets (id, user_id, request_id, slot, date, engine, shots, made, created_at) VALUES ('11111111-1111-4111-8111-111111111111', 'min', 'r1', 165050, '2026-11-19', 1, 10, 7, ?), ('22222222-2222-4222-8222-222222222222', 'siwon', 'r2', 165050, '2026-11-19', 1, 0, 0, ?), ('33333333-3333-4333-8333-333333333333', 'siwon', 'r3', 165000, '2026-11-13', 1, 3, 1, ?)").bind(at, at, at),
+    ...Array.from({ length: 10 }, (_, i) => db.prepare("INSERT INTO freethrow_shots (id, set_id, shot_index, power, aim, made, kind, created_at) VALUES (?, '11111111-1111-4111-8111-111111111111', ?, ?, 0, ?, ?, ?)")
       .bind(`shot-${i}`, i, i < 7 ? 55 : 10, i < 7 ? 1 : 0, i < 7 ? 'swish' : 'short', '2026-11-19T03:12:00.000Z')),
-    ...Array.from({ length: 3 }, (_, i) => db.prepare("INSERT INTO freethrow_shots (id, set_id, shot_index, power, aim, made, kind, created_at) VALUES (?, 'set-old', ?, 55, 0, ?, 'swish', ?)").bind(`old-${i}`, i, i === 0 ? 1 : 0, at)),
-    db.prepare("INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start) VALUES ('l1', 'min', 'score', 7, '자유투 대결 골', 'freethrow:set:set-done:score', ?, '2026-11-16'), ('l2', 'min', 'gold', 35, '자유투 대결 골', 'freethrow:set:set-done:gold', ?, NULL), ('l3', 'siwon', 'score', 1, '자유투 대결 골', 'freethrow:goal:set-old:0:score', ?, '2026-11-09'), ('l4', 'siwon', 'gold', 5, '자유투 대결 골', 'freethrow:goal:set-old:0:gold', ?, NULL)").bind(at, at, at, at),
+    ...Array.from({ length: 3 }, (_, i) => db.prepare("INSERT INTO freethrow_shots (id, set_id, shot_index, power, aim, made, kind, created_at) VALUES (?, '33333333-3333-4333-8333-333333333333', ?, 55, 0, ?, 'swish', ?)").bind(`old-${i}`, i, i === 0 ? 1 : 0, at)),
+    db.prepare("INSERT INTO ledger (id, user_id, currency, amount, reason, reference, created_at, week_start) VALUES ('l1', 'min', 'score', 7, '자유투 대결 골', 'freethrow:set:11111111-1111-4111-8111-111111111111:score', ?, '2026-11-16'), ('l2', 'min', 'gold', 35, '자유투 대결 골', 'freethrow:set:11111111-1111-4111-8111-111111111111:gold', ?, NULL), ('l3', 'siwon', 'score', 1, '자유투 대결 골', 'freethrow:goal:33333333-3333-4333-8333-333333333333:0:score', ?, '2026-11-09'), ('l4', 'siwon', 'gold', 5, '자유투 대결 골', 'freethrow:goal:33333333-3333-4333-8333-333333333333:0:gold', ?, NULL)").bind(at, at, at, at),
     db.prepare("INSERT INTO achievements (user_id, key, period_key, unlocked_at, claimed_at) VALUES ('min', 'freethrow_3', '2026-11-19', ?, NULL), ('min', 'freethrow_3', '2026-11-18', ?, ?), ('min', 'freethrow_5', '2026-11-19', ?, NULL)").bind(at, at, at, at),
   ]);
   await apply(db, all.filter(name => name >= MIGRATION));
@@ -44,7 +44,7 @@ afterAll(async () => { await mf.dispose(); });
 describe('migration 0036: free-throw sets for the 30-second rule', () => {
   it('keeps every recorded set with its balls, points and gold, and drops the per-ball table', async () => {
     expect(await db.prepare("SELECT name FROM sqlite_master WHERE name IN ('freethrow_shots', 'freethrow_sets_next')").all().then(result => result.results)).toEqual([]);
-    const done = await db.prepare("SELECT shots, made, points, gold, inputs_json, results_json, finished_at, finish_token FROM freethrow_sets WHERE id = 'set-done'").first<Record<string, string | number | null>>();
+    const done = await db.prepare("SELECT shots, made, points, gold, inputs_json, results_json, finished_at, finish_token FROM freethrow_sets WHERE id = '11111111-1111-4111-8111-111111111111'").first<Record<string, string | number | null>>();
     expect(done).toMatchObject({ shots: 10, made: 7, points: 7, gold: 35, finished_at: '2026-11-19T03:12:00.000Z', finish_token: null });
     const results = JSON.parse(done!.results_json as string) as unknown[];
     expect(results).toHaveLength(10);
@@ -57,9 +57,9 @@ describe('migration 0036: free-throw sets for the 30-second rule', () => {
   });
 
   it('leaves unrecorded sets unfinished, including the ones recorded ball by ball', async () => {
-    expect(await db.prepare("SELECT shots, made, points, gold, results_json, finished_at FROM freethrow_sets WHERE id = 'set-left'").first())
+    expect(await db.prepare("SELECT shots, made, points, gold, results_json, finished_at FROM freethrow_sets WHERE id = '22222222-2222-4222-8222-222222222222'").first())
       .toEqual({ shots: 0, made: 0, points: 0, gold: 0, results_json: null, finished_at: null });
-    expect(await db.prepare("SELECT shots, made, points, gold, finished_at FROM freethrow_sets WHERE id = 'set-old'").first())
+    expect(await db.prepare("SELECT shots, made, points, gold, finished_at FROM freethrow_sets WHERE id = '33333333-3333-4333-8333-333333333333'").first())
       .toEqual({ shots: 3, made: 1, points: 1, gold: 5, finished_at: null });
   });
 

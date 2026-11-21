@@ -3,7 +3,9 @@
 -- drop a CHECK, so freethrow_sets is rebuilt in the shape of arcade_sets: the
 -- balls move from freethrow_shots into results_json, and finished_at (not a
 -- ball count) says a set was recorded. Sets recorded under the 10-ball rule
--- keep their goals, points and gold.
+-- keep their goals, points and gold. The first rule's per-goal ledger rows
+-- (freethrow:goal:<set>:<ball>:<currency>) are matched by prefix with substr,
+-- not LIKE: D1 refuses a LIKE pattern longer than 50 bytes, and this one is 53.
 CREATE TABLE freethrow_sets_next (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
@@ -29,9 +31,9 @@ CREATE TABLE freethrow_sets_next (
 INSERT INTO freethrow_sets_next (id, user_id, request_id, slot, date, engine, shots, made, points, gold, inputs_json, results_json, created_at, finished_at)
 SELECT s.id, s.user_id, s.request_id, s.slot, s.date, s.engine, s.shots, s.made,
   COALESCE((SELECT SUM(l.amount) FROM ledger l WHERE l.user_id = s.user_id AND l.currency = 'score'
-    AND (l.reference = 'freethrow:set:' || s.id || ':score' OR l.reference LIKE 'freethrow:goal:' || s.id || ':%')), 0),
+    AND (l.reference = 'freethrow:set:' || s.id || ':score' OR substr(l.reference, 1, 52) = 'freethrow:goal:' || s.id || ':')), 0),
   COALESCE((SELECT SUM(l.amount) FROM ledger l WHERE l.user_id = s.user_id AND l.currency = 'gold'
-    AND (l.reference = 'freethrow:set:' || s.id || ':gold' OR l.reference LIKE 'freethrow:goal:' || s.id || ':%')), 0),
+    AND (l.reference = 'freethrow:set:' || s.id || ':gold' OR substr(l.reference, 1, 52) = 'freethrow:goal:' || s.id || ':')), 0),
   CASE WHEN s.shots >= 10 THEN (SELECT json_group_array(json_object('power', power, 'aim', aim))
     FROM (SELECT power, aim FROM freethrow_shots WHERE set_id = s.id ORDER BY shot_index)) END,
   CASE WHEN s.shots >= 10 THEN (SELECT json_group_array(json_object('index', shot_index, 'power', power, 'aim', aim, 'made', json(CASE made WHEN 1 THEN 'true' ELSE 'false' END), 'kind', kind))
