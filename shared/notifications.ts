@@ -26,7 +26,9 @@ export type NotificationPayload =
   | { kind: 'rank'; period: 'week' | 'month'; place: number; gold: number }
   | { kind: 'game'; game: string; title: string; answer: string }
   /** bingo: a word to call; bingo-lead: a new game to open. */
-  | { kind: 'turn'; game: 'catchmind' | 'bingo' | 'bingo-lead' }
+  | { kind: 'turn'; game: 'catchmind' | 'bingo' | 'bingo-lead' | 'toilet' }
+  /** 변기 폭파 burst: the actor is who it burst on; points are the reader's. */
+  | { kind: 'toilet'; half: 'am' | 'pm'; points: number }
   | { kind: 'stock'; event: 'delisted' | 'whale'; ticker: string; name: string; detail: string }
   | { kind: 'admin'; title: string; body: string }
   /** Wording comes from the achievement list, so a renamed title reads right later. */
@@ -88,9 +90,17 @@ export function notificationText(notification: AppNotification, name: (userId: s
         link: `#/game/${payload.game}`, emoji: '🎯' };
     case 'turn':
       if (payload.game === 'bingo') return { title: '빙고 내 차례예요', body: '지울 단어를 고르고 확정해 주세요.', link: '#/play/bingo', emoji: '🎱' };
+      if (payload.game === 'toilet') return { title: '변기 폭파 내 차례예요', body: '변기 앞에 줄 설 차례예요. 볼일을 보고 물을 내려 주세요.', link: '#/play/toilet', emoji: '🚽' };
       if (payload.game === 'bingo-lead') return { title: '빙고 리더 차례예요', body: '주제를 정해서 새 빙고판을 열어 주세요.', link: '#/play/bingo', emoji: '🎱' };
       return { title: '캐치마인드 내 차례예요', body: '그림을 그릴 차례가 돌아왔어요.',
         link: '#/play/catchmind', emoji: '✏️' };
+    case 'toilet': {
+      const round = payload.half === 'am' ? '오전' : '오후';
+      const loser = notification.actorId ? name(notification.actorId) : '';
+      return payload.points < 0
+        ? { title: `${round} 변기가 내 차례에 터졌어요`, body: `${payload.points}점`, link: '#/play/toilet', emoji: '💥' }
+        : { title: `${round} 변기가 터졌어요`, body: `${loser ? `${loser} 차례에 펑! ` : ''}살아남아서 +${payload.points}점`, link: '#/play/toilet', emoji: '🧻' };
+    }
     case 'stock':
       return payload.event === 'delisted'
         ? { title: `${payload.name}${subjectParticle(payload.name)} 상장폐지됐어요`, body: payload.detail, link: '#/stock', emoji: '📉' }

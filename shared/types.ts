@@ -102,6 +102,7 @@ export interface BootstrapResponse {
   /** Curling and penalty home tiles. */
   arcade: { curling: ArcadeSummary; penalty: ArcadeSummary };
   bingo: BingoSummary;
+  toilet: ToiletSummary;
   /** Today's free uses left; each item's 이용권 count adds them to owned tickets. */
   dailyFree: DailyFreeLeft;
   launchGift: LaunchGiftState;
@@ -360,6 +361,55 @@ export interface BingoSummary {
   /** The reader has a board in this game. */
   joined: boolean;
   players: number;
+}
+
+/** 변기 폭파 (worker/toilet.ts): two rounds a day, everyone takes turns until the toilet bursts. */
+export type ToiletStatus = 'waiting' | 'playing' | 'burst' | 'void';
+export interface ToiletPush {
+  /** Whose turn the push was, and who pressed it (another player, when the turn had waited too long). */
+  for: string; by: string; at: string;
+}
+export interface ToiletRoundView {
+  id: string; date: string; half: 'am' | 'pm'; label: string;
+  startsAt: string; endsAt: string;
+  /** Turn order; the first seat moves one along every round. */
+  order: CatchmindPlayer[];
+  slots: number; pushes: ToiletPush[];
+  /** waiting: nobody has pushed yet; void: the window ended before it burst. */
+  status: ToiletStatus;
+  turn: CatchmindPlayer | null; turnStartedAt: string | null;
+  /** The chance the next push bursts (0 once it is over). */
+  chance: number;
+  loser: CatchmindPlayer | null;
+  results: { player: CatchmindPlayer; points: number }[];
+  endedAt: string | null;
+}
+export interface ToiletState {
+  /** The round open now; null from 23:50 to midnight or when too few players are active. */
+  current: ToiletRoundView | null;
+  /** The round before it, when anyone played it. */
+  previous: ToiletRoundView | null;
+  canPush: boolean; canSkip: boolean;
+  /** When another player may push for the waiting turn. */
+  skipAvailableAt: string | null;
+  /** When the next round opens. */
+  nextOpensAt: string;
+}
+export interface ToiletResponse { toilet: ToiletState; stamp: string; viewerId: string; serverTime: string; play: CatchmindPlayWindow }
+export interface ToiletUnchanged { unchanged: true; stamp: string; viewerId: string; serverTime: string; play: CatchmindPlayWindow }
+export type ToiletPollResponse = ToiletResponse | ToiletUnchanged;
+export type ToiletAction = 'push' | 'skip';
+/** `pushes` is how many pushes the screen saw, so a double tap or a stale screen never pushes twice. */
+export interface ToiletPushInput { roundId: string; pushes: number }
+/** The home row. */
+export interface ToiletSummary {
+  half: 'am' | 'pm' | null; label: string | null;
+  status: ToiletStatus | 'closed';
+  turn: { username: string; displayName: string } | null;
+  loser: { username: string; displayName: string } | null;
+  /** The reader's points from this round once it burst. */
+  points: number;
+  pushes: number; slots: number;
 }
 
 /** Curling and penalty shoot-out sets (worker/arcade.ts). The same shape as a

@@ -1,0 +1,69 @@
+/* 변기 폭파 (src/screens/Toilet.tsx). */
+.toilet-page { padding-bottom: 28px; }
+.toilet-card, .toilet-note, .toilet-error, .toilet-rules { width: calc(100% - 32px); margin: 0 auto 12px; }
+.toilet-card { display: grid; gap: 12px; padding: 16px; }
+.toilet-card h2 { margin: 0; font-size: 16px; font-weight: 800; }
+.toilet-card.is-my-turn { box-shadow: 0 0 0 2px #f47c66, 0 8px 20px rgba(244, 124, 102, 0.16); }
+.toilet-note, .toilet-error { padding: 14px 16px; color: var(--muted); font-size: 13px; line-height: 1.6; word-break: keep-all; }
+.toilet-error { color: #d9604c; }
+.toilet-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.toilet-head strong { font-size: 17px; font-weight: 800; }
+.toilet-chip { flex-shrink: 0; border-radius: 999px; padding: 4px 10px; background: #e3f1fc; color: #3b7fb3; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.toilet-hint { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.6; word-break: keep-all; text-wrap: pretty; }
+.toilet-center { text-align: center; }
+.toilet-status { margin: 0; min-height: 22px; font-size: 15px; line-height: 1.5; text-align: center; word-break: keep-all; }
+.toilet-last { margin: 0; border-radius: 14px; padding: 10px 12px; background: #e3f1fc; font-size: 13px; line-height: 1.5; text-align: center; word-break: keep-all; }
+.toilet-push { font-size: 16px; }
+
+/* The scene: the toilet, a poop dropping in, a flush swirl, the burst. */
+.toilet-scene { position: relative; display: grid; place-items: end center; height: 220px; overflow: hidden; border-radius: 20px; background: linear-gradient(#f4f9fd, #e6f1fa); }
+.toilet-art { display: block; width: 190px; height: 190px; object-fit: contain; object-position: bottom; }
+.toilet-art.is-boom { width: 160px; height: 220px; }
+.toilet-art.is-small { width: 120px; height: 120px; margin: 0 auto; }
+.toilet-emoji { display: grid; place-items: end center; font-size: 132px; line-height: 1; }
+.toilet-art.is-small.toilet-emoji { font-size: 84px; place-items: center; }
+.toilet-art.is-boom.toilet-emoji { place-items: center; font-size: 150px; }
+.toilet-scene.is-nervous .toilet-art { animation: toilet-tremble 180ms linear infinite; }
+.toilet-scene.is-boom .toilet-art { animation: toilet-burst 520ms var(--ease-out) both; }
+.toilet-scene.scene-flush .toilet-art { animation: toilet-wobble 520ms var(--ease-out) 2; }
+.toilet-poop { position: absolute; top: 0; left: 50%; width: 56px; height: 56px; margin-left: -28px; object-fit: contain; animation: toilet-drop 860ms cubic-bezier(0.55, 0, 0.9, 0.5) both; }
+.toilet-poop.toilet-emoji { font-size: 48px; place-items: center; }
+.toilet-swirl { position: absolute; bottom: 92px; left: 50%; width: 70px; height: 26px; margin-left: -35px; border-radius: 50%; border: 4px dotted #7cb7e0; animation: toilet-swirl 700ms linear 2; }
+@keyframes toilet-tremble { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-2px) rotate(-0.6deg); } 75% { transform: translateX(2px) rotate(0.6deg); } }
+@keyframes toilet-wobble { 0%, 100% { transform: scale(1, 1); } 40% { transform: scale(1.04, 0.96); } 70% { transform: scale(0.98, 1.02); } }
+@keyframes toilet-burst { 0% { transform: scale(0.7); opacity: 0.4; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
+@keyframes toilet-drop { 0% { transform: translateY(-60px) rotate(-12deg); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateY(120px) rotate(8deg) scale(0.6); opacity: 0; } }
+@keyframes toilet-swirl { from { transform: rotate(0deg) scale(1); opacity: 1; } to { transform: rotate(360deg) scale(0.5); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .toilet-scene .toilet-art, .toilet-poop, .toilet-swirl { animation: none !important; }
+  .toilet-poop, .toilet-swirl { display: none; }
+}
+
+/* The level: how far the round has gone, and the chance of the next push. */
+.toilet-gauge { display: grid; gap: 6px; }
+.toilet-gauge-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.toilet-gauge-head span { color: var(--muted); font-weight: 700; }
+.toilet-gauge-head b { color: #d9604c; font-weight: 800; }
+.toilet-gauge-bar { height: 12px; overflow: hidden; border-radius: 999px; background: #e1ecf5; }
+.toilet-gauge-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #8fc6ea, #c69a6b, #f47c66); transition: width 400ms var(--ease-out); }
+@media (prefers-reduced-motion: reduce) { .toilet-gauge-bar i { transition: none; } }
+.toilet-result-art { display: block; width: 132px; height: 132px; margin: 0 auto; object-fit: contain; }
+.toilet-result-art.toilet-emoji { font-size: 96px; place-items: center; }
+
+.toilet-seats { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.toilet-seats li { display: flex; align-items: center; gap: 10px; }
+.toilet-seats li.is-turn { border-radius: 16px; margin: -6px -8px; padding: 6px 8px; background: #fff7e0; }
+.toilet-seats li.is-loser { border-radius: 16px; margin: -6px -8px; padding: 6px 8px; background: #ffe9e4; }
+.toilet-seat-number { width: 18px; flex-shrink: 0; color: var(--faint); font-size: 13px; font-weight: 800; text-align: center; font-variant-numeric: tabular-nums; }
+.toilet-seat-name { display: grid; flex: 1; min-width: 0; }
+.toilet-seat-name strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.toilet-seats li.is-me .toilet-seat-name strong { color: #e0644e; }
+.toilet-seat-name small { color: var(--muted); font-size: 11.5px; }
+.toilet-gain, .toilet-lose, .toilet-now { flex-shrink: 0; font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.toilet-gain { color: #2e8c6e; }
+.toilet-lose { color: #d9604c; }
+.toilet-now { color: #94700a; font-size: 13px; }
+
+.toilet-rules { padding: 14px 16px; font-size: 13px; line-height: 1.6; }
+.toilet-rules summary { font-weight: 800; cursor: pointer; }
+.toilet-rules ol { margin: 10px 0 0; padding-left: 18px; word-break: keep-all; }

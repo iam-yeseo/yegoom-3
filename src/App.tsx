@@ -12,6 +12,7 @@ import type {
   FreeThrowSummary,
   ArcadeSummary,
   BingoSummary,
+  ToiletSummary,
   SantaSummary,
   LottoNotice,
   LaunchGiftResponse, AuthResponse, LuckPhotoResponse, TagResponse, NicknameTagView, AchievementsResponse,
@@ -37,6 +38,7 @@ import { previewFreeThrowSummary } from "./freethrow/summary";
 import { previewSantaSummary } from "./santa/summary";
 import { previewArcadeSummary } from "./arcade/summary";
 import { previewBingoSummary } from "./bingo-preview";
+import { previewToiletSummary } from "./toilet-preview";
 import { ARCADE_GAMES, type ArcadeGame } from "../shared/balance";
 import {
   previewGame,
@@ -80,6 +82,7 @@ const Admin = lazy(() => import("./screens/Admin").then(module => ({ default: mo
 const Notifications = lazy(() => import("./screens/Notifications").then(module => ({ default: module.Notifications })));
 const Claw = lazy(() => import("./screens/Claw").then(module => ({ default: module.Claw })));
 const Bingo = lazy(() => import("./screens/Bingo").then(module => ({ default: module.Bingo })));
+const Toilet = lazy(() => import("./screens/Toilet").then(module => ({ default: module.Toilet })));
 const Curling = lazy(() => import("./screens/Curling").then(module => ({ default: module.Curling })));
 const Penalty = lazy(() => import("./screens/Penalty").then(module => ({ default: module.Penalty })));
 const FreeThrow = lazy(() => import("./screens/FreeThrow").then(module => ({ default: module.FreeThrow })));
@@ -138,6 +141,7 @@ function previewHome(): HomeData {
     santa: previewSantaSummary(),
     arcade: { curling: previewArcadeSummary("curling"), penalty: previewArcadeSummary("penalty") },
     bingo: previewBingoSummary(),
+    toilet: previewToiletSummary(),
     lottoNotice: null,
     unreadNotifications: previewNotificationSummary(previewUser.id).unread,
     serverTime: new Date().toISOString(),
@@ -159,6 +163,7 @@ function homeData(data: BootstrapResponse): HomeData {
     santa: data.santa,
     arcade: data.arcade,
     bingo: data.bingo,
+    toilet: data.toilet,
     lottoNotice: data.lottoNotice,
     stock: data.stock,
     unreadNotifications: data.notifications.unread,
@@ -385,6 +390,7 @@ export default function App() {
   const [previewFreeThrow, setPreviewFreeThrow] = useState<{ summary: FreeThrowSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewFreeThrowSummary(), gold: 0, score: 0, ledger: [] }));
   const [previewSanta, setPreviewSanta] = useState<{ summary: SantaSummary; gold: number; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewSantaSummary(), gold: 0, score: 0, ledger: [] }));
   const [previewBingoState, setPreviewBingoState] = useState<{ summary: BingoSummary; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewBingoSummary(), score: 0, ledger: [] }));
+  const [previewToiletState, setPreviewToiletState] = useState<{ summary: ToiletSummary; score: number; ledger: LedgerEntry[] }>(() => ({ summary: previewToiletSummary(), score: 0, ledger: [] }));
   /** Curling and penalty previews keep the same shape as the free throw's, one entry per game. */
   const [previewArcade, setPreviewArcade] = useState<Record<ArcadeGame, { summary: ArcadeSummary; gold: number; score: number; ledger: LedgerEntry[] }>>(() =>
     Object.fromEntries(ARCADE_GAMES.map(game => [game, { summary: previewArcadeSummary(game), gold: 0, score: 0, ledger: [] }])) as never);
@@ -555,8 +561,8 @@ export default function App() {
   }, [stockBlocked, demo, route]);
   const gameId = path.match(/^\/game\/(wake|offwork|luck)$/)?.[1] as
     GameId | undefined;
-  const play = path.match(/^\/play\/(catchmind|kuji|claw|freethrow|santa|curling|penalty|bingo)$/)?.[1] as
-    "catchmind" | "kuji" | "claw" | "freethrow" | "santa" | "curling" | "penalty" | "bingo" | undefined;
+  const play = path.match(/^\/play\/(catchmind|kuji|claw|freethrow|santa|curling|penalty|bingo|toilet)$/)?.[1] as
+    "catchmind" | "kuji" | "claw" | "freethrow" | "santa" | "curling" | "penalty" | "bingo" | "toilet" | undefined;
   const stockId = path.match(/^\/stock\/([A-Z]{4})$/)?.[1];
   const go = (to: string) => {
     if (!FEATURES.stock && !demo && /^\/stock(?:\/|$)/.test(to)) { setStockNoticeOpen(true); return; }
@@ -787,10 +793,10 @@ export default function App() {
     void api.readNotices(ids).then(result => setData(current => current ? { ...current, noticesRead: result.noticesRead } : current), () => undefined);
   }, [demo]);
   const previewExtras = ARCADE_GAMES.map(game => previewArcade[game]);
-  const previewExtraGold = previewExtras.reduce((sum, extra) => sum + extra.gold, 0), previewExtraScore = previewExtras.reduce((sum, extra) => sum + extra.score, 0) + previewBingoState.score;
+  const previewExtraGold = previewExtras.reduce((sum, extra) => sum + extra.gold, 0), previewExtraScore = previewExtras.reduce((sum, extra) => sum + extra.score, 0) + previewBingoState.score + previewToiletState.score;
   const previewArcadeView = { curling: previewArcade.curling.summary, penalty: previewArcade.penalty.summary };
   const view = demo ? { ...previewHome(), displayName: previewProfile.displayName, gold: previewShop.gold + previewAttendance.goldBonus + previewCatchmind.gold + previewClaw.gold + previewFreeThrow.gold + previewSanta.gold + previewExtraGold + previewStock.gold + previewAchievementGold,
-    catchmind: previewCatchmind.summary, claw: previewClaw.summary, freethrow: previewFreeThrow.summary, santa: previewSanta.summary, arcade: previewArcadeView, bingo: previewBingoState.summary, lottoNotice: previewShop.lottoNotice, stock: previewStockHome(),
+    catchmind: previewCatchmind.summary, claw: previewClaw.summary, freethrow: previewFreeThrow.summary, santa: previewSanta.summary, arcade: previewArcadeView, bingo: previewBingoState.summary, toilet: previewToiletState.summary, lottoNotice: previewShop.lottoNotice, stock: previewStockHome(),
     ...(adminDemo ? { userId: "preview-admin", username: "preview-admin", displayName: "운영 미리보기", lottoNotice: null,
       games: previewAdminState.games.map(game => previewGame(game.id, game.rules)),
       claw: { ...previewClaw.summary, coins: 0, freeCoins: 0, purchasedCoins: 0, isAdmin: true },
@@ -870,6 +876,9 @@ export default function App() {
   else if (play === "bingo") content = <Bingo user={me} demo={demo} onBack={home} onScored={() => void refresh()}
     onSummary={bingo => setData(current => current ? { ...current, bingo } : current)}
     onPreviewChange={(summary, score, ledger) => setPreviewBingoState({ summary, score, ledger })} />;
+  else if (play === "toilet") content = <Toilet user={me} demo={demo} onBack={home} onScored={() => void refresh()}
+    onSummary={toilet => setData(current => current ? { ...current, toilet } : current)}
+    onPreviewChange={(summary, score, ledger) => setPreviewToiletState({ summary, score, ledger })} />;
   else if (play === "curling" || play === "penalty") {
     const game = play, Screen = game === "curling" ? Curling : Penalty;
     content = <Screen user={me} demo={demo} onBack={home} transact={transactFreeThrow} onRevealed={() => void refresh()}
@@ -985,7 +994,7 @@ export default function App() {
         attendanceKey={view.attendanceKey}
         gold={me.gold}
         weeklyScore={me.weeklyScore}
-        ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewFreeThrow.ledger, ...previewSanta.ledger, ...previewExtras.flatMap(extra => extra.ledger), ...previewBingoState.ledger, ...previewStock.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
+        ledger={demo ? [...previewShop.ledger, ...previewCatchmind.ledger, ...previewClaw.ledger, ...previewFreeThrow.ledger, ...previewSanta.ledger, ...previewExtras.flatMap(extra => extra.ledger), ...previewBingoState.ledger, ...previewToiletState.ledger, ...previewStock.ledger, ...previewLedger(previewAttendance.attendance)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : (data?.ledger ?? [])}
         others={view.players.map((p) => p.username).filter((u) => u !== view.username)}
         tagShopHref={demo ? "#/preview/shop/tag/inventory" : "#/shop/tag/inventory"}
         onBack={home}
