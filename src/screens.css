@@ -98,9 +98,6 @@
 .tabbar[hidden] { display: none; }
 .tabbar-admin { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .tabbar-admin button { min-width: 0; padding-inline: 2px; white-space: nowrap; }
-.tabbar button:not(:disabled):active {
-  transform: none;
-}
 
 .stack {
   display: flex;
@@ -369,9 +366,6 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-}
-.room-bell:active {
-  transform: scale(0.94);
 }
 .room-bell-badge {
   position: absolute;
@@ -2122,7 +2116,7 @@ em.delisted {
   color: #7c7383;
   font-size: 17px;
   font-weight: 800;
-  transition: background 0.15s;
+  transition: background-color 0.15s;
 }
 .balls button[aria-pressed="true"] {
   background: #8cc8f2;
@@ -2851,7 +2845,7 @@ em.ring::after {
 .achievement-row.unlocked .achievement-mark { background: #fff4cc; }
 .achievement-row.claimed .achievement-mark { background: #e3f6ee; color: #2e8c6e; }
 .achievement-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.achievement-text strong { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 15px; font-weight: 800; line-height: 1.4; word-break: keep-all; }
+.achievement-text strong { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 15px; font-weight: 800; line-height: 1.4; word-break: keep-all; text-wrap: balance; }
 .achievement-row.locked .achievement-text strong { color: var(--muted); }
 .achievement-text small { font-size: 12px; line-height: 1.5; color: var(--muted); word-break: keep-all; }
 .achievement-repeat { font-style: normal; font-size: 11px; font-weight: 800; padding: 1px 7px; border-radius: 999px; background: #eee8fc; color: #7556c4; }

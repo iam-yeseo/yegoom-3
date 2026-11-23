@@ -5,6 +5,7 @@ import type { LaunchGiftResponse, LaunchGiftState, Role } from "../shared/types"
 import { useAttendance } from "./attendance";
 import { useShop } from "./shop";
 import { openSheet, pop, toast, useOnChange } from "./motion";
+import { CloseIcon } from "./components/UI";
 import "./launch.css";
 
 /** Later coin arrivals start new target pops after the first coin's callback. */
@@ -26,7 +27,7 @@ export function LaunchDialog({ title, onClose, children, className = "" }: { tit
   }, []);
   return <dialog ref={dialog} className={`launch-dialog ${className}`} aria-labelledby={titleId}
     onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <button className="launch-dialog-close" type="button" aria-label="닫기" onClick={onClose}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
+    <button className="launch-dialog-close" type="button" aria-label="닫기" onClick={onClose}><CloseIcon /></button>
     <h2 id={titleId}>{title}</h2>
     {children}
   </dialog>;

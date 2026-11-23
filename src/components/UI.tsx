@@ -424,6 +424,14 @@ export function Chevron({
     </svg>
   );
 }
+/** The X that closes a dialog, a banner or a play screen. */
+export function CloseIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="m6 6 12 12M18 6 6 18" />
+    </svg>
+  );
+}
 /** The bar on top of a pushed screen: back, title, gold. It sits in the page
  * until the page scrolls past it, then stays fixed at the top (a little more
  * compact) so back and gold are always in reach. The slot keeps its place in

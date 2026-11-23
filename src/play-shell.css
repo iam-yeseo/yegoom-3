@@ -31,11 +31,10 @@
 .play-frame canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .play-bottom { display: grid; gap: 8px; width: 100%; max-width: 520px; margin: 0 auto; padding: 10px 16px 14px; box-sizing: border-box; }
 .play-bottom .primary-button { width: 100%; min-height: 58px; font-size: 18px; touch-action: manipulation; }
-.play-bottom .primary-button:not(:disabled):active { transform: scale(.97); }
 
 .play-progress { display: flex; align-items: center; gap: 10px; }
 .play-progress-bar { flex: 1; display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; }
-.play-progress-bar i { height: 10px; border-radius: 999px; background: var(--play-track); transition: background var(--dur-m) var(--ease-out); }
+.play-progress-bar i { height: 10px; border-radius: 999px; background: var(--play-track); transition: background-color var(--dur-m) var(--ease-out); }
 .play-progress-bar i.is-hit { background: #ef6b5b; }
 .play-progress-bar i.is-miss { background: var(--play-miss); }
 .play-progress-bar i.is-now { background: var(--play-track); box-shadow: inset 0 0 0 2px #ffd866; }

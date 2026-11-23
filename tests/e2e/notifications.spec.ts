@@ -1,5 +1,9 @@
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { NOTICES } from '../../shared/notices';
+
+// Every 공지 starts unread, and a patch adds one: count them, never assume one.
+const POSTS = NOTICES.length;
 
 const MORNING = '2026-10-30T00:00:00Z';
 const ORIGIN = 'http://localhost:8788';
@@ -36,8 +40,8 @@ test('the preview home bell carries the badge and opens the centre without APIs'
   await expect(page.locator('.room-identity .gold')).toHaveCount(0);
   const bell = page.locator('.room-bell');
   await expect(bell).toHaveAttribute('aria-label', /안 읽음/);
-  // Three unread alarms and one 공지 that has not been opened yet.
-  await expect(page.locator('.room-bell-badge')).toHaveText('4');
+  // Three unread alarms and the 공지 that have not been opened yet.
+  await expect(page.locator('.room-bell-badge')).toHaveText(String(3 + POSTS));
   await bell.click();
   await expect(page).toHaveURL(/#\/preview\/notifications$/);
   await expect(page.locator('h1').first()).toHaveText('알림');
@@ -55,7 +59,7 @@ test('the preview home bell carries the badge and opens the centre without APIs'
   await page.setViewportSize({ width: 390, height: 900 });
   // 알림 | 공지: the 공지 side lists patch notes as posts, each with its date.
   const notices = page.getByRole('tab', { name: /공지/ });
-  await expect(notices.locator('.segmented-badge')).toHaveText('1');
+  await expect(notices.locator('.segmented-badge')).toHaveText(String(POSTS));
   await notices.click();
   await expect(page).toHaveURL(/#\/preview\/notifications\/notices$/);
   const post = page.locator('.notice-post').first();
@@ -67,9 +71,12 @@ test('the preview home bell carries the badge and opens the centre without APIs'
   // Opening the post reads it: the toggle's count goes, and so does one from the bell.
   await post.locator('.notice-head').click();
   await expect(post.locator('.notice-body li').first()).toBeVisible();
-  await expect(notices.locator('.segmented-badge')).toHaveCount(0);
+  if (POSTS > 1) await expect(notices.locator('.segmented-badge')).toHaveText(String(POSTS - 1));
+  else await expect(notices.locator('.segmented-badge')).toHaveCount(0);
   await capture(page, 'preview-notice-open', info);
   await page.setViewportSize({ width: 390, height: 900 });
+  for (let i = 1; i < POSTS; i++) await page.locator('.notice-post').nth(i).locator('.notice-head').click();
+  await expect(notices.locator('.segmented-badge')).toHaveCount(0);
   await page.getByRole('tab', { name: '알림' }).click();
   await expect(page).toHaveURL(/#\/preview\/notifications$/);
   // A notice with a link opens the screen it is about.
@@ -102,22 +109,24 @@ test('an administrator notice reaches a player and opening the centre clears the
     await expect(viewer.locator('.notification-row').filter({ hasText: '토요일은 쉬어요' })).toContainText('일요일에 다시 열려요.');
     // The visit is the read mark for alarms. The 공지 nobody opened yet keeps the badge on.
     await viewer.goto('/');
-    await expect(viewer.locator('.room-bell-badge')).toHaveText('1');
-    await expect(viewer.locator('.room-bell')).toHaveAttribute('aria-label', /공지 1개 포함/);
+    await expect(viewer.locator('.room-bell-badge')).toHaveText(String(POSTS));
+    await expect(viewer.locator('.room-bell')).toHaveAttribute('aria-label', new RegExp(`공지 ${POSTS}개 포함`));
     // With only a notice left, the bell opens on the 공지 side.
     await viewer.locator('.room-bell').click();
     await expect(viewer).toHaveURL(/#\/notifications\/notices$/);
     await expect(viewer.getByRole('tab', { name: /공지/ })).toHaveAttribute('aria-selected', 'true');
     // Looking at the list is not reading: the post has to be opened.
     await viewer.goto('/');
-    await expect(viewer.locator('.room-bell-badge')).toHaveText('1');
+    await expect(viewer.locator('.room-bell-badge')).toHaveText(String(POSTS));
     await viewer.goto('/#/notifications/notices');
-    const post = viewer.locator('.notice-post').first();
-    await expect(post.locator('.notice-new')).toBeVisible();
-    const saved = viewer.waitForResponse(response => response.url().endsWith('/api/notices/read') && response.status() === 200);
-    await post.locator('.notice-head').click();
-    await saved;
-    await expect(post.locator('.notice-body li').first()).toBeVisible();
+    for (let i = 0; i < POSTS; i++) {
+      const post = viewer.locator('.notice-post').nth(i);
+      await expect(post.locator('.notice-new')).toBeVisible();
+      const saved = viewer.waitForResponse(response => response.url().endsWith('/api/notices/read') && response.status() === 200);
+      await post.locator('.notice-head').click();
+      await saved;
+      await expect(post.locator('.notice-body li').first()).toBeVisible();
+    }
     await viewer.goto('/');
     await expect(viewer.locator('.room-bell-badge')).toHaveCount(0);
     // It stays read after a reload (it is kept on the server).

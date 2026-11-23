@@ -36,6 +36,13 @@
   font-synthesis: none;
   font-weight: 500;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Korean breaks between words, never inside one; a single word longer than
+     its line (a long nickname) still wraps instead of spilling out. */
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  /* No last line left with a single word; titles spread evenly instead. */
+  text-wrap: pretty;
   --cream: #fff9ee;
   --text: #3a3340;
   --muted: #7c7383;
@@ -65,6 +72,24 @@ html {
 }
 dialog {
   overscroll-behavior: contain;
+}
+/* A closed sheet fading out (leaveSheet in motion.ts). It is no longer an open
+   modal dialog, so the layer shows it and gives it back the placement the
+   browser gives a modal one; :where keeps these weaker than any sheet's own
+   rules, as the browser's are. */
+.sheet-exit {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+}
+:where(.sheet-exit > dialog) {
+  display: block;
+  position: fixed;
+  inset-block: 0;
+  max-width: calc(100% - 6px - 2em);
+  max-height: calc(100% - 6px - 2em);
+  overflow: auto;
 }
 body {
   margin: 0;
@@ -108,6 +133,11 @@ h2,
 h3,
 p {
   margin: 0;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
 }
 button svg {
   flex-shrink: 0;
@@ -252,6 +282,42 @@ button svg {
   border-radius: 14px;
   font-size: 32px;
 }
+/* Small controls keep their size on screen and take touches in a 44px area.
+   Each area stops short of the nearest other control. */
+.icon-button,
+.calendar-head button,
+.section-title > button,
+button.news-stock,
+.auto-button,
+.pg-fail-nodes > span.who > button,
+details:not(.shop-history-group) > summary {
+  position: relative;
+}
+.icon-button::after,
+.calendar-head button::after,
+.section-title > button::after,
+button.news-stock::after,
+.auto-button::after,
+.pg-fail-nodes > span.who > button::after,
+details:not(.shop-history-group) > summary::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  translate: -50% -50%;
+}
+/* A card sits 6px under a section title, so its link reaches up instead. */
+.section-title > button::after {
+  top: auto;
+  bottom: -6px;
+  translate: -50% 0;
+}
+/* Answer slots stand 4px apart: grow downwards and upwards only. */
+.pg-fail-nodes > span.who > button::after {
+  width: calc(100% + 4px);
+}
 .gold {
   display: inline-flex;
   align-items: center;
@@ -336,7 +402,7 @@ button svg {
   font-weight: 800;
   box-shadow: 0 8px 20px rgba(244, 124, 102, 0.3);
   transition:
-    background 0.15s,
+    background-color 0.15s,
     transform 0.15s;
 }
 .primary-button:disabled {

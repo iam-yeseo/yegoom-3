@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { clamp, hexToHsv, hsvToHex, INK_PALETTE, normalizeHex, saturationValueAt, type HsvColor, type PaintColor } from "../color";
 import { openSheet } from "../motion";
+import { CloseIcon } from "./UI";
 
 interface ColorPickerProps {
   value: PaintColor;
@@ -86,7 +87,7 @@ export function ColorPicker({ value, onChange, onCommit, recentColors, onClose, 
     <div className="color-picker-sheet">
       <div className="color-picker-heading"><h2 id={titleId}>색상 고르기</h2>
         <button type="button" aria-label="색상 선택 닫기" onClick={() => { onCommit(colorRef.current); onClose(); }}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          <CloseIcon size={22} />
         </button>
       </div>
       <div className="color-picker-sv" role="slider" tabIndex={0} aria-label="채도와 명도"

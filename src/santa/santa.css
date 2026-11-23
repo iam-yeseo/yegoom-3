@@ -17,7 +17,7 @@
 .santa-start { width: 100%; }
 .santa-next { color: var(--muted); font-size: 13px; font-weight: 700; }
 .santa-houses { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px; }
-.santa-houses i { aspect-ratio: 1; border-radius: 8px; background: #f6f1eb; transition: background var(--dur-m) var(--ease-out); }
+.santa-houses i { aspect-ratio: 1; border-radius: 8px; background: #f6f1eb; transition: background-color var(--dur-m) var(--ease-out); }
 .santa-houses i.is-hit { background: #ef6b5b; }
 .santa-houses i.is-miss { background: #fff; box-shadow: inset 0 0 0 2px #e4dce6; }
 .santa-houses i.is-now { background: #fff; box-shadow: inset 0 0 0 2px #ef6b5b; }

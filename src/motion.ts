@@ -113,6 +113,11 @@ export const fadeIn = (el: Element | null | undefined, o: Opts = {}) =>
   anim(el, [{ opacity: 0 }, { opacity: 1 }], { dur: dur.s, ...o });
 
 const openSheets = new Map<HTMLDialogElement, () => void>();
+/** Sheets that are fading out in place: how to call the fade off, and where
+ * focus was before the sheet opened. */
+const sheetExits = new Map<HTMLDialogElement, { cancel: () => void; focus: Element | null }>();
+/** Dimmers still fading behind sheets that have closed. */
+const fadingDimmers = new Set<Animation>();
 let unlockPageScroll: (() => void) | null = null;
 let scrollHolds = 0;
 
@@ -161,7 +166,13 @@ function lockPageScroll() {
 export function openSheet(dialog: HTMLDialogElement): () => void {
   const existing = openSheets.get(dialog);
   if (existing) return existing;
-  const previousFocus = document.activeElement;
+  // Reopened while it was still fading out: drop the fade and its pending close.
+  // While it fades it still holds the focus, so the place to return to is the
+  // one remembered when it first opened.
+  const leaving = sheetExits.get(dialog);
+  leaving?.cancel();
+  for (const dimmer of [...fadingDimmers]) dimmer.cancel();
+  const previousFocus = leaving ? leaving.focus : document.activeElement;
   const releaseScroll = holdPageScroll();
   try {
     dialog.showModal();
@@ -193,6 +204,25 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
   viewport?.addEventListener("scroll", updateInset);
   dialog.addEventListener("focusin", onFocus);
   updateInset();
+  // What the fade-out needs but cannot read once the sheet has left the page:
+  // the dimmer's colour and how far each scrolling part had been scrolled.
+  let backdrop = "";
+  try {
+    backdrop = getComputedStyle(dialog, "::backdrop").backgroundColor;
+    if (backdrop === getComputedStyle(dialog).backgroundColor) backdrop = "";
+  } catch { /* No dimmer to fade in a browser that cannot report it. */ }
+  const scrolled = new Map<Element, number>();
+  const onScroll = (event: Event) => {
+    if (event.target instanceof Element) scrolled.set(event.target, event.target.scrollTop);
+  };
+  dialog.addEventListener("scroll", onScroll, { capture: true, passive: true });
+  // React removes a closing sheet from the page before its effect cleanup can
+  // run, sometimes a frame earlier. Watching for the removal lets the fade-out
+  // start in that same frame, so the sheet never blinks away and back.
+  const removal = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
+    if (!dialog.isConnected) close();
+  });
+  removal?.observe(document.documentElement, { childList: true, subtree: true });
   let closed = false;
   // A close event is queued: React StrictMode can already have reopened this
   // element by the time an earlier close is dispatched.
@@ -200,15 +230,18 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
   const close = () => {
     if (closed) return;
     closed = true;
+    removal?.disconnect();
     dialog.removeEventListener("close", onClose);
     dialog.removeEventListener("focusin", onFocus);
+    dialog.removeEventListener("scroll", onScroll, { capture: true });
     viewport?.removeEventListener("resize", updateInset);
     viewport?.removeEventListener("scroll", updateInset);
     clearTimeout(reveal);
-    dialog.style.removeProperty("--keyboard-inset");
+    // Closed while still sliding in: leave from where it had got to.
+    const shown = entrance?.playState === "running" ? entrance.effect?.getComputedTiming().progress ?? 1 : 1;
     entrance?.cancel();
     openSheets.delete(dialog);
-    if (dialog.open) dialog.close();
+    leaveSheet(dialog, { shown, backdrop, scrolled, focus: previousFocus });
     releaseScroll();
     const topDialog = Array.from(openSheets.keys()).at(-1);
     if (previousFocus instanceof HTMLElement && previousFocus.isConnected && (!topDialog || topDialog.contains(previousFocus))) {
@@ -218,6 +251,66 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
   openSheets.set(dialog, close);
   dialog.addEventListener("close", onClose);
   return close;
+}
+
+/** Closes a sheet with a short fade, softer than the way it came in. A sheet
+ * that has already been removed from the page is shown once more, on top of
+ * the page and out of reach of touch, focus and screen readers, only to fade. */
+function leaveSheet(dialog: HTMLDialogElement, o: { shown: number; backdrop: string; scrolled: Map<Element, number>; focus: Element | null }) {
+  const finish = () => {
+    dialog.style.removeProperty("--keyboard-inset");
+    if (dialog.open) dialog.close();
+  };
+  // Closed by the browser itself (Esc, the back gesture): it is already hidden.
+  if (reduced() || !("animate" in dialog) || !dialog.open) return finish();
+  const frames: Frame[] = [
+    { opacity: o.shown, translate: `0 ${(1 - o.shown) * 30}px` },
+    { opacity: 0, translate: "0 12px" },
+  ];
+  const timing = { duration: dur.xs, easing: ease.out, fill: "forwards" as const };
+
+  if (dialog.isConnected) {
+    // Still on the page (its owner only closed it): fade where it stands.
+    dialog.style.pointerEvents = "none";
+    const exit = dialog.animate(frames, timing);
+    const cancel = () => {
+      sheetExits.delete(dialog);
+      dialog.style.removeProperty("pointer-events");
+      exit.cancel();
+    };
+    const entry = { cancel, focus: o.focus };
+    sheetExits.set(dialog, entry);
+    exit.finished.then(() => {
+      if (sheetExits.get(dialog) !== entry) return;
+      finish();
+      cancel();
+    }, () => {});
+    return;
+  }
+
+  // Close it now, as a sheet without a fade would: closing is what hands the
+  // focus back, and done later it would pull the focus away from wherever the
+  // player has gone since. What fades is the closed sheet, shown as a picture
+  // (.sheet-exit displays it); left open it would also take the next Esc.
+  finish();
+  dialog.inert = true;
+  const layer = document.createElement("div");
+  layer.className = "sheet-exit";
+  layer.setAttribute("aria-hidden", "true");
+  layer.appendChild(dialog);
+  document.body.appendChild(layer);
+  for (const [element, top] of o.scrolled) if (dialog.contains(element)) element.scrollTop = top;
+  const remove = () => layer.remove();
+  const exit = dialog.animate(frames, timing);
+  exit.finished.then(remove, remove);
+  // The dimmer fades out with the sheet, unless another sheet is open or opens
+  // meanwhile: that one brings its own dimmer, and two would darken the page.
+  if (o.backdrop && openSheets.size === 0) {
+    const dimmer = layer.animate([{ backgroundColor: o.backdrop }, { backgroundColor: "transparent" }], timing);
+    fadingDimmers.add(dimmer);
+    const forget = () => { fadingDimmers.delete(dimmer); };
+    dimmer.finished.then(forget, forget);
+  }
 }
 
 // Characters: static images, transform only, pivoting at the feet.
@@ -477,7 +570,7 @@ export function installPressFeedback() {
     (e) => {
       const el = (e.target as Element | null)?.closest<HTMLElement>(selector);
       if (!el || (el as HTMLButtonElement).disabled || el.closest("[data-nopress]")) return;
-      const scale = el.offsetWidth > 220 ? 0.975 : 0.94;
+      const scale = el.offsetWidth > 220 ? 0.975 : 0.96;
       const shadow = getComputedStyle(el).boxShadow;
       const pressed: Keyframe = { scale: String(scale) };
       if (shadow && shadow !== "none") pressed.boxShadow = "0 2px 8px rgba(120,90,60,.10)";
