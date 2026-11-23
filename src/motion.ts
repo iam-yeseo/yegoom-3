@@ -288,17 +288,19 @@ function leaveSheet(dialog: HTMLDialogElement, o: { shown: number; backdrop: str
     return;
   }
 
+  // Close it now, as a sheet without a fade would: closing is what hands the
+  // focus back, and done later it would pull the focus away from wherever the
+  // player has gone since. What fades is the closed sheet, shown as a picture
+  // (.sheet-exit displays it); left open it would also take the next Esc.
+  finish();
+  dialog.inert = true;
   const layer = document.createElement("div");
   layer.className = "sheet-exit";
   layer.setAttribute("aria-hidden", "true");
-  dialog.inert = true;
   layer.appendChild(dialog);
   document.body.appendChild(layer);
   for (const [element, top] of o.scrolled) if (dialog.contains(element)) element.scrollTop = top;
-  const remove = () => {
-    layer.remove();
-    finish();
-  };
+  const remove = () => layer.remove();
   const exit = dialog.animate(frames, timing);
   exit.finished.then(remove, remove);
   // The dimmer fades out with the sheet, unless another sheet is open or opens
