@@ -73,6 +73,22 @@ html {
 dialog {
   overscroll-behavior: contain;
 }
+/* A closed sheet fading out (leaveSheet in motion.ts). It is no longer a modal
+   dialog, so the layer gives it back the placement the browser gives a modal
+   one; :where keeps these weaker than any sheet's own rules, as those are. */
+.sheet-exit {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+}
+:where(.sheet-exit > dialog) {
+  position: fixed;
+  inset-block: 0;
+  max-width: calc(100% - 6px - 2em);
+  max-height: calc(100% - 6px - 2em);
+  overflow: auto;
+}
 body {
   margin: 0;
 }
