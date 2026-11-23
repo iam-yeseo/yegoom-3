@@ -36,7 +36,9 @@ const preserved = ['users', 'sessions', 'd1_migrations', 'claw_config', 'user_ph
   // The Christmas gift delivery (0028) is newer than the launch-era reset.
   'santa_runs', 'santa_drops',
   // Curling and penalty sets (0034) and bingo (0035) are newer still.
-  'arcade_sets', 'bingo_games', 'bingo_boards', 'bingo_state'];
+  'arcade_sets', 'bingo_games', 'bingo_boards', 'bingo_state',
+  // 변기 폭파 rounds (0037) as well.
+  'toilet_rounds'];
 const appendOnly = ['ledger_no_update', 'ledger_no_delete', 'inventory_no_update', 'inventory_no_delete'];
 const now = Date.parse('2026-11-02T00:00:00Z');
 const token = 'ca'.repeat(32);
@@ -141,6 +143,7 @@ describe('launch reset in an isolated local D1', () => {
       db.prepare("INSERT INTO arcade_sets (id, user_id, game, request_id, slot, date, engine, created_at) VALUES ('00000000-0000-4000-8000-000000000003', 'min', 'curling', 'retained-curling-request', 165000, '2026-11-20', 1, '2026-11-20T03:00:00Z')"),
       db.prepare("INSERT INTO bingo_games (id, number, leader_id, request_id, topic, lines, words_json, source, status, created_at) VALUES ('retained-bingo', 1, 'min', 'retained-bingo-request', '과일', 3, '[]', 'manual', 'filling', '2026-11-20T03:00:00Z')"),
       db.prepare("INSERT INTO bingo_boards (game_id, user_id, cells_json, submitted_at) VALUES ('retained-bingo', 'min', '[]', '2026-11-20T03:00:01Z')"),
+      db.prepare("INSERT INTO toilet_rounds (id, round_date, half, order_json, slots, pushes_json, push_count, turn, turn_started_at, status, token, created_at) VALUES ('2026-11-23:pm', '2026-11-23', 'pm', '[\"min\"]', 3, '[]', 1, 0, '2026-11-23T04:00:00Z', 'playing', 'retained-toilet', '2026-11-23T04:00:00Z')"),
     ]);
   });
   afterAll(async () => { await worker?.dispose(); });

@@ -11,7 +11,7 @@ import type {
   SpeettoResponse, SpeettoPurchaseInput, SlotResponse, SlotSpinInput,
   CatchmindAction, CatchmindInput, CatchmindResponse, CatchmindPollResponse, CatchmindGalleryResponse,
   ClawResponse, ClawPlayInput, ClawCoinInput, FreeThrowSetInput, FreeThrowFinishInput, FreeThrowFinishResponse, FreeThrowState,
-  ArcadeFinishInput, ArcadeFinishResponse, ArcadeStartInput, ArcadeState, BingoAction, BingoCreateInput, BingoInput, BingoPollResponse, BingoResponse,
+  ArcadeFinishInput, ArcadeFinishResponse, ArcadeStartInput, ArcadeState, BingoAction, BingoCreateInput, BingoInput, BingoPollResponse, BingoResponse, ToiletAction, ToiletPollResponse, ToiletPushInput, ToiletResponse,
   SantaFinishInput, SantaFinishResponse, SantaRunInput, SantaState,
   LaunchGiftResponse, LuckPhotoResponse, PasswordChangeInput, RankingResponse, TagDrawInput, TagEvolveInput, TagResponse, NotificationsResponse, NotificationSummary,
   AchievementsResponse, AchievementClaimInput, AchievementEventInput } from "../shared/types";
@@ -136,6 +136,8 @@ export const api = {
   bingo: (since?: number) => request<BingoPollResponse>(`/bingo${since === undefined ? "" : `?since=${since}`}`),
   bingoCreate,
   bingoAction: (action: BingoAction, input: BingoInput) => request<BingoResponse>(`/bingo/${action}`, { method: "POST", body: JSON.stringify(input) }),
+  toilet: (since?: string) => request<ToiletPollResponse>(`/toilet${since === undefined ? "" : `?since=${encodeURIComponent(since)}`}`),
+  toiletAction: (action: ToiletAction, input: ToiletPushInput) => request<ToiletResponse>(`/toilet/${action}`, { method: "POST", body: JSON.stringify(input) }),
   catchmind: (since?: number) => request<CatchmindPollResponse>(`/catchmind${since === undefined ? "" : `?since=${since}`}`),
   catchmindGallery: (before?: number) => request<CatchmindGalleryResponse>(`/catchmind/gallery${before === undefined ? "" : `?before=${before}`}`),
   catchmindAction: (action: CatchmindAction, input: CatchmindInput) => request<CatchmindResponse>(`/catchmind/${action}`, { method: "POST", body: JSON.stringify(input) }),

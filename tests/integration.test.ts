@@ -67,8 +67,10 @@ const luckPhotoPath = (date: string, version: number) => `/api/games/luck/rounds
  * The curling and penalty tiles share one indexed range of the player's last
  * two slots of each game (at most 4 rows), and the bingo row reads the one
  * state row with its game, the three people it names and its boards (one
- * statement; the allowance covers a table of four). */
-const STOCK_HOME = { prepares: 1 + 1 + 1 + 1 + 1 + 1, queries: 1 + 1 + 1 + 1 + 1 + 1, bindingCalls: 1 + 1 + 1 + 1 + 1 + 1, rowsRead: 12 + 2 + 12 + 2 + 4 + 14, rowsWritten: 0 } as const;
+ * statement; the allowance covers a table of four). The 변기 폭파 row reads this
+ * half day's round by its key with every active player and anyone it names (one
+ * statement; the users table of four plus the round). */
+const STOCK_HOME = { prepares: 1 + 1 + 1 + 1 + 1 + 1 + 1, queries: 1 + 1 + 1 + 1 + 1 + 1 + 1, bindingCalls: 1 + 1 + 1 + 1 + 1 + 1 + 1, rowsRead: 12 + 2 + 12 + 2 + 4 + 14 + 6, rowsWritten: 0 } as const;
 const stockAllowance = (route: string, field: keyof typeof STOCK_HOME) => route.includes('bootstrap') ? STOCK_HOME[field] : 0;
 /** Every successful player write is followed by the achievement check of that
  * write's activity: one batch that reads the player and the rows they already

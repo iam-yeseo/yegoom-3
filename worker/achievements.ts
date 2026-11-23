@@ -318,7 +318,7 @@ export function achievementScopesFor(pathname: string): readonly AchievementScop
   if (exact[pathname]) return exact[pathname];
   const prefixes: [string, readonly AchievementScope[]][] = [
     ['/api/games/', ['prediction']], ['/api/catchmind/', ['catchmind']], ['/api/claw/', ['claw']],
-    ['/api/freethrow/', ['freethrow']], ['/api/santa/', []], ['/api/arcade/', []], ['/api/bingo', []],
+    ['/api/freethrow/', ['freethrow']], ['/api/santa/', []], ['/api/arcade/', []], ['/api/bingo', []], ['/api/toilet', []],
   ];
   return prefixes.find(([prefix]) => pathname.startsWith(prefix))?.[1] ?? ACHIEVEMENT_SCOPES;
 }

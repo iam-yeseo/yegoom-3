@@ -161,6 +161,27 @@ export const BINGO_RULES = {
   /** The word list is written by OpenAI (worker/bingo-ai.ts); the daily cap is shared with stock news. */
   ai: { reasoningEffort: 'low' as const, maxTokens: 4000, timeoutMs: 45_000 },
 } as const;
+/** 변기 폭파 (docs/plan-toilet.md): twice a day (오전 00:00–12:00, 오후 12:00–23:50
+ * KST) every active player takes turns adding to the toilet until it bursts on
+ * someone. A round has players × slotsPerPlayer pushes and bursts on exactly one
+ * of them, each equally likely, so the chance climbs with every safe push and
+ * every seat carries the same risk. The start rotates one seat each round. A
+ * round still standing when its window ends counts for nothing. */
+export const TOILET_RULES = {
+  halves: [
+    { half: 'am', label: '오전', start: '00:00:00', end: '12:00:00' },
+    { half: 'pm', label: '오후', start: '12:00:00', end: PLAY_RULES.closeTime },
+  ] as const,
+  slotsPerPlayer: 3,
+  minPlayers: 2,
+  /** The one it bursts on loses these; everyone else in the round gains winScore. */
+  loseScore: -10, winScore: 5,
+  /** After this long another player may push for a turn that is waiting. */
+  skipAfterMs: 10 * 60 * 1000,
+  /** The toilet looks nervous once the next push bursts at least this often. */
+  nervousChance: 0.25,
+  pollIntervalMs: 5000, idlePollIntervalMs: 15000,
+} as const;
 /** Santa's gift delivery, a limited Christmas event (docs/plan-santa.md). One run
  * of `houses` chimneys per KST half day (오전 00–12시, 오후 12–24시). Each gift in a
  * chimney pays hitScore, all of them adds perfectBonus, and finishing the run

@@ -4,7 +4,7 @@ import { usePlayClosed } from "../play-window";
 import { ticketCount, useShop } from "../shop";
 import { formatTime, formatTimeSeconds } from "../format";
 import { arcadeTileText } from "../arcade/summary";
-import type { ArcadeSummary, BingoSummary, CatchmindSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice, SantaSummary } from "../../shared/types";
+import type { ArcadeSummary, BingoSummary, CatchmindSummary, ToiletSummary, ClawSummary, FreeThrowSummary, GameState, KujiSummary, LottoNotice, SantaSummary } from "../../shared/types";
 import { santaTileText, santaTileVisible } from "../santa/summary";
 import type { StockHomeSummary } from "../../shared/stock-types";
 import { STOCKS } from "../../shared/stocks";
@@ -63,6 +63,7 @@ export interface HomeData {
   santa: SantaSummary;
   arcade: { curling: ArcadeSummary; penalty: ArcadeSummary };
   bingo: BingoSummary;
+  toilet: ToiletSummary;
   lottoNotice: LottoNotice | null;
   /** null while the market is not open to players. */
   stock: StockHomeSummary | null;
@@ -200,11 +201,27 @@ export function bingoRow(game: BingoSummary, me: string, displayNameOf: DisplayN
   if (game.status === "ended") return { ...row, chip: game.leader?.username === me ? "host" : "done", sub: `「${game.topic}」 ${game.winner?.username === me ? "내가 1등" : `${who(game.winner)} 1등`} · ${next}` };
   return { ...row, chip: !game.leader ? "try" : game.leader.username === me ? "host" : "waiting", sub: next };
 }
-export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, kuji: KujiSummary | null, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username, bingo?: BingoSummary): GameRow[] {
+/** The 변기 폭파 row: whose turn it is in this half day's round, or how it ended. */
+export function toiletRow(game: ToiletSummary, me: string, displayNameOf: DisplayNameLookup): GameRow {
+  const row = { path: "/play/toilet", name: "변기 폭파", icon: "monkey" as const, image: { src: "/toilet/tile.webp", tint: "#E3F1FC" }, right: "" };
+  const who = (person: { username: string; displayName: string } | null) => (person ? honorific(displayNameOf(person.username, person.displayName)) : "");
+  if (game.status === "closed") return { ...row, chip: "closed", sub: "자정에 오전 판이 열려요" };
+  if (!game.slots) return { ...row, chip: "waiting", sub: "플레이어가 2명 이상이어야 열려요" };
+  if (game.status === "burst") return {
+    ...row, chip: "done", sub: `${game.label} 판 · ${game.loser?.username === me ? "내 차례에 펑!" : `${who(game.loser)} 차례에 펑!`}`,
+    right: game.points ? `${game.points > 0 ? "+" : ""}${game.points}점` : "",
+  };
+  if (game.status === "void") return { ...row, chip: "waiting", sub: `${game.label} 판은 무효예요` };
+  const mine = game.turn?.username === me;
+  const turn = mine ? "내가 볼일 볼 차례 · " : game.turn ? `${who(game.turn)} 차례 · ` : "";
+  return { ...row, chip: mine ? "try" : "open", sub: `${game.label} 판 · ${turn}수위 ${game.pushes}/${game.slots}` };
+}
+export function gameRows(games: GameState[], me: string, catchmind: CatchmindSummary, kuji: KujiSummary | null, displayNameOf: DisplayNameLookup = (username, fallback) => fallback ?? username, bingo?: BingoSummary, toilet?: ToiletSummary): GameRow[] {
   return [
     ...games.map((game) => predictionRow(game, me)),
     catchmindRow(catchmind, me, displayNameOf),
     ...(bingo ? [bingoRow(bingo, me, displayNameOf)] : []),
+    ...(toilet ? [toiletRow(toilet, me, displayNameOf)] : []),
     {
       path: "/play/kuji",
       name: "예굼쿠지",
@@ -218,7 +235,7 @@ export function gameRows(games: GameState[], me: string, catchmind: CatchmindSum
 
 export function TodayGames({ data, go }: { data: HomeData; go: Go }) {
   const displayNameOf = useDisplayNameLookup();
-  const rows = gameRows(data.games, data.username, data.catchmind, data.kuji, displayNameOf, data.bingo);
+  const rows = gameRows(data.games, data.username, data.catchmind, data.kuji, displayNameOf, data.bingo, data.toilet);
   // Catchmind rounds can span several days; their result is not today's total.
   const earned = data.games.reduce(
     (sum, game) => sum + (game.phase === "revealed" ? game.results.find(result => result.username === data.username)?.score ?? 0 : 0),
@@ -244,7 +261,8 @@ function GameRowButton({ row, go }: { row: GameRow; go: Go }) {
   return (
           <button className="card game-row" onClick={() => go(row.path)}>
             <span className="game-row-icon" style={{ background: row.image?.tint ?? art[row.icon].tint }}>
-              <img className="character" src={row.image?.src ?? artSrc(row.icon)} alt="" />
+              <img className="character" src={row.image?.src ?? artSrc(row.icon)} alt=""
+                onError={event => { const fallback = artSrc(row.icon); if (row.image && !event.currentTarget.src.endsWith(fallback)) event.currentTarget.src = fallback; }} />
             </span>
             <span className="game-row-text">
               <strong>{row.name}</strong>

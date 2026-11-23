@@ -96,3 +96,23 @@ python3 scripts/prepare-santa-art.py /path/to/santa-images
 git show 91a0e84 --stat   # 원본 PNG가 들어 있는 커밋
 python3 scripts/prepare-arcade-art.py /path/to/arcade-images
 ```
+
+## 변기 폭파 그림
+
+- `public/toilet/{tile,calm,nervous,boom,poop,result-safe,result-lose}.webp` 7장은 사용자가 2026-11-23에 제공한 이미지다. 사용자가 [이미지 프롬프트](toilet-image-prompts.md)로 이미지 생성기에서 만들었다(압축 파일로 받음, 원본 PNG는 저장소에 없음). 지인용 비공개 서비스 전용이다.
+- `scripts/prepare-toilet-art.py`가 알파 24 이하의 옅은 잡티를 지우고 WebP(RGB quality 85, 알파 무손실)로 줄인다. 아이콘·똥·결과 그림은 투명 여백을 자르고 정사각형 가운데에 둔다(홈 아이콘은 홈 줄에서 위아래가 잘리지 않게 18% 여백을 둔다).
+- 게임 화면에서 바꿔 끼우는 변기 세 장(평소·불안·폭파)은 따로 자르지 않는다. 파란 시트의 폭을 평소 그림에 맞춰 크기를 맞추고(불안 1.008배, 폭파 1.019배), 시트 가운데와 받침 바닥을 기준으로 같은 폭의 틀로 자른다. 그래서 같은 폭으로 보여 주면 세 변기가 같은 자리에 겹친다. 폭파 그림은 위로 솟는 물줄기 때문에 세로로 길다.
+
+| 파일 | 원본 | WebP 바이트 | 크기 |
+| --- | --- | ---: | --- |
+| toilet/tile | toilet-tile.png 1024×1024 | 9,020 | 210×210 |
+| toilet/poop | poop.png 512×512 | 7,154 | 160×160 |
+| toilet/result-safe | toilet-result-safe.png 1024×1024 | 18,852 | 240×240 |
+| toilet/result-lose | toilet-result-lose.png 1024×1024 | 13,084 | 240×240 |
+| toilet/calm | toilet-calm.png 1024×1024 | 13,706 | 360×360 |
+| toilet/nervous | toilet-nervous.png 1024×1024 | 16,532 | 360×360 |
+| toilet/boom | toilet-boom.png 1024×1536 | 58,356 | 360×540 |
+
+```sh
+python3 scripts/prepare-toilet-art.py /path/to/toilet-images
+```

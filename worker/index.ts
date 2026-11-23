@@ -17,6 +17,7 @@ import { SantaError, finishSantaRun, getSantaState, getSantaSummary, startSantaR
 import { ArcadeError, finishArcadeSet, getArcadeState, getArcadeSummaries, startArcadeSet } from './arcade';
 import { BingoError, bingoRoute, readBingoSummary } from './bingo';
 import { openaiBingoWords } from './bingo-ai';
+import { ToiletError, readToiletSummary, toiletRoute } from './toilet';
 import { ClawError, getClawState, getClawSummary, purchaseClawCoins, playClaw, readAdminClawConfig, saveAdminClawConfig } from './claw';
 import { LaunchGiftError, getLaunchGiftState, claimLaunchGift } from './launch-gift';
 import { ProfileError, updateProfile, uploadProfilePhoto, deleteProfilePhoto, readProfilePhoto } from './profile';
@@ -484,7 +485,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     FROM users u LEFT JOIN user_photos p ON p.user_id = u.id LEFT JOIN user_balances b ON b.user_id = u.id ${EQUIPPED_TAG_JOIN}
     WHERE (u.role = 'player' AND u.active = 1) OR u.id = ? OR u.username IN (?, ?, ?) ORDER BY u.username`)
     .bind(weekStart(now), user.id, ...GAME_IDS.map(id => GAME_RULES[id].author)).all<BootstrapProfile>().then(result => result.results);
-  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, freethrow, santa, arcade, bingo, dailyFree, launchGift, notifications, lottoNotice, rankResults, stock] = await Promise.all([
+  const [roster, games, ledger, dailyScores, attendance, kuji, catchmind, claw, freethrow, santa, arcade, bingo, toilet, dailyFree, launchGift, notifications, lottoNotice, rankResults, stock] = await Promise.all([
     profiles,
     readGames(env.DB, user, GAME_IDS, now, profiles),
     env.DB.prepare('SELECT id, currency, amount, reason, created_at AS createdAt FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<LedgerEntry>(),
@@ -497,6 +498,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
     getSantaSummary(env.DB, user, now.getTime()),
     getArcadeSummaries(env.DB, user, now.getTime()),
     readBingoSummary(env.DB, user),
+    readToiletSummary(env.DB, user, now),
     readDailyFree(env.DB, user, now),
     getLaunchGiftState(env.DB, user, now),
     readNotificationSummary(env.DB, user.id, now),
@@ -513,7 +515,7 @@ async function bootstrap(env: Env, user: UserRow, now: Date): Promise<BootstrapR
   return { user: userView(user, viewer), players,
     games, ledger: ledger.results, dailyScores, attendance,
     inventory: { lottoTickets: viewer?.lottoTickets ?? 0, speettoTickets: viewer?.speettoTickets ?? 0, tagTickets: viewer?.tagTickets ?? 0 }, dailyFree,
-    kuji, lottoNotice, catchmind, claw, freethrow, santa, arcade, bingo, launchGift, notifications, noticesRead: parseNoticesRead(user.notices_read_json),
+    kuji, lottoNotice, catchmind, claw, freethrow, santa, arcade, bingo, toilet, launchGift, notifications, noticesRead: parseNoticesRead(user.notices_read_json),
     rankResults, stock, serverTime: now.toISOString(), timeZone: TIME_ZONE };
 }
 async function rejectGameWrite(db: D1Database, id: GameId, date: string, code: string, message: string): Promise<never> {
@@ -836,6 +838,13 @@ async function authenticatedApi(request: Request, env: Env, url: URL, user: User
     }
     return json(await bingoRoute(env.DB, user, bingoMatch[1], request.method, input, now, makeWords, since));
   }
+  const toiletMatch = /^\/api\/toilet(?:\/([a-z]+))?$/.exec(url.pathname);
+  if (toiletMatch) {
+    const sinceText = url.searchParams.get('since');
+    const since = sinceText !== null && /^[0-9a-z:-]{1,40}$/.test(sinceText) ? sinceText : undefined;
+    const input = request.method === 'POST' ? await body(request) : undefined;
+    return json(await toiletRoute(env.DB, user, toiletMatch[1], request.method, input, now, since));
+  }
   if (url.pathname === '/api/me/attendance') {
     if (request.method === 'GET') return json({ attendance: await readAttendance(env.DB, user, now, url.searchParams.get('month') ?? undefined) });
     if (request.method === 'POST') return claimAttendance(request, env, user, now);
@@ -1005,7 +1014,7 @@ export default {
     if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env, context); }
     catch (error) {
-      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof FreeThrowError || error instanceof SantaError || error instanceof ArcadeError || error instanceof BingoError || error instanceof LaunchGiftError || error instanceof RankResultError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
+      if (error instanceof HttpError || error instanceof RankingError || error instanceof NotificationError || error instanceof AchievementError || error instanceof AdminSettingsError || error instanceof ShopError || error instanceof CatchmindError || error instanceof ClawError || error instanceof FreeThrowError || error instanceof SantaError || error instanceof ArcadeError || error instanceof BingoError || error instanceof ToiletError || error instanceof LaunchGiftError || error instanceof RankResultError || error instanceof ProfileError || error instanceof PhotoError || error instanceof LuckPhotoError || error instanceof StockError) return json({ error: { code: error.code, message: error.message } }, error.status, error.status === 429 ? { 'Retry-After': '900' } : undefined);
       console.error('API request failed', error instanceof Error ? error.name : 'UnknownError');
       return json({ error: { code: 'INTERNAL_ERROR', message: '잠시 문제가 생겼어요. 다시 시도해 주세요.' } }, 500);
     }
