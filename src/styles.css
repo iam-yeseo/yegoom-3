@@ -36,6 +36,10 @@
   font-synthesis: none;
   font-weight: 500;
   -webkit-font-smoothing: antialiased;
+  /* Korean breaks between words, never inside one; a single word longer than
+     its line (a long nickname) still wraps instead of spilling out. */
+  word-break: keep-all;
+  overflow-wrap: break-word;
   --cream: #fff9ee;
   --text: #3a3340;
   --muted: #7c7383;
@@ -251,6 +255,42 @@ button svg {
   background: transparent;
   border-radius: 14px;
   font-size: 32px;
+}
+/* Small controls keep their size on screen and take touches in a 44px area.
+   Each area stops short of the nearest other control. */
+.icon-button,
+.calendar-head button,
+.section-title > button,
+button.news-stock,
+.auto-button,
+.pg-fail-nodes > span.who > button,
+details:not(.shop-history-group) > summary {
+  position: relative;
+}
+.icon-button::after,
+.calendar-head button::after,
+.section-title > button::after,
+button.news-stock::after,
+.auto-button::after,
+.pg-fail-nodes > span.who > button::after,
+details:not(.shop-history-group) > summary::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  translate: -50% -50%;
+}
+/* A card sits 6px under a section title, so its link reaches up instead. */
+.section-title > button::after {
+  top: auto;
+  bottom: -6px;
+  translate: -50% 0;
+}
+/* Answer slots stand 4px apart: grow downwards and upwards only. */
+.pg-fail-nodes > span.who > button::after {
+  width: calc(100% + 4px);
 }
 .gold {
   display: inline-flex;

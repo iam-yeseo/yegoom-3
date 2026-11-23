@@ -370,9 +370,6 @@
   justify-content: center;
   cursor: pointer;
 }
-.room-bell:active {
-  transform: scale(0.94);
-}
 .room-bell-badge {
   position: absolute;
   top: 2px;

@@ -126,7 +126,7 @@
 .speetto-result-dialog.lost h2 { color: #7c7383; }
 
 /* Lotto history: one closed row per purchase day. */
-details.shop-history-group > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: 36px; }
+details.shop-history-group > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: 44px; }
 details.shop-history-group > summary::-webkit-details-marker { display: none; }
 details.shop-history-group > summary::after { content: ""; flex: none; width: 8px; height: 8px; margin: 0 4px 3px 2px; border-right: 2px solid #ada4b3; border-bottom: 2px solid #ada4b3; transform: rotate(45deg); transition: transform .2s; }
 details.shop-history-group[open] > summary::after { transform: rotate(225deg); margin-bottom: -3px; }
