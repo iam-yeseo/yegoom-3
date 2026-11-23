@@ -95,13 +95,18 @@ const respond = (loaded: Loaded, user: Actor, now: Date): ToiletResponse => ({
   toilet: stateView(loaded, user, now.getTime()), stamp: stampOf(loaded), viewerId: user.id, serverTime: now.toISOString(), play: playWindow(now.getTime()),
 });
 
-/** The home row. Two small reads; nothing is written. */
+/** The home row. One statement: this round's row (if anyone pushed yet) with
+ * every active player and anyone it names; nothing is written. */
 export async function readToiletSummary(db: D1Database, user: Actor, now: Date): Promise<ToiletSummary> {
   const time = now.getTime(), window = toiletWindow(time);
   if (!window) return { half: null, label: null, status: 'closed', turn: null, loser: null, points: 0, pushes: 0, slots: 0 };
-  const row = await db.prepare(`SELECT ${ROUND_COLUMNS} FROM toilet_rounds WHERE id = ?`).bind(window.id).first<RoundRow>();
-  const people = await db.prepare(`${PEOPLE} WHERE (role = 'player' AND active = 1) OR id IN (SELECT value FROM json_each(?))`).bind(row?.order_json ?? '[]').all<PersonRow>();
-  const loaded: Loaded = { current: window, previous: previousToiletWindow(time), rows: new Map(row ? [[row.id, row]] : []), people: new Map(people.results.map(person => [person.id, person])) };
+  const found = await db.prepare(`SELECT ${ROUND_COLUMNS.split(', ').map(column => `r.${column}`).join(', ')},
+      (SELECT json_group_array(json_object('id', u.id, 'username', u.username, 'display_name', u.display_name, 'active', u.active, 'role', u.role))
+        FROM users u WHERE (u.role = 'player' AND u.active = 1) OR u.id IN (SELECT value FROM json_each(COALESCE(r.order_json, '[]')))) AS people_json
+    FROM (SELECT 1) LEFT JOIN toilet_rounds r ON r.id = ?`).bind(window.id).first<RoundRow & { people_json: string }>();
+  const row = found?.id ? found : null;
+  const people = JSON.parse(found?.people_json ?? '[]') as PersonRow[];
+  const loaded: Loaded = { current: window, previous: previousToiletWindow(time), rows: new Map(row ? [[row.id, row]] : []), people: new Map(people.map(person => [person.id, person])) };
   const round = roundOf(loaded, window, time);
   const short = (id: string | null | undefined) => { const person = loaded.people.get(id ?? ''); return person ? { username: person.username, displayName: person.display_name } : null; };
   if (!round) return { half: window.half, label: window.label, status: 'void', turn: null, loser: null, points: 0, pushes: 0, slots: 0 };
