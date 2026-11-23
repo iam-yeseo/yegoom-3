@@ -172,14 +172,14 @@ export const TOILET_RULES = {
     { half: 'am', label: '오전', start: '00:00:00', end: '12:00:00' },
     { half: 'pm', label: '오후', start: '12:00:00', end: PLAY_RULES.closeTime },
   ] as const,
-  slotsPerPlayer: 3,
+  slotsPerPlayer: 10,
   minPlayers: 2,
   /** The one it bursts on loses these; everyone else in the round gains winScore. */
   loseScore: -10, winScore: 5,
   /** After this long another player may push for a turn that is waiting. */
   skipAfterMs: 10 * 60 * 1000,
-  /** The toilet looks nervous once the next push bursts at least this often. */
-  nervousChance: 0.25,
+  /** The toilet looks nervous once this share of the round's pushes is used. */
+  nervousShare: 0.5,
   pollIntervalMs: 5000, idlePollIntervalMs: 15000,
 } as const;
 /** Santa's gift delivery, a limited Christmas event (docs/plan-santa.md). One run
