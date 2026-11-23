@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type ChangeEvent } from "react";
 import type { PhotoMetadata } from "../../shared/types";
 import { shrinkPhoto } from "../image-processing";
 import { openSheet } from "../motion";
+import { CloseIcon } from "./UI";
 import "../luck-evidence.css";
 
 function EnlargedPhoto({ photo, label, onClose }: { photo: PhotoMetadata; label: string; onClose: () => void }) {
@@ -16,7 +17,7 @@ function EnlargedPhoto({ photo, label, onClose }: { photo: PhotoMetadata; label:
     onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="luck-photo-dialog-content">
       <div className="luck-photo-dialog-heading"><h2 id={titleId}>{label}</h2><button type="button" aria-label="닫기" onClick={onClose}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        <CloseIcon />
       </button></div>
       <img key={`${photo.url}:${photo.version}`} src={photo.url} alt={label} />
     </div>

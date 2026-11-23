@@ -477,7 +477,7 @@ export function installPressFeedback() {
     (e) => {
       const el = (e.target as Element | null)?.closest<HTMLElement>(selector);
       if (!el || (el as HTMLButtonElement).disabled || el.closest("[data-nopress]")) return;
-      const scale = el.offsetWidth > 220 ? 0.975 : 0.94;
+      const scale = el.offsetWidth > 220 ? 0.975 : 0.96;
       const shadow = getComputedStyle(el).boxShadow;
       const pressed: Keyframe = { scale: String(scale) };
       if (shadow && shadow !== "none") pressed.boxShadow = "0 2px 8px rgba(120,90,60,.10)";

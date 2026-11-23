@@ -36,10 +36,13 @@
   font-synthesis: none;
   font-weight: 500;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   /* Korean breaks between words, never inside one; a single word longer than
      its line (a long nickname) still wraps instead of spilling out. */
   word-break: keep-all;
   overflow-wrap: break-word;
+  /* No last line left with a single word; titles spread evenly instead. */
+  text-wrap: pretty;
   --cream: #fff9ee;
   --text: #3a3340;
   --muted: #7c7383;
@@ -112,6 +115,11 @@ h2,
 h3,
 p {
   margin: 0;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
 }
 button svg {
   flex-shrink: 0;
@@ -376,7 +384,7 @@ details:not(.shop-history-group) > summary::after {
   font-weight: 800;
   box-shadow: 0 8px 20px rgba(244, 124, 102, 0.3);
   transition:
-    background 0.15s,
+    background-color 0.15s,
     transform 0.15s;
 }
 .primary-button:disabled {

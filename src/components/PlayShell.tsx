@@ -2,6 +2,7 @@ import { useEffect, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { LaunchDialog } from "../launch-gift";
 import { holdPageScroll } from "../motion";
+import { CloseIcon } from "./UI";
 import "../play-shell.css";
 
 /** A full-screen play view, like a small app of its own: a top bar (close,
@@ -35,7 +36,7 @@ export function PlayShell({ label, theme, stage, top, right, bottom, onClose, ch
       "--stage-w": stage.width, "--stage-h": stage.height } as CSSProperties}>
     <header className="play-top">
       <button type="button" className="play-close" aria-label="나가기" onClick={onClose}>
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        <CloseIcon size={22} />
       </button>
       <div className="play-top-main">{top}</div>
       {right && <div className="play-top-right">{right}</div>}

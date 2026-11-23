@@ -1,4 +1,5 @@
-.avatar-photo { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+/* A hairline keeps a pale photo from melting into the page behind it. */
+.avatar-photo { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; outline: 1px solid oklch(0 0 0 / 0.1); outline-offset: -1px; }
 .profile-editor { padding: 22px; }
 .profile-editor h2 { margin: 0 0 18px; font-size: 18px; }
 .profile-photo-controls { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }

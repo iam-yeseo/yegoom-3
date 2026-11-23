@@ -2,7 +2,7 @@ import { useServerOffset } from "./clock";
 import { useEffect, useRef, useState } from 'react';
 import { ANNOUNCEMENT_RULES } from '../shared/balance';
 import { isToastWorthy, notificationText, type AppNotification } from '../shared/notifications';
-import { honorific, useDisplayNameByIdLookup } from './components/UI';
+import { CloseIcon, honorific, useDisplayNameByIdLookup } from './components/UI';
 import './announcements.css';
 
 interface Props {
@@ -91,7 +91,7 @@ function ToastQueue({ notifications, userId, serverTime, go }: Omit<Props, 'prev
         <span className="announcement-message">{text.title}<strong>{text.body}</strong></span>
       </button>
       <button className="announcement-close" type="button" aria-label="알림 닫기" onClick={dismiss}>
-        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        <CloseIcon size={16} />
       </button>
     </div>}
   </div>;
