@@ -137,7 +137,7 @@ function Stage({ round, state, me, admin, busy, now, scene, act }: {
   const who = (player: CatchmindPlayer) => (player.id === me ? "나" : honorific(name(player.username, player.displayName)));
   const burst = round.status === "burst", over = burst || round.status === "void";
   const myTurn = state.canPush;
-  const nervous = !over && round.chance >= TOILET_RULES.nervousChance;
+  const nervous = !over && round.pushes.length >= round.slots * TOILET_RULES.nervousShare;
   const mood = burst || scene === "boom" ? "boom" : nervous ? "nervous" : "calm";
   const level = Math.min(1, round.pushes.length / round.slots);
   const skipAt = state.skipAvailableAt ? Date.parse(state.skipAvailableAt) : NaN;

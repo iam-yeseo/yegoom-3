@@ -38,8 +38,9 @@ describe('변기 폭파 rules', () => {
     expect(burstChance(slots, 0)).toBeCloseTo(1 / slots);
     expect(burstChance(slots, slots - 1)).toBe(1);
     expect(bursts(0.999, slots, slots - 1)).toBe(true);
-    expect(bursts(0.2, slots, 0)).toBe(false);
-    expect(bursts(0.1, slots, 0)).toBe(true);
+    // The first push bursts for the lowest 1/slots of random numbers only.
+    expect(bursts(1 / slots + 0.001, slots, 0)).toBe(false);
+    expect(bursts(1 / slots - 0.001, slots, 0)).toBe(true);
   });
 
   it('gives every seat the same chance of bursting', () => {

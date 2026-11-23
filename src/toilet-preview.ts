@@ -111,4 +111,4 @@ export function previewToilet(viewer: CatchmindPlayer, admin: boolean): ToiletPr
   return engine;
 }
 /** The home row before the preview has been opened. */
-export const previewToiletSummary = (): ToiletSummary => ({ half: "pm", label: "오후", status: "waiting", turn: null, loser: null, points: 0, pushes: 0, slots: 9 });
+export const previewToiletSummary = (): ToiletSummary => ({ half: "pm", label: "오후", status: "waiting", turn: null, loser: null, points: 0, pushes: 0, slots: 3 * TOILET_RULES.slotsPerPlayer });
