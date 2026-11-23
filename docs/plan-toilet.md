@@ -2,7 +2,7 @@
 
 해적 룰렛을 모티브로 한 같이 하는 게임. 한 명씩 돌아가며 같은 행동(볼일 보고 물 내리기)을 하다가, 변기가 넘쳐 터지는 차례의 사람이 진다. 빙고처럼 **실시간이 아니다**: 각자 접속했을 때 자기 차례를 처리한다.
 
-> 상태: 구현 완료(2026-11-23). 그림은 받는 대로 넣는다([이미지 프롬프트](toilet-image-prompts.md)). 그림이 없는 동안은 이모지가 대신 나온다. 도전과제는 아직 없다.
+> 상태: 구현 완료(2026-11-23). 그림 7장도 같은 날 받아 넣었다([이미지 프롬프트](toilet-image-prompts.md), [출처 기록](asset-provenance.md)). 그림을 불러오지 못하면 이모지가 대신 나온다. 도전과제는 아직 없다.
 
 ## 1. 확정된 결정 (2026-11-23)
 
@@ -48,4 +48,4 @@
 | `migrations/0037_toilet.sql` | 표 하나 |
 | `worker/toilet.ts` | 상태 조회·누르기·홈 요약 |
 | `src/screens/Toilet.tsx`, `src/toilet.css`, `src/toilet-preview.ts` | 화면(변기·수위·순서·지난 판), 서버 없는 미리보기 |
-| `public/toilet/` | 그림(받으면 `tile`·`calm`·`nervous`·`boom`·`poop`·`result-safe`·`result-lose`.webp) |
+| `public/toilet/`, `scripts/prepare-toilet-art.py` | 그림 7장(`tile`·`calm`·`nervous`·`boom`·`poop`·`result-safe`·`result-lose`.webp)과 변환 스크립트. 변기 세 장은 같은 기준점으로 잘라 겹친다 |

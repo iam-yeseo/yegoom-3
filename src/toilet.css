@@ -16,23 +16,24 @@
 .toilet-push { font-size: 16px; }
 
 /* The scene: the toilet, a poop dropping in, a flush swirl, the burst. */
-.toilet-scene { position: relative; display: grid; place-items: end center; height: 220px; overflow: hidden; border-radius: 20px; background: linear-gradient(#f4f9fd, #e6f1fa); }
-.toilet-art { display: block; width: 190px; height: 190px; object-fit: contain; object-position: bottom; }
-.toilet-art.is-boom { width: 160px; height: 220px; }
+.toilet-scene { position: relative; display: grid; place-items: end center; height: 290px; overflow: hidden; border-radius: 20px; background: linear-gradient(#f4f9fd, #e6f1fa); }
+/* Every toilet frame is cut to the same anchor (scripts/prepare-toilet-art.py), so at one width they line up. */
+.toilet-art { display: block; width: 190px; height: auto; }
 .toilet-art.is-small { width: 120px; height: 120px; margin: 0 auto; }
 .toilet-emoji { display: grid; place-items: end center; font-size: 132px; line-height: 1; }
 .toilet-art.is-small.toilet-emoji { font-size: 84px; place-items: center; }
 .toilet-art.is-boom.toilet-emoji { place-items: center; font-size: 150px; }
+.toilet-scene .toilet-art { transform-origin: 50% 100%; }
 .toilet-scene.is-nervous .toilet-art { animation: toilet-tremble 180ms linear infinite; }
 .toilet-scene.is-boom .toilet-art { animation: toilet-burst 520ms var(--ease-out) both; }
 .toilet-scene.scene-flush .toilet-art { animation: toilet-wobble 520ms var(--ease-out) 2; }
 .toilet-poop { position: absolute; top: 0; left: 50%; width: 56px; height: 56px; margin-left: -28px; object-fit: contain; animation: toilet-drop 860ms cubic-bezier(0.55, 0, 0.9, 0.5) both; }
 .toilet-poop.toilet-emoji { font-size: 48px; place-items: center; }
-.toilet-swirl { position: absolute; bottom: 92px; left: 50%; width: 70px; height: 26px; margin-left: -35px; border-radius: 50%; border: 4px dotted #7cb7e0; animation: toilet-swirl 700ms linear 2; }
+.toilet-swirl { position: absolute; bottom: 48px; left: 50%; width: 90px; height: 28px; margin-left: -45px; border-radius: 50%; border: 4px dotted #7cb7e0; animation: toilet-swirl 700ms linear 2; }
 @keyframes toilet-tremble { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-2px) rotate(-0.6deg); } 75% { transform: translateX(2px) rotate(0.6deg); } }
 @keyframes toilet-wobble { 0%, 100% { transform: scale(1, 1); } 40% { transform: scale(1.04, 0.96); } 70% { transform: scale(0.98, 1.02); } }
 @keyframes toilet-burst { 0% { transform: scale(0.7); opacity: 0.4; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
-@keyframes toilet-drop { 0% { transform: translateY(-60px) rotate(-12deg); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateY(120px) rotate(8deg) scale(0.6); opacity: 0; } }
+@keyframes toilet-drop { 0% { transform: translateY(-60px) rotate(-12deg); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateY(196px) rotate(8deg) scale(0.6); opacity: 0; } }
 @keyframes toilet-swirl { from { transform: rotate(0deg) scale(1); opacity: 1; } to { transform: rotate(360deg) scale(0.5); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .toilet-scene .toilet-art, .toilet-poop, .toilet-swirl { animation: none !important; }
