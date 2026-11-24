@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { DAILY_FREE, NICKNAME_TAG_RULES, TAG_EVOLUTION_RULES } from "../../shared/balance";
 import { TAG_GRADES, evolutionChance, gradeLabel, nextTagGrade, type NicknameTagGrade } from "../../shared/nickname-tags";
 import type { NicknameTag, TagDrawInput, TagEvolution, TagEvolveInput } from "../../shared/types";
-import { refusedByServer } from "../api";
+import { ApiFailure, refusedByServer } from "../api";
 import { NickTag, Segmented, Toolbar, honorific, useNameParts } from "../components/UI";
 import { BuyBar, ResultDialog } from "../components/BuyBar";
 import { confetti, flipY, openSheet, reduced, toast, useCountUp } from "../motion";
 import { ticketCount, useShop } from "../shop";
+import { loopSfx, playSfx, preloadSfx } from "../sfx";
 import { usePurchaseConfirm } from "../components/PurchaseConfirm";
 
 const gradeClass = (grade: NicknameTagGrade) => `grade-${grade.toLowerCase()}`;
@@ -24,6 +25,11 @@ function DrawResult({ tag, name, drawsToday, busy, duplicate, onEquip, onDiscard
   useEffect(() => {
     const close = openSheet(dialog.current!);
     flipY(chip.current, { delay: 300 });
+    // TAG-01: the card flips over, then its grade answers (S big, A a little smaller, B·C a coin).
+    playSfx("tag-flip", { delay: .3 });
+    if (tag.grade === "S") playSfx("jackpot", { delay: .8 });
+    else if (tag.grade === "A") playSfx("jackpot", { delay: .8, gain: .7 });
+    else playSfx("coin", { delay: .8 });
     if (!reduced() && (tag.grade === "S" || tag.grade === "A")) confetti(chip.current, { spread: 140 });
     return close;
   }, [tag.grade]);
@@ -127,6 +133,8 @@ function EvolveSheet({ tag, materials, freeLeft, gold, onStart, onClose }: {
 function EvolvingOverlay({ tag }: { tag: NicknameTag }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => openSheet(dialog.current!), []);
+  // TAG-02: the swirl hums until the result replaces this overlay.
+  useEffect(() => { const hum = loopSfx("tag-evolving"); return () => hum.stop(); }, []);
   return <dialog ref={dialog} className="launch-dialog result-dialog tag-evolving" aria-label="별명 태그 진화 중" onCancel={event => event.preventDefault()}>
     <div className="tag-evolving-stage" aria-hidden="true">
       <span className="tag-evolving-ring" /><span className="tag-evolving-ring second" />
@@ -141,6 +149,14 @@ function EvolvingOverlay({ tag }: { tag: NicknameTag }) {
 
 function EvolutionResult({ result, onClose }: { result: TagEvolution; onClose: () => void }) {
   const chip = useRef<HTMLDivElement>(null);
+  // TAG-03: success fanfare; a failure runs down, and a lost material then vanishes with a puff.
+  useEffect(() => {
+    if (result.success) { playSfx("jackpot"); return; }
+    playSfx("fail");
+    if (!result.materialLost) return;
+    const timer = window.setTimeout(() => playSfx("tag-vanish"), 900);
+    return () => window.clearTimeout(timer);
+  }, [result.success, result.materialLost]);
   useEffect(() => {
     if (!result.success) return;
     flipY(chip.current, { delay: 150 });
@@ -183,7 +199,10 @@ export function NicknameTagShop({ username, displayName, onBack, inventory = fal
   const [confirmSheet, ask] = usePurchaseConfirm();
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => { void latest.current.refresh("tag").catch(() => {}); }, []);
+  useEffect(() => {
+    void latest.current.refresh("tag").catch(() => {});
+    preloadSfx(["tag-flip", "tag-evolving", "tag-vanish", "jackpot", "coin", "fail", "ui-deny"]);
+  }, []);
   const tags = shop.tags;
   const list = tags?.tags ?? [];
   const pending = shop.pending?.kind === "tag" ? shop.pending.input as TagDrawInput : null;
@@ -208,6 +227,7 @@ export function NicknameTagShop({ username, displayName, onBack, inventory = fal
       const next = await shop.drawTag(pending ?? { requestId: crypto.randomUUID() });
       if (next.draw) setResult(next.draw);
     } catch (cause) {
+      if (cause instanceof ApiFailure && /INSUFFICIENT|NOT_ENOUGH/.test(cause.code ?? "")) playSfx("ui-deny");
       setError(cause instanceof Error ? cause.message : "별명 태그를 뽑지 못했어요. 같은 버튼으로 다시 확인해 주세요.");
     } finally { setBusy(false); }
   }
@@ -254,6 +274,7 @@ export function NicknameTagShop({ username, displayName, onBack, inventory = fal
       setEvolving(null);
       // A refusal spent nothing; anything else may have gone through, so the same request can ask again.
       const rejected = refusedByServer(cause);
+      if (cause instanceof ApiFailure && /INSUFFICIENT|NOT_ENOUGH/.test(cause.code ?? "")) playSfx("ui-deny");
       setUnresolved(rejected ? null : { input, tag });
       setError(cause instanceof Error ? cause.message : "진화 결과를 확인하지 못했어요.");
       if (rejected) void latest.current.refresh("tag").catch(() => {});

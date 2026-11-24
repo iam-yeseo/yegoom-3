@@ -1,12 +1,13 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DAILY_FREE, SHOP_HISTORY_DAYS, SLOT_RULES } from "../../shared/balance";
 import type { SlotSpin, SlotSpinInput, SlotSymbol } from "../../shared/types";
-import { refusedByServer } from "../api";
+import { ApiFailure, refusedByServer } from "../api";
 import { Toolbar } from "../components/UI";
 import { BuyBar } from "../components/BuyBar";
 import { formatDate, formatTime } from "../format";
 import { anim, coinFly, confetti, reduced, shake, useCountUp } from "../motion";
 import { useShop } from "../shop";
+import { loopSfx, playSfx, preloadSfx, sfxStep, type LoopHandle } from "../sfx";
 import "../slot.css";
 
 const labels: Record<SlotSymbol, string> = {
@@ -72,6 +73,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
   const strips = useRef<(HTMLDivElement | null)[]>([]);
   const faces = useRef<(HTMLDivElement | null)[]>([]);
   const loops = useRef<(Animation | null)[]>([null, null, null]);
+  const spinSound = useRef<LoopHandle | null>(null);
   const animations = useRef(new Set<Animation>());
   const waits = useRef(new Map<number, (active: boolean) => void>());
   const mounted = useRef(true);
@@ -82,6 +84,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
   const unresolved = useRef<SlotSpinInput | null>(shop.pending?.kind === "slot" ? shop.pending.input : null);
 
   function cancelMotion() {
+    spinSound.current?.stop(); spinSound.current = null;
     animations.current.forEach(animation => animation.cancel());
     animations.current.clear();
     loops.current = [null, null, null];
@@ -104,6 +107,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     mounted.current = true;
     void latestShop.current.refresh("slot").catch(() => {});
+    preloadSfx(["slt-lever", "slt-spin", "slt-stop", "slt-tension", "jackpot", "fail", "ui-deny"]);
     return () => {
       mounted.current = false;
       generation.current++;
@@ -143,7 +147,10 @@ export function Slot({ onBack }: { onBack: () => void }) {
     setAnticipating(false);
     setPhase(pending ? "checking" : "spinning");
     setSpinning([!motionReduced, !motionReduced, !motionReduced]);
+    // SLT-01: a new spin pulls the lever; a retried receipt only checks an old one.
+    if (!pending) playSfx("slt-lever");
     if (!motionReduced) {
+      spinSound.current = loopSfx("slt-spin");
       track(anim(lever.current, [{ rotate: "0deg" }, { rotate: "28deg", offset: .4 }, { rotate: "0deg" }], { dur: 420, ease: "inOut", fill: "none" }));
       loops.current = strips.current.map(strip => {
         if (!strip) return null;
@@ -166,6 +173,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
         cancelMotion();
         setSymbols(spinResult.reels);
         setSpinning([false, false, false]);
+        if (!pending) playSfx("slt-stop");
         const fade = track(anim(machine.current?.querySelector(".slot-reels"), [{ opacity: 0 }, { opacity: 1 }], { dur: 200, ease: "linear", fill: "none" }));
         await fade?.finished.catch(() => {});
       } else {
@@ -174,11 +182,16 @@ export function Slot({ onBack }: { onBack: () => void }) {
         await Promise.all(spinResult.reels.map(async (symbol, index) => {
           if (!await wait(stopAt + index * 350 + (suspense && index === 2 ? 600 : 0) - performance.now(), run)) return;
           loops.current[index]?.cancel();
+          // SLT-03: each reel lands a step higher; the last one also ends the whirring.
+          playSfx("slt-stop", { rate: sfxStep(index) });
+          if (index === spinResult.reels.length - 1) { spinSound.current?.stop(); spinSound.current = null; }
           setSymbols(previous => previous.map((entry, i) => i === index ? symbol : entry));
           setSpinning(previous => previous.map((entry, i) => i === index ? false : entry));
           if (suspense && index === 1) {
             setAnticipating(true);
             loops.current[2]?.updatePlaybackRate(.4);
+            playSfx("slt-tension");
+            spinSound.current?.setRate(.6);
           }
           const settle = track(anim(faces.current[index], [
             { transform: "translateY(-22%)" }, { transform: "translateY(9%)", offset: .68 }, { transform: "translateY(0)" },
@@ -195,6 +208,8 @@ export function Slot({ onBack }: { onBack: () => void }) {
       setShownRecent(response.slot.recent);
       setPhase(spinResult.prize > 0 ? "won" : "lost");
       setGold(response.gold);
+      spinSound.current?.stop(); spinSound.current = null;
+      playSfx(spinResult.prize > 0 ? "jackpot" : "fail");
       if (spinResult.prize > 0) {
         confetti(machine.current, { n: 32, spread: 140 });
         coinFly(resultLine.current, machine.current?.closest(".slot")?.querySelector(".game-toolbar .gold"));
@@ -209,6 +224,7 @@ export function Slot({ onBack }: { onBack: () => void }) {
       // The same test as the provider's, so this screen's own retry id is kept
       // exactly as long as the provider keeps the pending spin.
       const rejected = refusedByServer(cause);
+      if (cause instanceof ApiFailure && /INSUFFICIENT|NOT_ENOUGH/.test(cause.code ?? "")) playSfx("ui-deny");
       setPhase(rejected ? "idle" : "checking");
       setError(cause instanceof Error ? cause.message : "결과를 확인하지 못했어요. 같은 요청으로 다시 확인해 주세요.");
       if (rejected) { unresolved.current = null; void latestShop.current.refresh("slot").catch(() => {}); }

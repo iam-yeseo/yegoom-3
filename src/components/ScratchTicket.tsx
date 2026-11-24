@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { playSfx } from "../sfx";
 import type { SpeettoTicket } from "../../shared/types";
 import { art, artSrc } from "./UI";
 import { crumbs, popIn } from "../motion";
@@ -124,6 +125,6 @@ export function ScratchTicket({ ticket, revealed: savedRevealed = false, onRevea
         }} onPointerMove={event => { if (scratching.current) scratch(event); }}
         onPointerUp={() => { scratching.current = false; }} onPointerCancel={() => { scratching.current = false; }} onLostPointerCapture={() => { scratching.current = false; }} />
     </div>
-    {!revealed && <button className="text-button" onClick={reveal}>한 번에 긁기</button>}
+    {!revealed && <button className="text-button" onClick={() => { if (!shown.current) playSfx("spt-swipe"); reveal(); }}>한 번에 긁기</button>}
   </section>;
 }

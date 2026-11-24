@@ -5,6 +5,7 @@ import { formatDate } from "../format";
 import { useLaunchGift, waitForAttendanceEffects } from "../launch-gift";
 import { Chevron, Coin, Gold, Toolbar } from "../components/UI";
 import { anim, coinFly, pop, sparkle, toast, useCountUp, useOnChange } from "../motion";
+import { playSfx, preloadSfx } from "../sfx";
 
 const nodes = [[30, 52], [107, 52], [184, 52], [262, 52], [314, 104], [184, 156], [62, 156]];
 const segments = ["M30 52H107", "H184", "H262", "A52 52 0 0 1 314 104", "A52 52 0 0 1 262 156H184", "H62"];
@@ -33,6 +34,7 @@ export function Attendance({ attendanceKey, gold, onBack }: {
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     mounted.current = true;
+    preloadSfx(["att-stamp", "att-bonus", "coin"]);
     return () => { mounted.current = false; };
   }, []);
   useEffect(() => {
@@ -57,6 +59,9 @@ export function Attendance({ attendanceKey, gold, onBack }: {
       const result = await claim();
       if (!mounted.current) return;
       if (result.awarded) {
+        // The stamp lands first; a 7th-day bonus adds its own little fanfare (ATT-01, ATT-02).
+        playSfx("att-stamp");
+        if (result.attendance.reward >= ATTENDANCE_RULES.cycleGold) playSfx("att-bonus", { delay: .35 });
         await new Promise<void>(resolve => coinFly(button, root.current?.querySelector(".game-toolbar .gold"), resolve));
         if (!mounted.current) return;
         toast(`+${attendanceRewardLabel(result.attendance.reward, result.attendance.today)} 받았어요`);

@@ -1,11 +1,12 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { KUJI_RULES, kujiCost } from "../../shared/balance";
 import type { KujiDraw, KujiGrade, KujiPurchase } from "../../shared/types";
-import { refusedByServer } from "../api";
+import { ApiFailure, refusedByServer } from "../api";
 import { Avatar, PersonName, Toolbar, artSrc, honorific, useDisplayNameByIdLookup, useUsernameByIdLookup } from "../components/UI";
 import { formatTime } from "../format";
 import { anim, confetti, flipY, hop, openSheet, pop, reduced, sparkle } from "../motion";
 import { useShop } from "../shop";
+import { playSfx, preloadSfx } from "../sfx";
 import "../preview.css";
 
 const gradeColors = ["#FFD866", "#FF8E7A", "#B9A3F0", "#8CC8F2", "#8FD9C0", "#FFE6DF", "#EEE8FC", "#E3F1FC"];
@@ -43,6 +44,18 @@ function PurchaseSheet({ purchase, onClose }: { purchase: KujiPurchase; onClose:
   const [shown, setShown] = useState(reduced() ? purchase.cells.length : 0);
   const tickets = useRef<HTMLDivElement>(null);
   const done = shown === purchase.cells.length;
+  // KUJ-01: one tear as the first ticket opens (all at once without motion).
+  useEffect(() => { playSfx("kuj-tear", { delay: reduced() ? 0 : .32 }); }, [purchase]);
+  // KUJ-02 / KUJ-03: one sound for the best grade of the whole draw; the last ticket of the board outranks it.
+  useEffect(() => {
+    if (!done) return;
+    const best = Math.min(...purchase.cells.map(cell => gradeIndex(cell.grade)));
+    const delay = reduced() ? .35 : 0;
+    if (purchase.lastOne) playSfx("kuj-lastone", { delay });
+    else if (best <= 1) playSfx("jackpot", { delay });
+    else if (best <= 3) playSfx("coin", { delay });
+    else playSfx("tap", { gain: .8, delay });
+  }, [done, purchase]);
   useEffect(() => {
     if (reduced()) return;
     // Even a large selection completes its reveal within the existing motion budget.
@@ -128,6 +141,7 @@ export function Kuji({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     active.current = true;
     void shop.refresh("kuji").catch(() => {});
+    preloadSfx(["kuj-tear", "kuj-lastone", "jackpot", "coin", "tap", "ui-deny"]);
     return () => { active.current = false; };
   }, [shop.refresh]);
   useEffect(() => { setSelected([]); }, [kuji?.boardId]);
@@ -150,6 +164,7 @@ export function Kuji({ onBack }: { onBack: () => void }) {
       if (response.purchase) setPurchase(response.purchase);
       setSelected([]);
     } catch (caught) {
+      if (caught instanceof ApiFailure && /INSUFFICIENT|NOT_ENOUGH/.test(caught.code ?? "")) playSfx("ui-deny");
       setError(caught instanceof Error ? caught.message : "쿠지를 뽑지 못했어요. 다시 시도해 주세요.");
       if (active.current && refusedByServer(caught)) await shop.refresh("kuji");
     } finally {

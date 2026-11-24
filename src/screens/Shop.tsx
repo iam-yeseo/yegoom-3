@@ -8,6 +8,8 @@ import { ScratchTicket } from "../components/ScratchTicket";
 import { anim, confetti, reduced, shake, toast, tween, useCountUp } from "../motion";
 import { ticketCount, useShop } from "../shop";
 import { formatDate, formatTime } from "../format";
+import { ApiFailure } from "../api";
+import { playSfx, preloadSfx, sfxStep } from "../sfx";
 import { ShopCards } from "./Home";
 
 function InventoryCard({ kind }: { kind?: "lotto" | "speetto" }) {
@@ -67,6 +69,10 @@ export function ShopMain({ go, gold }: { go: (path: string) => void; gold: numbe
 }
 
 const winColors = ["#FFD866", "#FF8E7A", "#B9A3F0", "#8CC8F2", "#8FD9C0"];
+/** A purchase the server refused for want of gold or tickets gets the soft "no" (UI-07). */
+export function denySfx(error: unknown) {
+  if (error instanceof ApiFailure && /INSUFFICIENT|NOT_ENOUGH/.test(error.code ?? "")) playSfx("ui-deny");
+}
 function clock(seconds: number) {
   const safe = Math.max(0, seconds);
   return [Math.floor(safe / 3600), Math.floor((safe % 3600) / 60), safe % 60]
@@ -88,7 +94,7 @@ function useServerNow(serverTime: string) {
 }
 const ballStyle = (index: number) => ({ background: winColors[index % winColors.length], color: index % winColors.length ? "#fff" : "#5C4300" });
 /** The winning balls; `animate` rolls them in one at a time. */
-function DrawBalls({ numbers, animate, onDone }: { numbers: number[]; animate: boolean; onDone?: () => void }) {
+function DrawBalls({ numbers, animate, mine, onDone }: { numbers: number[]; animate: boolean; mine?: ReadonlySet<number>; onDone?: () => void }) {
   const [rolled, setRolled] = useState(animate && !reduced() ? 0 : numbers.length);
   const draw = useRef<HTMLDivElement>(null);
   const done = useRef(onDone);
@@ -98,6 +104,15 @@ function DrawBalls({ numbers, animate, onDone }: { numbers: number[]; animate: b
     const timer = window.setTimeout(() => setRolled(n => n + 1), rolled ? 700 : 450);
     return () => window.clearTimeout(timer);
   }, [rolled, numbers.length, animate]);
+  // Balls already out when the row first shows (no animation) stay quiet.
+  const quietUpTo = useRef(rolled);
+  useEffect(() => {
+    if (!animate || rolled <= quietUpTo.current || rolled > numbers.length) return;
+    // LOT-02 (a ball comes out) plays here once its sound is chosen.
+    // LOT-03: each ball on one of my tickets chimes a step higher than the last.
+    const ball = numbers[rolled - 1];
+    if (mine?.has(ball)) playSfx("lot-match", { rate: sfxStep(numbers.slice(0, rolled - 1).filter(value => mine.has(value)).length) });
+  }, [rolled, animate]);
   useEffect(() => {
     if (animate && rolled && !reduced()) anim(draw.current?.children[rolled - 1], [
       { translate: "-220px 0", rotate: "-200deg", opacity: 0 },
@@ -122,15 +137,20 @@ function DrawDialog({ date, numbers, tickets, onClose }: { date: string; numbers
   const mine = tickets.filter(ticket => ticket.drawDate === date && ticket.matches !== null);
   const prize = mine.reduce((sum, ticket) => sum + (ticket.prize ?? 0), 0);
   const best = mine.reduce<number | null>((rank, ticket) => ticket.rank !== null && (rank === null || ticket.rank < rank) ? ticket.rank : rank, null);
+  const myNumbers = new Set(mine.flatMap(ticket => ticket.numbers));
+  useEffect(() => { preloadSfx(["lot-match", "jackpot", "coin", "fail"]); }, []);
   useEffect(() => {
     if (!done) return;
+    // LOT-04: 1등 gets the big win, other prizes a coin, a miss the music box running down.
+    if (prize > 0) playSfx(best === 1 ? "jackpot" : "coin");
+    else if (mine.length) playSfx("fail");
     anim(summary.current, [{ translate: "0 10px", opacity: 0 }, { translate: "0 0", opacity: 1 }], { dur: 320, ease: "out", fill: "none" });
     if (prize > 0) confetti(summary.current, { spread: 140 });
   }, [done, prize]);
   return <ResultDialog label="데일리 로또 당첨 번호" className="lotto-draw-dialog" onClose={onClose}>
     <small className="result-dialog-eyebrow">{formatDate(date)} 추첨</small>
     <h2>당첨 번호를 공개해요</h2>
-    <div className="draw"><DrawBalls numbers={numbers} animate onDone={() => setDone(true)} /></div>
+    <div className="draw"><DrawBalls numbers={numbers} animate mine={myNumbers} onDone={() => setDone(true)} /></div>
     <div className="lotto-draw-summary" ref={summary} role="status" style={{ visibility: done ? "visible" : "hidden" }}>
       {!mine.length ? <p>이번 추첨에 산 표가 없어요.</p>
         : prize > 0 ? <p><strong>{best}등 당첨! +{prize.toLocaleString("ko-KR")}G</strong><br />내 표 {mine.length}장 중 {mine.filter(ticket => ticket.prize).length}장이 당첨됐어요.</p>
@@ -192,6 +212,7 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
   const pendingClick = useRef(false);
   const [confirmSheet, ask] = usePurchaseConfirm();
   const lottoTickets = ticketCount("lotto", shop);
+  useEffect(() => { preloadSfx(["lot-pick", "ui-deny"]); }, []);
   const balls = useRef<HTMLDivElement>(null);
   const now = useServerNow(shop.serverTime);
   const round = shop.lotto;
@@ -233,6 +254,8 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
     if (frozen) return;
     if (!on && picks.length >= LOTTO_RULES.pickCount) { shake(button); return; }
     if (!on) anim(button, [{ scale: ".6" }, { scale: "1.18", offset: .6 }, { scale: "1" }], { dur: 340, fill: "none" });
+    // LOT-01: each pick climbs one note, in the order the balls take their colors.
+    if (!on) playSfx("lot-pick", { rate: sfxStep(picks.length) });
     setPicks(previous => on ? previous.filter(value => value !== number) : [...previous, number]);
     setError("");
   }
@@ -245,6 +268,7 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
       if (!next.includes(number)) { next.push(number); added.push(number); }
     }
     setPicks(next);
+    added.forEach((_, i) => playSfx("lot-pick", { rate: sfxStep(picks.length + i), delay: reduced() ? 0 : i * .14 }));
     added.forEach((number, i) => anim(balls.current?.children[number - 1], [{ scale: ".6" }, { scale: "1.18", offset: .6 }, { scale: "1" }], { dur: 340, delay: reduced() ? 0 : i * 140, fill: "none" }));
     setError("");
   }
@@ -261,7 +285,7 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
       setPicks([]);
       if (result.purchase) toggleDate(result.purchase.purchaseDate, true);
       toast("데일리 로또를 샀어요");
-    } catch (e) { setError(e instanceof Error ? e.message : "구매를 확인하지 못했어요. 같은 결제 버튼으로 다시 시도해 주세요."); }
+    } catch (e) { denySfx(e); setError(e instanceof Error ? e.message : "구매를 확인하지 못했어요. 같은 결제 버튼으로 다시 시도해 주세요."); }
     finally { pendingClick.current = false; setBusy(false); }
   }
   const available = Boolean(round) && shop.canPurchase && !busy && !shop.loading && full && (!expired || Boolean(pending)) && (!shop.pending || Boolean(pending));
@@ -308,6 +332,8 @@ export function Lotto({ onBack }: { gold?: number; onBack: () => void }) {
 function SpeettoResultDialog({ ticket, onClose }: { ticket: SpeettoTicket; onClose: () => void }) {
   const symbols = useRef<HTMLDivElement>(null);
   const [prize, setPrize] = useState(reduced() ? ticket.prize : 0);
+  // SPT-03: the dialog opens only for a ticket scratched (or first confirmed) just now.
+  useEffect(() => { playSfx(ticket.won ? "jackpot" : "fail"); }, [ticket.id, ticket.won]);
   useEffect(() => {
     if (!ticket.won) return;
     confetti(symbols.current, { spread: 140 });
@@ -343,6 +369,7 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
   const ticket = tickets.find(entry => entry.id === selectedId) ?? tickets.find(entry => !entry.revealed) ?? tickets[0];
   const pending = shop.pending?.kind === "speetto" ? shop.pending.input as SpeettoPurchaseInput : null;
   useEffect(() => () => window.clearTimeout(resultTimer.current), []);
+  useEffect(() => { preloadSfx(["spt-swipe", "jackpot", "fail", "ui-deny"]); }, []);
   function reveal(entry: SpeettoTicket) {
     if (entry.revealed) return;
     // Scratched on the server too: another device shows it open, never covered again.
@@ -376,7 +403,7 @@ export function Speetto({ onBack }: { gold?: number; onBack: () => void }) {
         if (next.purchase) select(next.purchase.id);
         toast("스피또를 샀어요");
       }
-    } catch (e) { setError(e instanceof Error ? e.message : "구매를 확인하지 못했어요. 같은 결제 버튼으로 다시 시도해 주세요."); }
+    } catch (e) { denySfx(e); setError(e instanceof Error ? e.message : "구매를 확인하지 못했어요. 같은 결제 버튼으로 다시 시도해 주세요."); }
     finally { pendingClick.current = false; setBusy(false); }
   }
   const available = Boolean(shop.speetto) && shop.canPurchase && !busy && !shop.loading && (!shop.pending || Boolean(pending));
