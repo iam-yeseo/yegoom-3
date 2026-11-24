@@ -1,14 +1,26 @@
 import { useRef } from "react";
 
-/** Server time minus this device's clock, from a `serverTime` stamp.
+export interface KeptOffset { stamp: string | undefined; offset: number }
+
+/** Server time minus this device's clock, measured only when a new `serverTime`
+ * stamp arrives.
  *
- * The app hands screens a fresh stamp on every render. Treated as an effect
- * dependency, that restarted their timers and set state again each time the
- * app re-rendered. The offset only really changes when the device clock does,
- * so the first measurement is kept until a new one disagrees by over a second. */
+ * A stamp is a moment in the past once the component re-renders on its own
+ * (its countdown ticks every second), so it must not be measured again: that
+ * would pull the clock back to the stamp each time and freeze the countdown.
+ * The app also hands some screens a fresh stamp on every render; a new
+ * measurement within a second of the kept one keeps the old offset, so the
+ * timers that depend on it are not restarted. */
+export function keepServerOffset(kept: KeptOffset | null, serverTime: string | undefined, deviceNow: number): KeptOffset {
+  if (kept && kept.stamp === serverTime) return kept;
+  const measured = serverTime ? Date.parse(serverTime) - deviceNow : 0;
+  const offset = kept && Number.isFinite(measured) && Math.abs(measured - kept.offset) <= 1000 ? kept.offset
+    : Number.isFinite(measured) ? measured : 0;
+  return { stamp: serverTime, offset };
+}
+
 export function useServerOffset(serverTime: string | undefined): number {
-  const kept = useRef<number | null>(null);
-  const measured = serverTime ? Date.parse(serverTime) - Date.now() : 0;
-  if (kept.current === null || Math.abs(measured - kept.current) > 1000) kept.current = measured;
-  return kept.current;
+  const kept = useRef<KeptOffset | null>(null);
+  kept.current = keepServerOffset(kept.current, serverTime, Date.now());
+  return kept.current.offset;
 }
