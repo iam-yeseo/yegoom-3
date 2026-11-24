@@ -3,6 +3,7 @@ import { TOILET_RULES } from "../../shared/balance";
 import type { CatchmindPlayer, LedgerEntry, ToiletAction, ToiletPollResponse, ToiletRoundView, ToiletState, ToiletSummary, User } from "../../shared/types";
 import { api, ApiFailure } from "../api";
 import { Avatar, Toolbar, honorific, useDisplayNameLookup } from "../components/UI";
+import { playSfx, preloadSfx } from "../sfx";
 import { previewToilet } from "../toilet-preview";
 import "../toilet.css";
 
@@ -18,6 +19,8 @@ function summaryOf(state: ToiletState, me: string): ToiletSummary {
 const minutesLeft = (until: number, now: number) => Math.max(1, Math.ceil((until - now) / 60_000));
 const clock = (iso: string) => { const date = new Date(Date.parse(iso) + 9 * 3_600_000); return `${date.getUTCHours()}시${date.getUTCMinutes() ? ` ${date.getUTCMinutes()}분` : ""}`; };
 const percent = (chance: number) => `${Math.round(chance * 100)}%`;
+/** Past the nervous share of its slots, the toilet shakes (until it bursts or the round ends). */
+const nervousRound = (round: ToiletRoundView) => (round.status === "waiting" || round.status === "playing") && round.pushes.length >= round.slots * TOILET_RULES.nervousShare;
 
 /** A picture that may not be there yet: until it loads, the emoji stands in. */
 function Art({ src, fallback, className }: { src: string; fallback: string; className: string }) {
@@ -52,6 +55,9 @@ export function Toilet({ user, onBack, demo = false, onSummary, onPreviewChange,
   const callbacks = useRef({ onSummary, onPreviewChange, onScored });
   callbacks.current = { onSummary, onPreviewChange, onScored };
   const scored = useRef<string | null>(null);
+  /** The round as last seen on this screen: sounds play only for changes seen live. */
+  const seen = useRef<{ id: string; status: string; nervous: boolean } | null>(null);
+  useEffect(() => { preloadSfx(["tl-flush", "tl-nervous", "tl-boom", "coin", "fail"]); }, []);
 
   const apply = useCallback((next: ToiletPollResponse) => {
     offset.current = Date.parse(next.serverTime) - Date.now();
@@ -59,6 +65,15 @@ export function Toilet({ user, onBack, demo = false, onSummary, onPreviewChange,
     if ("unchanged" in next) return;
     stamp.current = next.stamp;
     setState(next.toilet);
+    const current = next.toilet.current, before = seen.current;
+    if (current && before?.id === current.id) {
+      if (current.status === "burst" && before.status !== "burst") {
+        playSfx("tl-boom");
+        const mine = current.results.find(entry => entry.player.id === user.id);
+        if (mine) playSfx(mine.points < 0 ? "fail" : "coin", { delay: 1.6 });
+      } else if (nervousRound(current) && !before.nervous) playSfx("tl-nervous", { delay: 1 });
+    }
+    seen.current = current ? { id: current.id, status: current.status, nervous: nervousRound(current) } : null;
     const summary = summaryOf(next.toilet, user.id);
     if (engine) callbacks.current.onPreviewChange?.(summary, engine.score, [...engine.ledger]);
     else {
@@ -99,6 +114,7 @@ export function Toilet({ user, onBack, demo = false, onSummary, onPreviewChange,
       apply(next);
       const burst = next.toilet.current?.id === round.id && next.toilet.current.status === "burst";
       setScene(burst ? "boom" : "flush");
+      if (!burst) playSfx("tl-flush");
       if (!burst) window.setTimeout(() => setScene(current => (current === "flush" ? "idle" : current)), reduced ? 600 : 1400);
     } catch (failure) {
       setScene("idle");
@@ -137,7 +153,7 @@ function Stage({ round, state, me, admin, busy, now, scene, act }: {
   const who = (player: CatchmindPlayer) => (player.id === me ? "나" : honorific(name(player.username, player.displayName)));
   const burst = round.status === "burst", over = burst || round.status === "void";
   const myTurn = state.canPush;
-  const nervous = !over && round.pushes.length >= round.slots * TOILET_RULES.nervousShare;
+  const nervous = nervousRound(round);
   const mood = burst || scene === "boom" ? "boom" : nervous ? "nervous" : "calm";
   const level = Math.min(1, round.pushes.length / round.slots);
   const skipAt = state.skipAvailableAt ? Date.parse(state.skipAvailableAt) : NaN;

@@ -4,6 +4,7 @@ import type { GameHistoryRound, GameId, GameResult, GameState, PhotoMetadata, Us
 import type { PredictionRules } from "../../shared/admin";
 import { predictionPointsForRules, scoreThresholdLabel, durationLabel } from "../../shared/game-settings";
 import { api } from "../api";
+import { playSfx, preloadSfx } from "../sfx";
 import { formatDate, formatTime, formatTimeSeconds } from "../format";
 import { previewHistory, rankOf } from "../sample";
 import { LuckPhotoCard, LuckPhotoPicker } from "./LuckEvidence";
@@ -437,8 +438,13 @@ function ActivePredictionGame({ game, user, serverTime, demo, onBack, onSave, on
     // Only read the reveal state on entry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.id, heroKey]);
+  // Read when the reveal plays, without replaying it when a poll refreshes the results.
+  const firstPlace = useRef(false);
+  firstPlace.current = game.results.some(result => result.username === user.username && result.isFirst);
+  useEffect(() => { preloadSfx(["prd-reveal", "jackpot"]); }, []);
   useEffect(() => {
     if (!revealed) return;
+    playSfx("prd-reveal");
     flipY(answerRef.current);
     const cards = [...(results.current?.querySelectorAll(".result-card") ?? [])];
     cards.forEach((card, i) => rise(card, { delay: 520 + i * 140 }));
@@ -447,6 +453,7 @@ function ActivePredictionGame({ game, user, serverTime, demo, onBack, onSave, on
     const done = 520 + cards.length * 140 + chips.length * 110 + 200;
     const t = setTimeout(() => {
       if (cards.length) confetti(cards[0].querySelector(".rank-badge"));
+      if (firstPlace.current) playSfx("jackpot");
       playJump();
     }, reduced() ? 0 : done);
     return () => clearTimeout(t);

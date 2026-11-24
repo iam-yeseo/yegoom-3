@@ -4,6 +4,7 @@ import { CELLS, bingoWordsProblem, completedLines, BINGO_LINES, usableBingoWords
 import type { BingoAction, BingoCreateInput, BingoGameView, BingoInput, BingoPollResponse, BingoResponse, BingoState, BingoSummary, CatchmindPlayer, LedgerEntry, User } from "../../shared/types";
 import { api, ApiFailure } from "../api";
 import { previewBingo } from "../bingo-preview";
+import { playSfx, preloadSfx } from "../sfx";
 import { Avatar, Segmented, Toolbar, honorific, useDisplayNameLookup } from "../components/UI";
 import "../bingo.css";
 
@@ -42,6 +43,9 @@ export function Bingo({ user, onBack, demo = false, onSummary, onPreviewChange, 
   const callbacks = useRef({ onSummary, onPreviewChange, onScored });
   callbacks.current = { onSummary, onPreviewChange, onScored };
   const myPoints = useRef<number | null>(null);
+  /** My seat as last seen on this screen: sounds play only for changes seen live. */
+  const seen = useRef<{ game: string; lines: number; rank: number | null } | null>(null);
+  useEffect(() => { preloadSfx(["bg-mark", "bg-line", "coin", "jackpot"]); }, []);
 
   const apply = useCallback((next: BingoPollResponse) => {
     offset.current = Date.parse(next.serverTime) - Date.now();
@@ -49,6 +53,15 @@ export function Bingo({ user, onBack, demo = false, onSummary, onPreviewChange, 
     if ("unchanged" in next) return;
     version.current = next.version;
     setState(next.bingo);
+    const game = next.bingo.game, seat = game?.seats.find(seat => seat.player.id === user.id);
+    const before = seen.current;
+    if (game && seat && before?.game === game.id) {
+      // A line of my board filled (my call or another player's), then my place was settled.
+      const lined = game.status === "playing" || game.status === "ended" ? Math.min(seat.lines, game.lines) > Math.min(before.lines, game.lines) : false;
+      if (lined) playSfx("bg-line", { delay: .2 });
+      if (seat.rank && !before.rank) playSfx(seat.rank === 1 ? "jackpot" : "coin", { delay: lined ? .9 : .2 });
+    }
+    seen.current = game && seat ? { game: game.id, lines: seat.lines, rank: seat.rank ?? null } : null;
     const summary = summaryOf(next.bingo, user.id);
     if (engine) callbacks.current.onPreviewChange?.(summary, engine.score, [...engine.ledger]);
     else {
@@ -309,7 +322,7 @@ function Playing({ game, state, me, busy, closed, now, attempt }: {
     {mine?.cells ? <section className="bingo-card card" aria-label="내 빙고판">
       <div className="bingo-head"><strong>내 빙고판</strong><span className="bingo-count">{mine.rank ? `${mine.rank}등 확정` : `${Math.min(mine.lines, game.lines)}/${game.lines}줄`}</span></div>
       <Board cells={mine.cells} called={called} selected={picked} onPick={myTurn && !closed ? index => setPicked(current => (current === mine.cells![index] ? null : mine.cells![index]!)) : undefined} />
-      {myTurn && <button type="button" className="primary-button" disabled={busy || closed || !picked} onClick={() => picked && attempt("call", { gameId: game.id, word: picked })}>
+      {myTurn && <button type="button" className="primary-button" data-sfx-quiet disabled={busy || closed || !picked} onClick={() => { if (!picked) return; playSfx("bg-mark"); attempt("call", { gameId: game.id, word: picked }); }}>
         {busy ? "지우는 중…" : picked ? `「${picked}」 지우기 확정` : "지울 단어를 골라 주세요"}</button>}
     </section> : <p className="bingo-note card">이번 판에는 참여하지 않았어요. 다음 판에서 판을 내 주세요.</p>}
     <section className="bingo-card card" aria-label="참가자">

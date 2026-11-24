@@ -10,6 +10,7 @@ import { PreviousCatchmindRound } from "./CatchmindGallery";
 import { honorific, Avatar, PersonName, Chevron, Toolbar, useDisplayNameLookup } from "../components/UI";
 import { confetti, flipY, hop, openSheet, pop, popIn, rise, shake, toast, useMountMotion, useOnChange } from "../motion";
 import { formatTime } from "../format";
+import { playSfx, preloadSfx } from "../sfx";
 import "../preview.css";
 
 function HintTiles({ hint }: { hint: NonNullable<CatchmindRound["hint"]> }) {
@@ -185,6 +186,18 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
   useOnChange(round?.wrongCount, before => {
     if (typeof before === "number" && round && round.wrongCount > before) shake(form.current);
   });
+  useEffect(() => { preloadSfx(["cm-send", "cm-wrong", "cm-hint", "coin", "fail"]); }, []);
+  /** The round as last seen on this screen: sounds play only for changes seen live. */
+  const seen = useRef<{ id: string; status: string; wrong: number; winner: boolean } | null>(null);
+  useEffect(() => {
+    if (!round) { seen.current = null; return; }
+    const before = seen.current;
+    seen.current = { id: round.id, status: round.status, wrong: round.wrongCount, winner: Boolean(round.winner) };
+    if (!before || before.id !== round.id) return;
+    if (round.winner && !before.winner) { playSfx("coin"); return; }
+    if (round.status === "ended" && before.status !== "ended") { if (!round.winner && round.endReason !== "manual") playSfx("fail"); return; }
+    if (round.wrongCount > before.wrong) playSfx(before.wrong < CATCHMIND_RULES.hintAfter && round.wrongCount >= CATCHMIND_RULES.hintAfter ? "cm-hint" : "cm-wrong");
+  }, [round?.id, round?.status, round?.wrongCount, round?.winner, round?.endReason]);
   async function run(action: CatchmindAction, input: CatchmindInput, success?: string) {
     if (actionInFlight.current || game.busy) return false;
     actionInFlight.current = true;
@@ -212,6 +225,7 @@ export function Catchmind({ user, onBack, demo = false }: { user: User; onBack: 
     if (problem) throw new Error(problem);
     // Preserve the round shown by this canvas, even if polling finds a new one.
     await current.mutate("publish", { requestId: crypto.randomUUID(), roundId: shown.id, word: cleanCatchmindWord(wordRef.current), image });
+    playSfx("cm-send");
     toast("그림을 올렸어요");
   }, [round?.id]);
   const wordProblem = catchmindWordProblem(word);

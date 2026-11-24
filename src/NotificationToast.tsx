@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ANNOUNCEMENT_RULES } from '../shared/balance';
 import { isToastWorthy, notificationText, type AppNotification } from '../shared/notifications';
 import { CloseIcon, honorific, useDisplayNameByIdLookup } from './components/UI';
+import { playSfx, preloadSfx } from './sfx';
 import './announcements.css';
 
 interface Props {
@@ -51,8 +52,10 @@ function ToastQueue({ notifications, userId, serverTime, go }: Omit<Props, 'prev
     });
   }, [notifications, offset, userId, seen]);
 
+  useEffect(() => { preloadSfx(['ui-toast']); }, []);
   useEffect(() => {
     if (!current) return;
+    playSfx('ui-toast');
     seen.add(current.id);
     try { localStorage.setItem(storageKey(userId), JSON.stringify([...seen])); } catch { /* Seen ids still persist for this session if storage is unavailable. */ }
     const timer = window.setTimeout(() => {
