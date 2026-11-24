@@ -112,7 +112,7 @@ const physicsArtifact = await build({
 });
 const { createBoard } = await import(`data:text/javascript;base64,${Buffer.from(physicsArtifact.outputFiles[0].text).toString('base64')}`);
 const clawFixtureAccounts = [
-  ['min', 1, 1792405759], ['siwon', 7, 681253366], ['yeseo', 1, 1792405759],
+  ['min', 1, 1792405759], ['siwon', 7, 681308164], ['yeseo', 1, 1792405759],
 ];
 if (process.env.E2E_PROFILE === 'admin-console') clawFixtureAccounts.push(['admin', 1, 1792405759]);
 for (const [username, generation, seed] of clawFixtureAccounts) {
