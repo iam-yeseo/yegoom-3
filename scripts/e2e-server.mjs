@@ -104,6 +104,7 @@ statements.push(`INSERT INTO tag_ticket_ledger (id, user_id, amount, reason, ref
 // frozen fixture's previous close so prices replay deterministically.
 statements.push(`UPDATE stock_state SET last_tick_at = ${Date.parse('2026-10-29T18:00:00+09:00')};`);
 // Real, untouched physics boards provide repeatable single/multiple catches.
+// Seeds were re-chosen for the 15 doll types (a type count changes every layout).
 // Only this isolated fixture selects the board and the tenth (strong) attempt;
 // production has no seed endpoint, forced outcome, or browser-only physics.
 const physicsArtifact = await build({
@@ -111,9 +112,9 @@ const physicsArtifact = await build({
 });
 const { createBoard } = await import(`data:text/javascript;base64,${Buffer.from(physicsArtifact.outputFiles[0].text).toString('base64')}`);
 const clawFixtureAccounts = [
-  ['min', 1, 1792405194], ['siwon', 7, 681247775], ['yeseo', 1, 1792405194],
+  ['min', 1, 1792405759], ['siwon', 7, 681308164], ['yeseo', 1, 1792405759],
 ];
-if (process.env.E2E_PROFILE === 'admin-console') clawFixtureAccounts.push(['admin', 1, 1792405194]);
+if (process.env.E2E_PROFILE === 'admin-console') clawFixtureAccounts.push(['admin', 1, 1792405759]);
 for (const [username, generation, seed] of clawFixtureAccounts) {
   const board = JSON.stringify(createBoard(generation, seed));
   statements.push(`INSERT INTO claw_accounts (user_id, free_coins, purchased_coins, last_grant_slot, board_json, generation, version, next_play_at, power_counter) VALUES ('e2e-${username}', ${username === 'admin' ? 0 : 5}, 0, ${Math.floor(timestamp / 10800000)}, '${board}', ${generation}, 0, 0, 9);`);

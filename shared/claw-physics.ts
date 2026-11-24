@@ -58,14 +58,15 @@ export interface AttemptResult {
 // bit-for-bit identical the simulation only uses + - * / and Math.sqrt, which every
 // JavaScript engine rounds exactly (Math.hypot, sin and cos may differ by engine).
 export const DOLL_COUNT = 30;
-export const DOLL_TYPES = 11;
+export const DOLL_TYPES = 15;
 export const MACHINE = Object.freeze({ width: 600, height: 420, radius: 32, leftWall: 120, dividerHeight: 260, floor: 420, clawMin: .05, clawMax: .95, home: .1 });
 // Claw geometry (px below the carriage) and motor speeds (px/s, px/s²).
 export const CLAW = Object.freeze({ top: 48, hold: 63, tip: 80, body: 29, prong: 30, descend: 260, lift: 240, travel: 288, accel: 900 });
-// Relative weight of each sprite type (1..11). Heavier dolls slip out of a weak claw sooner.
-export const DOLL_WEIGHT = Object.freeze([1, 1, .9, 1.15, .85, 1.05, .95, 1.2, .8, 1.1, .9, 1]);
+// Relative weight of each sprite type (1..15). Heavier dolls slip out of a weak claw sooner.
+// Types 12..15 weigh 1, matching the original engine's default for unknown types.
+export const DOLL_WEIGHT = Object.freeze([1, 1, .9, 1.15, .85, 1.05, .95, 1.2, .8, 1.1, .9, 1, 1, 1, 1, 1]);
 // New machines get slightly different sizes per type, so the pile packs unevenly like plush toys.
-export const DOLL_RADIUS = Object.freeze([32, 32, 30, 34, 29, 33, 31, 35, 28, 33, 30, 32]);
+export const DOLL_RADIUS = Object.freeze([32, 32, 30, 34, 29, 33, 31, 35, 28, 33, 30, 32, 32, 30, 34, 29]);
 const MAX_RADIUS = 36;
 export const FPS = 60;
 const DT = 1 / FPS, GRAVITY = 1500;
