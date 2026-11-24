@@ -111,7 +111,7 @@ export class ClawController {
   releaseAll() { this.release("left"); this.release("right"); }
   toggleSound() {
     this.sound.setMuted(!this.sound.muted);
-    if (!this.sound.muted) { this.sound.activate(); if (this.mode === "ready") this.sound.music(true); }
+    if (!this.sound.muted) this.sound.activate();
     this.notify();
   }
   primary() {
@@ -127,7 +127,7 @@ export class ClawController {
     this.lastTick = CLAW_RULES.controlDurationMs / 1000;
     this.replayMessage = "";
     this.insertion++;
-    this.sound.coin(); this.sound.music(true); this.sound.buzz(20);
+    this.sound.coin(); this.sound.buzz(20);
     this.setStatus(`${CLAW_RULES.controlDurationMs / 1000}초 안에 집게를 원하는 친구 위로 옮겨 주세요!`);
     this.setMode("ready");
   }

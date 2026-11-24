@@ -153,7 +153,7 @@ export class CurlingController {
     this.sound.activate();
     if (Math.hypot(pixel.x - RELEASE.x, pixel.y - RELEASE.y) > GRAB_RADIUS) { this.aiming = event.pointerId; this.aimToward(pixel); return; }
     this.pointer = event.pointerId; this.grabbed = point; this.points = [point];
-    this.sound.tone(300, { duration: .06, gain: .03 });
+    this.sound.play("cur-grab");
     this.setMode("holding");
     this.loop();
   };
@@ -187,7 +187,7 @@ export class CurlingController {
   private launch(input: StoneInput) {
     this.slide = { run: startThrow(this.sheet, input, this.thrown), start: performance.now() };
     this.offset = 0; this.brush = null;
-    this.sound.activate(); this.sound.noise(.5, .05, 500, "lowpass");
+    this.sound.activate(); this.sound.play("cur-slide");
     this.callbacks.onThrow?.(input);
     this.setMode("sliding");
     this.loop();
@@ -212,14 +212,16 @@ export class CurlingController {
     for (; due > 0 && !run.done; due--) {
       const brushing = this.brushing(now) && !!run.sliding();
       this.setSweeping(brushing);
-      if (brushing && now - this.lastSwish > 130) { this.lastSwish = now; this.sound.noise(.12, .05, 2600, "highpass"); }
+      if (brushing && now - this.lastSwish > 200) { this.lastSwish = now; this.sound.play("cur-brush", { rate: .94 + Math.random() * .12 }); }
       for (const event of run.advance(brushing)) {
+        // CUR-03 (stones colliding) keeps its tone until its new sound is chosen.
         if (event.type === "hit") { this.sound.tone(520, { duration: .09, type: "square", gain: .04, to: 380 }); this.sound.noise(.05, .1, 1800); this.sound.vibrate(16); }
-        else this.sound.tone(140, { duration: .12, type: "sine", gain: .06, to: 90 });
+        else this.sound.play("cur-stop");
       }
     }
     if (!run.done) return true;
     const result = run.result();
+    this.sound.play("cur-stop", { gain: .7 });
     this.slide = null; this.brush = null; this.setSweeping(false);
     this.sheet = result.after; this.thrown++;
     this.setMode(this.thrown >= this.stones ? "over" : "ready");

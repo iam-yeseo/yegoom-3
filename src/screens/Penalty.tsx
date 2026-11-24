@@ -95,7 +95,7 @@ function PenaltyPlay({ mode, slot, onFinish, onQuit }: ArcadePlayProps) {
       }, keepersFor, !official);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "경기장을 표시하지 못했어요."); return; }
     controller.current = runtime;
-    const warmUp = window.setTimeout(() => effects.prepare(), 120);
+    const warmUp = window.setTimeout(() => { effects.prepare(); effects.preload(["coin", "jackpot", "fail"]); }, 120);
     const visibility = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", visibility);
     return () => { clearTimeout(warmUp); runtime.destroy(); effects.dispose(); controller.current = null; document.removeEventListener("visibilitychange", visibility); };

@@ -11,7 +11,8 @@ const hash = createHash('sha256');
 for (const file of files) hash.update(await readFile(file));
 const cache = `yegoom3-${hash.digest('hex').slice(0, 12)}`;
 const paths = files.map((file) => file === 'dist/index.html' ? '/' : '/' + file.slice(dir.length + 1));
-const lazySprites = paths.filter((path) => path.startsWith('/characters/sprites/') && !path.endsWith('-idle.webp'));
+// Sound effects (/sfx) are fetched the first time a screen needs them, like the extra sprites.
+const lazySprites = paths.filter((path) => (path.startsWith('/characters/sprites/') && !path.endsWith('-idle.webp')) || path.startsWith('/sfx/'));
 // Claw dolls are small shared game assets: all 15 /claw/dolls/*.webp stay in the precache.
 const precachePaths = paths.filter((path) => !lazySprites.includes(path));
 await writeFile(join(dir, 'sw.js'), `
@@ -50,4 +51,4 @@ self.addEventListener('fetch', event => {
   }
 });
 `);
-console.log(`PWA precache: ${precachePaths.length} static files, ${lazySprites.length} sprites on demand, ${cache}`);
+console.log(`PWA precache: ${precachePaths.length} static files, ${lazySprites.length} sprites and sounds on demand, ${cache}`);

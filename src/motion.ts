@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { playSfx } from "./sfx";
 
 // Motion tokens and helpers from the Claude Design motion spec
 // (Yegoom Motion Spec, yegoom-motion.js). Everything animates transform
@@ -163,6 +164,8 @@ function lockPageScroll() {
 
 /** Native dialog lifecycle shared by sheets and modals. Animate the dialog,
  * not its scrolling children, so entrance motion cannot create a scrollbar. */
+/** Result and celebration dialogs bring their own sound; the soft sheet pop is for the rest. */
+const QUIET_DIALOGS = ".result-dialog, .launch-dialog, .kuji-modal, .claw-result, .tag-draw-dialog, .tag-evolving";
 export function openSheet(dialog: HTMLDialogElement): () => void {
   const existing = openSheets.get(dialog);
   if (existing) return existing;
@@ -174,6 +177,7 @@ export function openSheet(dialog: HTMLDialogElement): () => void {
   for (const dimmer of [...fadingDimmers]) dimmer.cancel();
   const previousFocus = leaving ? leaving.focus : document.activeElement;
   const releaseScroll = holdPageScroll();
+  if (!leaving && !dialog.matches(QUIET_DIALOGS)) playSfx("ui-sheet");
   try {
     dialog.showModal();
   } catch (error) {
@@ -499,6 +503,7 @@ export function coinFly(from: Element | null | undefined, to: Element | null | u
   const a = at(from);
   const b = at(to);
   if (!a || !b || reduced()) {
+    playSfx("coin");
     onArrive?.();
     return;
   }
@@ -524,6 +529,7 @@ export function coinFly(from: Element | null | undefined, to: Element | null | u
       pop(to, 1.12);
       if (first) {
         first = false;
+        playSfx("coin");
         onArrive?.();
       }
     }, 700 + i * 70);

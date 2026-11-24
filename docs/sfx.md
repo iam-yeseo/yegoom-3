@@ -1,6 +1,6 @@
 # 효과음 — 무드와 목록
 
-> 상태: 무드와 기준 소리 확정(2026-11-24). 게임에는 아직 연결하지 않았다. 지금 게임에서 나는 소리는 각 게임의 `sound.ts`가 Web Audio로 합성한 소리다.
+> 상태: 기준 소리 4개와 3차에서 고른 46개를 게임에 연결했다(2026-11-24). 다시 만드는 10개(4.3)는 고를 때까지 소리가 없거나 예전 합성음이 난다.
 
 ## 1. 무드: 말랑 장난감에 예능 한 스푼
 
@@ -156,3 +156,80 @@
 3. **우선 3**: 알림 토스트, 시트 열림, 거절, 주식.
 
 순간마다 2~3안을 만들어 듣고 고른 뒤 게임에 연결한다. 우선 1~3의 후보는 56개 소리 117안으로 만들었다(2026-11-24). 고른 안만 저장소에 넣는다. 게임마다 따로 있는 `sound.ts`는 파일을 재생하는 공용 모듈 하나로 모으고, 진동과 음소거 기억은 지금처럼 유지한다.
+
+## 4. 게임 연결
+
+### 4.1 재생 방식
+
+- 파일은 `public/sfx/<이름>.mp3`(기준 소리 4개 포함 50개)다. 서비스 워커는 이 파일들을 설치 때 받지 않고, 처음 쓸 때 받아 캐시에 둔다(`scripts/build-sw.mjs`).
+- `src/sfx.ts`가 앱 전체에서 하나의 AudioContext로 재생한다. 파일은 화면이 열릴 때 미리 받아 두고(`preloadSfx`), 늦게 도착한 소리는 0.25초 안이면 재생하고 그보다 늦으면 건너뛴다.
+- 크기: 파일은 모두 -16 LUFS로 맞췄고, 자주 나는 소리일수록 `SFX` 표의 재생 크기를 낮췄다(탭 0.35, 시트 0.25, 릴 회전 0.35, 모터 0.3, 큰 당첨 0.8, 펑 0.85 등).
+- **효과음 설정**: 내 정보 › 효과음(켜기·끄기, 기기별 `yegoom3:sfx`). 끄면 모든 소리가 멈춘다. 아케이드 다섯 게임은 각자의 소리 버튼도 그대로 두며, 둘 다 켜져 있어야 소리가 난다. 게임의 소리 버튼을 켜면 효과음 설정도 켜진다.
+- 첫 터치·키 입력에서 오디오 장치를 깨운다(`installSfx`). 같은 곳에서 `#/shop/…`·`#/play/…` 화면의 주요 버튼(`.primary-button`)과 아래 고정 구매 버튼에 탭 소리를 낸다. 자체 소리가 있는 아케이드 다섯 게임은 제외한다.
+- `coinFly`의 코인이 도착하면 골드 소리, `openSheet`로 여는 시트는 작은 '뽁'이 난다(결과 창은 제외).
+
+### 4.2 고른 소리 (3차, 2026-11-24)
+
+| ID | 파일 | 순간 | 고른 안 | 프롬프트(앞부분) |
+| --- | --- | --- | :-: | --- |
+| ATT-01 | `att-stamp.mp3` | 출석 도장 | B | Cute toy stamp press: a squishy rubber pop followed by a light marimba blip |
+| LOT-01 | `lot-pick.mp3` | 로또 번호 고르기 | B | Single wooden xylophone note with a tiny rubber pop, short and clean |
+| LOT-03 | `lot-match.mp3` | 내 번호와 맞음 | B | Single music box chime note with a tiny twinkle, short and clean |
+| SLT-01 | `slt-lever.mp3` | 슬롯 레버 | A | Toy slot machine lever pulled down, a plastic ratchet click clack and a spring release |
+| SLT-02 | `slt-spin.mp3` | 릴 돌아감 | B | Small wooden prize wheel spinning fast with rapid soft clicking |
+| SLT-03 | `slt-stop.mp3` | 릴 하나 멈춤 | A | Single slot reel stopping with a firm plastic clunk and a short marimba note |
+| SLT-04 | `slt-tension.mp3` | 마지막 한 칸 두근두근 | C | Marimba tremolo rising in pitch building suspense, cute |
+| KUJ-01 | `kuj-tear.mp3` | 쿠지 종이 뜯기 | A | Tearing open a small paper lottery ticket, a quick crisp paper rip |
+| TAG-01 | `tag-flip.mp3` | 별명 태그 뒤집기 | A | Flipping over a small card quickly, a soft paper whoosh and a light tap |
+| BG-01 | `bg-mark.mp3` | 빙고 단어 지우기 | B | Rubber stamp tapping a bingo square, a soft round pomp |
+| BG-02 | `bg-line.mp3` | 빙고 한 줄 완성 | A | Quick rising marimba run of five notes ending with a sparkle |
+| TL-01 | `tl-flush.mp3` | 변기 물 내리기 | A | Toy toilet flush, a short cute water swirl and gurgle, miniature |
+| TL-02 | `tl-nervous.mp3` | 불안한 변기 | B | Rumbling bubbling water with a nervous shaky rattle of a porcelain lid, cartoon, funny |
+| TL-03 | `tl-boom.mp3` | 변기 펑! | A | Over the top cartoon explosion of a toilet: big comedic boom and water splash, then a squeaky rubber toy squeak, Korean variety show style |
+| ATT-02 | `att-bonus.mp3` | 연속 출석 보너스 | B | Cheerful short toy glockenspiel and marimba ta-da with a sparkle |
+| SPT-02 | `spt-swipe.mp3` | 한 번에 긁기 | B | Quick swoosh of paper foil being wiped away in one swipe |
+| KUJ-03 | `kuj-lastone.mp3` | 쿠지 라스트원 | B | Grand cute jackpot: rising marimba glissando into a big toy bell fanfare with lots of tiny party poppers, joyful |
+| TAG-02 | `tag-evolving.mp3` | 태그 진화 중 | A | Magical swirling music box shimmer, mysterious and cute |
+| TAG-03 | `tag-vanish.mp3` | 재료 태그 사라짐 | A | Small item vanishing with a soft pop and a tiny puff |
+| PRD-02 | `prd-reveal.mp3` | 정답 공개 | A | Short toy snare drum roll ending with a bright marimba ta-da reveal |
+| CM-01 | `cm-send.mp3` | 그림 올리기 | B | Paper airplane flying off with a soft whoosh |
+| CM-02 | `cm-wrong.mp3` | 오답 하나 | A | One clear short woodblock tap, close and audible, soft low tok |
+| CM-03 | `cm-hint.mp3` | 힌트 열림 | B | Little lightbulb ping, a cute bright bell |
+| CLW-02 | `clw-motor.mp3` | 인형뽑기 모터 | A | Small toy electric motor whirring steadily, soft hum |
+| CLW-03 | `clw-clack.mp3` | 집게 닫힘·열림 | A | Small plastic claw snapping shut, quick clack |
+| CLW-04 | `clw-slip.mp3` | 인형 미끄러짐 | A | Plush toy slipping out of a claw, a quick soft fabric swish and a light descending marimba blip |
+| CLW-05 | `clw-thud.mp3` | 인형 바닥에 떨어짐 | B | Close audible pomf of a stuffed animal landing on a cushion, soft but clear |
+| CLW-07 | `clw-tick.mp3` | 남은 시간 틱 | B | Single short soft woodblock knock, clean |
+| FT-01 | `ft-throw.mp3` | 자유투 던지기 | B | Light toy ball launch with a tiny whoosh and a spring |
+| FT-02 | `ft-rim.mp3` | 림 | A | Small toy basketball hitting a metal hoop rim, a light ringing clang, cute |
+| FT-02 | `ft-board.mp3` | 백보드 | A | Small ball hitting a plastic backboard, a hollow light thunk |
+| FT-02 | `ft-floor.mp3` | 바닥 | B | Toy ball bouncing softly on carpet, gentle thuds |
+| FT-03 | `ft-net.mp3` | 그물 통과 | A | Basketball swishing cleanly through a net, crisp swish |
+| SN-01 | `sn-start.mp3` | 산타 출발 | A | Sleigh bells jingling as a toy sleigh starts off, cheerful and short |
+| SN-02 | `sn-drop.mp3` | 선물 떨어뜨리기 | A | Small gift box released and falling, soft descending whoosh |
+| SN-03 | `sn-hit.mp3` | 굴뚝 성공 | B | Present landing in a chimney, a muffled pomf and a sparkle of bells |
+| SN-03 | `sn-rim.mp3` | 굴뚝 가장자리 | B | Gift box clipping a brick edge, short wooden tok |
+| SN-03 | `sn-thud.mp3` | 지붕·바닥 | A | Small gift box landing on snow, soft muffled crunch |
+| SN-03 | `sn-pass.mp3` | 지나침 | B | Short soft swoosh of missing a target, light and airy |
+| CUR-01 | `cur-grab.mp3` | 컬링 돌 잡기 | B | Hand gripping a curling stone handle, soft plastic click |
+| CUR-01 | `cur-slide.mp3` | 돌 미끄러짐 | B | Toy stone sliding on a smooth surface with a soft rolling hum |
+| CUR-02 | `cur-brush.mp3` | 브러시 쓸기 | B | Small brush swiping a smooth surface, soft short swish |
+| CUR-03 | `cur-stop.mp3` | 돌 멈춤 | B | Clear soft low wooden knock, one hit, close and audible |
+| UI-05 | `ui-toast.mp3` | 알림 토스트 | A | Single soft glockenspiel notification chime, gentle |
+| UI-06 | `ui-sheet.mp3` | 시트 열림 | A | Very tiny soft pop, subtle |
+| UI-07 | `ui-deny.mp3` | 거절 | B | Two quick low muted wooden blips, a gentle nope |
+
+모든 프롬프트 뒤에는 `, cute toy-like mobile game sound effect, soft and round, dry, no reverb, no music, no voice`(반복 소리는 `, seamless loop, steady, mobile game sound effect, dry, no music, no voice`)를 붙였다. 요청 길이는 최소 0.5초이며, 그보다 짧게 쓰는 소리는 다듬을 때 꼬리를 잘랐다.
+
+### 4.3 다시 만드는 소리
+
+3차에서 "다시"를 고른 10개다. 다른 방향으로 3안씩 새로 만들어 고르는 중이다.
+
+| ID | 순간 | 고를 때까지 |
+| --- | --- | --- |
+| LOT-02 | 추첨 공 하나 나옴 | 소리 없음 |
+| SPT-01 | 스피또 긁기 | 소리 없음 |
+| FT-01 | 자유투 공 잡기 | 소리 없음 |
+| CUR-03 | 컬링 돌끼리 부딪힘 | 예전 합성음 |
+| PK-01~03 | 승부차기 휘슬·킥·골·선방·골대 | 예전 합성음(결과의 골드·당첨·꽝은 기준 소리) |
+| STK-01 | 주식 체결 | 소리 없음 |

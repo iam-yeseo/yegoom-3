@@ -110,7 +110,7 @@ function CurlingPlay({ mode, onFinish, onQuit }: ArcadePlayProps) {
       }, tries);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "시트를 표시하지 못했어요."); return; }
     controller.current = runtime;
-    const warmUp = window.setTimeout(() => effects.prepare(), 120);
+    const warmUp = window.setTimeout(() => { effects.prepare(); effects.preload(["cur-grab", "cur-slide", "cur-brush", "cur-stop", "coin", "jackpot", "fail"]); }, 120);
     const visibility = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", visibility);
     return () => { clearTimeout(warmUp); runtime.destroy(); effects.dispose(); controller.current = null; document.removeEventListener("visibilitychange", visibility); };

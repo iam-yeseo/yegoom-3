@@ -1,15 +1,17 @@
-// Web Audio effects with no sound files, in the style of src/freethrow/sound.ts.
-// The audio context starts only after the player touches the game.
+// Curling and penalty: sound files from /sfx (docs/sfx.md 3.7) behind the game's own
+// mute button, plus the older synthesized tones for the moments whose sound is still
+// being chosen. The audio context starts only after the player touches the game.
+import { createGameSfx } from "../sfx";
+
 export function createArcadeSound(storageKey: string) {
+  const sfx = createGameSfx(storageKey);
   let ctx: AudioContext | null = null;
   let master: GainNode | null = null;
-  let muted = false;
   let disposed = false;
-  try { muted = localStorage.getItem(storageKey) === "1"; } catch { /* Storage is optional. */ }
 
   /** Builds the audio graph without starting it (opening the device takes a moment on phones). */
   function prepare() {
-    if (muted || disposed) return null;
+    if (sfx.muted || disposed) return null;
     try {
       if (!ctx) {
         const Context = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -48,17 +50,16 @@ export function createArcadeSound(storageKey: string) {
     source.connect(filter).connect(amp).connect(master);
     source.start();
   }
-  const vibrate = (pattern: VibratePattern) => { if (!muted && !disposed) try { navigator.vibrate?.(pattern); } catch { /* Unsupported. */ } };
+  const vibrate = (pattern: VibratePattern) => sfx.vibrate(pattern);
   return {
-    get muted() { return muted; },
-    prepare, activate: audio, tone, noise, vibrate,
-    setMuted(value: boolean) {
-      muted = value;
-      try { localStorage.setItem(storageKey, value ? "1" : "0"); } catch { /* Storage is optional. */ }
-    },
-    cheer(level = 1) { [784, 988, 1175, 1568].slice(0, Math.min(4, 1 + level)).forEach((f, i) => tone(f, { at: .05 + i * .08, duration: .16, gain: .04 })); },
-    sad() { [440, 415].forEach((f, i) => tone(f, { at: i * .14, duration: .18, gain: .035 })); },
-    dispose() { disposed = true; if (ctx) void ctx.close().catch(() => {}); },
+    get muted() { return sfx.muted; },
+    prepare, activate() { audio(); sfx.activate(); }, tone, noise, vibrate,
+    play: sfx.play, loop: sfx.loop, preload: sfx.preload,
+    setMuted(value: boolean) { sfx.setMuted(value); },
+    /** level 2 is the best result (a corner goal, a button stone): the big cheer. */
+    cheer(level = 1) { sfx.play(level >= 2 ? "jackpot" : "coin", { delay: .1 }); },
+    sad() { sfx.play("fail"); },
+    dispose() { disposed = true; sfx.dispose(); if (ctx) void ctx.close().catch(() => {}); },
   };
 }
 export type ArcadeSound = ReturnType<typeof createArcadeSound>;

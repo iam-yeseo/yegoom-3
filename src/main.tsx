@@ -4,6 +4,7 @@ import App from "./App";
 import { installPressFeedback, installTouchEffect } from "./motion";
 import { applyFontSize, readFontSize } from "./font-size";
 import { preventFocusZoom } from "./input-zoom";
+import { installSfx } from "./sfx";
 import "./fonts.css";
 import "./styles.css";
 import "./screens.css";
@@ -14,6 +15,7 @@ applyFontSize(readFontSize());
 preventFocusZoom();
 installPressFeedback();
 installTouchEffect();
+installSfx();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -25,6 +25,7 @@ import { PasswordSheet } from "../components/PasswordSheet";
 import { HistoryRow, reasonIcon } from "../components/HistoryRow";
 import { TagCollection } from "../components/TagCollection";
 import { FONT_SIZES, readFontSize, saveFontSize, type FontSize } from "../font-size";
+import { playSfx, setSfxEnabled, sfxEnabled } from "../sfx";
 
 const dateFormat = new Intl.DateTimeFormat("en-US", { timeZone: KST, month: "numeric", day: "numeric", weekday: "short" });
 function dateLabel(iso: string) {
@@ -87,6 +88,7 @@ export function Profile({
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [fontSize, setFontSize] = useState<FontSize>(readFontSize);
+  const [sound, setSound] = useState<"on" | "off">(() => sfxEnabled() ? "on" : "off");
   const photoInput = useRef<HTMLInputElement>(null);
   const editing = useRef(false);
   useEffect(() => { setNickname(displayName); }, [displayName]);
@@ -217,6 +219,12 @@ export function Profile({
           <Segmented label="글자 크기" options={FONT_SIZES.map(({ value, label }) => ({ value, label }))} value={fontSize}
             onChange={next => { if (next === fontSize) return; setFontSize(next); saveFontSize(next); onFontSizeChange?.(next); }} />
           <p>이 기기에만 적용돼요. 글자만 작아지고 화면 배치는 그대로예요.</p>
+        </section>
+        <section className="card font-size-setting sfx-setting" aria-label="효과음">
+          <h2>효과음</h2>
+          <Segmented label="효과음" options={[{ value: "on", label: "켜기" }, { value: "off", label: "끄기" }]} value={sound}
+            onChange={next => { if (next === sound) return; setSound(next); setSfxEnabled(next === "on"); if (next === "on") playSfx("coin"); }} />
+          <p>이 기기에만 적용돼요. 끄면 게임과 상점의 소리가 모두 꺼져요.</p>
         </section>
         <section className="card profile-password">
           <button type="button" disabled={!onPasswordChange || profileBusy || busy} onClick={() => setPasswordOpen(true)}>비밀번호 변경</button>
