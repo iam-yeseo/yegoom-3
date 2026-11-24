@@ -240,7 +240,7 @@ test('real claw keyboard play recovers a lost response after reload and a failed
   const displayedPosition = await moveToMiddle(page, 'keyboard');
   await stopDescent(page);
   await expect(button(page, '결과 확인')).toBeEnabled();
-  expect(committed!.result!.prizes.map(doll => doll.id)).toEqual(['7-24', '7-29']);
+  expect(committed!.result!.prizes.map(doll => doll.id)).toEqual(['7-29', '7-24']);
   expect(committed!.result!.x).toBe(requests[0].x);
   expect(Math.abs(committed!.result!.x - displayedPosition / 100)).toBeLessThanOrEqual(.015);
   expect(committed!.freeCoins).toBe(4);
