@@ -17,7 +17,7 @@ import { catchmindRoute } from '../worker/catchmind';
 import { catchmindImageSizeProblem } from '../shared/catchmind';
 import type { AdminState, PredictionRules } from '../shared/admin';
 import { defaultPredictionRules } from '../shared/game-settings';
-import { createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
+import { DOLL_TYPES, createBoard, simulateAttempt, type Board } from '../shared/claw-physics';
 import { getClawState, getClawSummary, playClaw } from '../worker/claw';
 import { getLaunchGiftState, claimLaunchGift } from '../worker/launch-gift';
 import { readNotificationSummary } from '../worker/notifications';
@@ -3612,7 +3612,7 @@ describe('Worker and D1 integration', () => {
       expect(state).toMatchObject({ freeCoins: 5, purchasedCoins: 0, generation: 1, version: 0, nextPlayAt: 0 });
       expect(state.board).toHaveLength(30);
       expect(new Set(state.board.map(doll => doll.id)).size).toBe(30);
-      expect(state.board.every(doll => doll.type >= 1 && doll.type <= 11)).toBe(true);
+      expect(state.board.every(doll => doll.type >= 1 && doll.type <= DOLL_TYPES)).toBe(true);
       expect(state.nextGrantAt).toBe(Date.parse(`${TODAY}T03:00:00Z`));
       expect((await getClaw(cookie)).board).toEqual(state.board);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM claw_accounts').first('count')).toBe(1);
@@ -3838,7 +3838,7 @@ describe('Worker and D1 integration', () => {
       }
     });
 
-    it.each([{ seed: 1, x: .23, count: 1 }, { seed: 3, x: .71, count: 2 }])('pays $count real simulated prizes once in gold and weekly score', async ({ seed, x, count }) => {
+    it.each([{ seed: 1, x: .23, count: 1 }, { seed: 11, x: .83, count: 2 }])('pays $count real simulated prizes once in gold and weekly score', async ({ seed, x, count }) => {
       const { cookie } = await login('min');
       const state = await getClaw(cookie);
       await db.prepare('UPDATE claw_config SET payout_every = 1 WHERE id = 1').run();

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { CLAW, MACHINE, createBoard, simulateAttempt, type AttemptInput } from '../shared/claw-physics';
+import { CLAW, DOLL_RADIUS, DOLL_TYPES, DOLL_WEIGHT, MACHINE, createBoard, simulateAttempt, type AttemptInput } from '../shared/claw-physics';
 // The untouched upstream JavaScript is deliberately the independent oracle.
 // @ts-expect-error The original fixture has no TypeScript declarations.
 import * as original from './fixtures/gatcha-physics.original.js';
@@ -26,31 +26,54 @@ describe('claw physics matches the immutable upstream engine', () => {
     expect(hash).toBe(SOURCE_BLOB);
   });
 
-  it.each(cases)('matches board and every playback frame for case $index (generation $generation, seed $seed)', (sample) => {
-    const board = createBoard(sample.generation, sample.seed);
+  it('preserves the radii and weights of all original types', () => {
+    expect(DOLL_WEIGHT.slice(0, original.DOLL_WEIGHT.length)).toEqual(original.DOLL_WEIGHT);
+    expect(DOLL_RADIUS.slice(0, original.DOLL_RADIUS.length)).toEqual(original.DOLL_RADIUS);
+  });
+
+  it('generates all 15 types across the sample seeds', () => {
+    const types = new Set<number>();
+    for (const sample of cases) {
+      for (const doll of createBoard(sample.generation, sample.seed)) types.add(doll.type);
+      if (types.size === 15) break;
+    }
+    expect([...types].sort((a, b) => a - b)).toEqual(Array.from({ length: 15 }, (_, i) => i + 1));
+  });
+
+  it.each(cases)('matches every playback frame on old and new boards for case $index (generation $generation, seed $seed)', (sample) => {
+    const newBoard = createBoard(sample.generation, sample.seed);
     const oldBoard = original.createBoard(sample.generation, sample.seed);
-    expect(JSON.stringify(board)).toBe(JSON.stringify(oldBoard));
+    // Different type counts give the same seed different layouts in the two generators.
+    expect(newBoard).toEqual(createBoard(sample.generation, sample.seed));
+    expect(newBoard).toHaveLength(30);
+    expect(new Set(newBoard.map(doll => doll.id)).size).toBe(newBoard.length);
+    for (const doll of newBoard) {
+      expect(Number.isInteger(doll.type) && doll.type >= 1 && doll.type <= DOLL_TYPES).toBe(true);
+      expect(doll.radius).toBe(DOLL_RADIUS[doll.type]);
+    }
 
     // Exercise walls, exact doll centres, arbitrary positions, automatic descent,
     // early/manual stops, and weak/strong pickup and carry independently.
-    const target = board[sample.index % board.length];
-    const x = sample.index % 6 === 0 ? MACHINE.clawMin
-      : sample.index % 6 === 1 ? MACHINE.clawMax
-        : sample.index % 6 === 2 ? target.x
-          : MACHINE.clawMin + sample.position * (MACHINE.clawMax - MACHINE.clawMin);
-    const input: AttemptInput = {
-      x,
-      stop: sample.index % 4 === 0 ? CLAW.top
-        : sample.index % 4 === 1 ? CLAW.top + sample.stopFraction * (MACHINE.height - CLAW.top) : null,
-      pickup: sample.index % 3 === 0 ? 1 : sample.pickup,
-      carry: sample.index % 3 === 0 ? 1 : sample.carry,
-    };
-    const result = simulateAttempt(board, input, { record: true });
-    const oldResult = original.simulateAttempt(oldBoard, input, { record: true });
-    expect(JSON.stringify(result)).toBe(JSON.stringify(oldResult));
-    // Original motor termination and the 360-frame settling cap remain intact.
-    // A complete valid play stays within this conservative replay-frame bound.
-    expect(result.frames!.length).toBeGreaterThan(0);
-    expect(result.frames!.length).toBeLessThanOrEqual(1024);
+    for (const board of [oldBoard, newBoard]) {
+      const target = board[sample.index % board.length];
+      const x = sample.index % 6 === 0 ? MACHINE.clawMin
+        : sample.index % 6 === 1 ? MACHINE.clawMax
+          : sample.index % 6 === 2 ? target.x
+            : MACHINE.clawMin + sample.position * (MACHINE.clawMax - MACHINE.clawMin);
+      const input: AttemptInput = {
+        x,
+        stop: sample.index % 4 === 0 ? CLAW.top
+          : sample.index % 4 === 1 ? CLAW.top + sample.stopFraction * (MACHINE.height - CLAW.top) : null,
+        pickup: sample.index % 3 === 0 ? 1 : sample.pickup,
+        carry: sample.index % 3 === 0 ? 1 : sample.carry,
+      };
+      const result = simulateAttempt(board, input, { record: true });
+      const upstreamResult = original.simulateAttempt(board, input, { record: true });
+      expect(JSON.stringify(result)).toBe(JSON.stringify(upstreamResult));
+      // Original motor termination and the 360-frame settling cap remain intact.
+      // A complete valid play stays within this conservative replay-frame bound.
+      expect(result.frames!.length).toBeGreaterThan(0);
+      expect(result.frames!.length).toBeLessThanOrEqual(1024);
+    }
   });
 });

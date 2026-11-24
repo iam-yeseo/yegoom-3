@@ -371,7 +371,7 @@ test('claw preview stays serverless, preserves sound preference, and auto-drops 
     await sharp.evaluate(async () => { await navigator.serviceWorker.ready; });
     const dolls = await sharp.evaluate(async () => (await Promise.all((await caches.keys()).map(async key =>
       (await (await caches.open(key)).keys()).map(request => new URL(request.url).pathname)))).flat().filter(path => path.startsWith('/claw/dolls/')));
-    expect(new Set(dolls).size).toBe(11);
+    expect(new Set(dolls).size).toBe(15);
     expect(apiRequests).toEqual([]);
     await info.attach('high-dpr-capped-canvas-and-precache', { body: JSON.stringify({ dimensions, dolls }, null, 2), contentType: 'application/json' });
   } finally { await highDpr.close(); }
