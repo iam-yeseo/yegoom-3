@@ -95,7 +95,7 @@ describe('offline claw preview', () => {
   it('replays the same physical result and reward once while enforcing version and cooldown', () => {
     let draw = 0;
     vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(((array: Uint32Array) => {
-      array[0] = draw++ === 0 ? 1792405194 : 0;
+      array[0] = draw++ === 0 ? 1792405195 : 0;
       return array;
     }) as typeof crypto.getRandomValues);
     const simulate = vi.spyOn(physics, 'simulateAttempt');
