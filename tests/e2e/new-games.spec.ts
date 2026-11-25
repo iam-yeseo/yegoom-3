@@ -119,7 +119,7 @@ test('bingo: the leader names a topic, fills a board, and confirms a word on the
   await expect(row).toContainText('첫 판을 열어 보세요');
   await row.click();
   await expect(page).toHaveURL(/#\/preview\/play\/bingo$/);
-  const create = page.getByRole('button', { name: /AI로 단어 30개 만들기/ });
+  const create = page.getByRole('button', { name: /AI로 단어 50개 만들기/ });
   await expect(create).toBeDisabled();
   await page.getByPlaceholder(/분식집/).fill('분식집 메뉴');
   await page.getByRole('tab', { name: '5줄' }).click();
@@ -127,10 +127,10 @@ test('bingo: the leader names a topic, fills a board, and confirms a word on the
   // While the words are being written the leader sees how far along it is.
   const progress = page.getByRole('progressbar', { name: '단어 만들기 진행' });
   await expect(progress).toBeVisible();
-  await expect(page.locator('.bingo-making-head')).toContainText(/단어 \d+\/30개/);
-  // Filling: 30 words, 25 cells. The board cannot be handed in until it is full.
+  await expect(page.locator('.bingo-making-head')).toContainText(/단어 \d+\/50개/);
+  // Filling: 50 words, 25 cells. The board cannot be handed in until it is full.
   await expect(page.locator('.bingo-chip').first()).toHaveText('5줄 빙고');
-  await expect(page.locator('.bingo-pool .bingo-word')).toHaveCount(30);
+  await expect(page.locator('.bingo-pool .bingo-word')).toHaveCount(50);
   const submit = page.getByRole('button', { name: '이 판으로 내기' });
   await expect(submit).toBeDisabled();
   await page.locator('.bingo-pool .bingo-word').first().click();
@@ -194,7 +194,7 @@ test('signed in: curling is recorded by the server, and bingo opens with the lea
   // Bingo: no OpenAI key on the test server, so the AI path answers 503 and the leader types the words.
   await page.goto('/#/play/bingo');
   await page.getByPlaceholder(/분식집/).fill('과일');
-  await page.getByRole('button', { name: /AI로 단어 30개 만들기/ }).click();
+  await page.getByRole('button', { name: /AI로 단어 50개 만들기/ }).click();
   await expect(page.locator('.bingo-error')).toContainText('직접 적어서');
   await expect(page.getByRole('progressbar', { name: '단어 만들기 진행' })).toHaveCount(0);
   // The create call answers in lines: progress first, then the board or the refusal.
@@ -202,13 +202,13 @@ test('signed in: curling is recorded by the server, and bingo opens with the lea
   expect(refused.status()).toBe(200);
   expect(refused.headers()['content-type']).toContain('ndjson');
   const lines = (await refused.text()).trim().split('\n').map(line => JSON.parse(line));
-  expect(lines[0]).toEqual({ progress: 0, of: 30 });
+  expect(lines[0]).toEqual({ progress: 0, of: 50 });
   expect(lines.at(-1)).toMatchObject({ error: { status: 503, code: 'AI_UNAVAILABLE' } });
-  const words = Array.from({ length: 30 }, (_, i) => `과일${i + 1}`);
+  const words = Array.from({ length: 50 }, (_, i) => `과일${i + 1}`);
   await page.locator('.bingo-field textarea').fill(words.join('\n'));
-  await expect(page.getByText('단어 직접 적기 (30/30)')).toBeVisible();
+  await expect(page.getByText('단어 직접 적기 (50/50)')).toBeVisible();
   await page.getByRole('button', { name: '이 단어로 빙고 열기' }).click();
-  await expect(page.locator('.bingo-pool .bingo-word')).toHaveCount(30);
+  await expect(page.locator('.bingo-pool .bingo-word')).toHaveCount(50);
   await page.getByRole('button', { name: '자동으로 채우기' }).click();
   await page.getByRole('button', { name: '이 판으로 내기' }).click();
   await expect(page.getByRole('button', { name: /판을 냈어요/ })).toBeVisible();

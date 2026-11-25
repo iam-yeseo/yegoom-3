@@ -13,7 +13,7 @@ const admin = { id: 'admin', role: 'admin' as const };
 // 2026-11-07 13:30 KST.
 const NOW = Date.parse('2026-11-07T04:30:00Z');
 const MIN = 60_000;
-const WORDS = Array.from({ length: 30 }, (_, i) => `단어${i + 1}`);
+const WORDS = Array.from({ length: BINGO_RULES.words }, (_, i) => `단어${i + 1}`);
 const made: string[] = [];
 const maker: BingoWordMaker = async topic => { made.push(topic); return WORDS; };
 const noAi: BingoWordMaker = async () => null;
@@ -87,7 +87,7 @@ describe('bingo: opening a game', () => {
     expect(await readBingoSummary(d1(), player('min'))).toMatchObject({ status: 'idle', topic: null, joined: false });
   });
 
-  it('makes the 30 words from the leader\'s topic and lets the leader choose 3 or 5 lines', async () => {
+  it('makes the 50 words from the leader\'s topic and lets the leader choose 3 or 5 lines', async () => {
     const opened = await create('siwon', 5);
     expect(made).toEqual(['분식집 메뉴']);
     expect(opened.bingo.game).toMatchObject({ number: 1, topic: '분식집 메뉴', lines: 5, words: WORDS, source: 'ai', status: 'filling', seats: [], calls: [], leader: { id: 'siwon' } });
@@ -106,7 +106,7 @@ describe('bingo: opening a game', () => {
     await rejects(act('min', 'create', { requestId: rid('b'), topic: '과일', lines: 4 }), 400, 'INVALID_LINES');
     await rejects(act('min', 'create', { requestId: 'short', topic: '과일', lines: 3 }), 400, 'INVALID_REQUEST_ID');
     await rejects(act('min', 'create', { requestId: rid('c'), topic: '과일', lines: 3 }, NOW, noAi), 503, 'AI_UNAVAILABLE');
-    await rejects(act('min', 'create', { requestId: rid('d'), topic: '과일', lines: 3, words: WORDS.slice(0, 29) }, NOW, noAi), 400, 'INVALID_WORDS');
+    await rejects(act('min', 'create', { requestId: rid('d'), topic: '과일', lines: 3, words: WORDS.slice(0, 49) }, NOW, noAi), 400, 'INVALID_WORDS');
     const manual = await act('min', 'create', { requestId: rid('e'), topic: '과일', lines: 3, words: WORDS.map(word => ` ${word} `) }, NOW, noAi);
     expect(manual.bingo.game).toMatchObject({ source: 'manual', words: WORDS, lines: 3 });
   });

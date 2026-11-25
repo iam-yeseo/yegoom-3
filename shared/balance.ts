@@ -148,9 +148,9 @@ export const arcadeSlot = (game: ArcadeGame, now: number): number => Math.floor(
 export const arcadeSlotStart = (game: ArcadeGame, slot: number): number => slot * ARCADE_RULES[game].slotMs + ARCADE_RULES[game].offsetMs;
 export const arcadeDeadline = (game: ArcadeGame, slot: number): number => arcadeSlotStart(game, slot + 1) + ARCADE_RULES[game].graceMs;
 /** Bingo (docs/plan-bingo.md): the leader names a topic and the winning line
- * count, 30 words are made from it, and everyone fills a 5x5 board from them. */
+ * count, 50 words are made from it, and everyone fills a 5x5 board from them. */
 export const BINGO_RULES = {
-  size: 5, words: 30, lineChoices: [3, 5] as const,
+  size: 5, words: 50, lineChoices: [3, 5] as const,
   /** Points for the first three to finish, paid the moment each place is settled. */
   rankScores: [5, 3, 1] as const,
   minPlayers: 2,
