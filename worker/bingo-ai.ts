@@ -72,7 +72,7 @@ export function countStreamedWords(partial: string): number {
   if (open < 0) return 0;
   return partial.slice(open + 1).match(/"(?:[^"\\]|\\.)*"\s*(?=[,\]])/g)?.length ?? 0;
 }
-/** The first 30 usable words of an answer, or null when there are not enough. */
+/** The first BINGO_RULES.words usable words of an answer, or null when there are not enough. */
 export function wordsFromAnswer(text: string | null): string[] | null {
   if (!text) return null;
   let parsed: unknown;

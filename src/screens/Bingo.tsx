@@ -78,7 +78,7 @@ export function Bingo({ user, onBack, demo = false, onSummary, onPreviewChange, 
    * has no AI, so it only acts the wait out. */
   const create = useCallback(async (input: BingoCreateInput, onProgress: (words: number, of: number) => void) => {
     if (!engine) return api.bingoCreate(input, onProgress);
-    if (!input.words) for (let words = 0; words <= BINGO_RULES.words; words += 3) { onProgress(words, BINGO_RULES.words); await new Promise(resolve => setTimeout(resolve, words ? 70 : 500)); }
+    if (!input.words) for (let words = 0; words <= BINGO_RULES.words; words += 5) { onProgress(words, BINGO_RULES.words); await new Promise(resolve => setTimeout(resolve, words ? 70 : 500)); }
     return engine.mutate("create", input);
   }, [engine]);
   const act = useCallback(async (action: BingoAction, input: BingoInput, onProgress?: (words: number, of: number) => void): Promise<boolean> => {
@@ -233,7 +233,7 @@ function Board({ cells, called, selected, onPick, small = false }: {
   </div>;
 }
 
-/** Everyone picks 25 of the 30 words and places them. */
+/** Everyone picks 25 of the pool's words and places them. */
 function Filling({ game, state, me, admin, busy, now, attempt }: {
   game: BingoGameView; state: BingoState; me: string; admin: boolean; busy: boolean; now: number; attempt: (action: BingoAction, input: BingoInput) => void;
 }) {

@@ -5,7 +5,7 @@ import {
 } from '../shared/bingo';
 import { countStreamedWords, wordsFromAnswer } from '../worker/bingo-ai';
 
-const WORDS = Array.from({ length: 30 }, (_, i) => `단어${i + 1}`);
+const WORDS = Array.from({ length: BINGO_RULES.words }, (_, i) => `단어${i + 1}`);
 const board = (offset = 0) => Array.from({ length: 25 }, (_, i) => WORDS[(i + offset) % 30]!);
 const seat = (username: string, cells: string[], rank: number | null = null, active = true): BingoSeat => ({ userId: username, username, cells, rank, active });
 
@@ -16,11 +16,13 @@ describe('bingo rules', () => {
     expect(usableBingoWords(['사과', ' 사 과 ', '', 7, '열한글자가넘는아주긴단어', '배'])).toEqual(['사과', '배']);
   });
 
-  it('accepts exactly 30 distinct short words as a pool', () => {
+  it('accepts exactly 50 distinct short words as a pool', () => {
     expect(bingoWordsProblem(WORDS)).toBeNull();
-    expect(bingoWordsProblem(WORDS.slice(0, 29))).toContain('30개');
-    expect(bingoWordsProblem([...WORDS.slice(0, 29), '단어 1'])).toContain('겹치는');
-    expect(bingoWordsProblem([...WORDS.slice(0, 29), '가'.repeat(BINGO_RULES.maxWordLength + 1)])).toContain('글자');
+    expect(BINGO_RULES.words).toBe(50);
+    expect(bingoWordsProblem(WORDS.slice(0, 49))).toContain('50개');
+    expect(bingoWordsProblem([...WORDS, '단어51'])).toContain('50개');
+    expect(bingoWordsProblem([...WORDS.slice(0, 49), '단어 1'])).toContain('겹치는');
+    expect(bingoWordsProblem([...WORDS.slice(0, 49), '가'.repeat(BINGO_RULES.maxWordLength + 1)])).toContain('글자');
     expect(bingoWordsProblem('단어')).not.toBeNull();
     expect(bingoTopicProblem('  ')).not.toBeNull();
     expect(bingoTopicProblem('가'.repeat(BINGO_RULES.maxTopicLength + 1))).not.toBeNull();
@@ -92,11 +94,11 @@ describe('bingo rules', () => {
     expect(settled.ended).toBe(true);
   });
 
-  it('takes the first 30 usable words from an AI answer, or none at all', () => {
+  it('takes the first 50 usable words from an AI answer, or none at all', () => {
     const answer = (words: unknown) => JSON.stringify({ words });
     expect(wordsFromAnswer(answer([...WORDS, '여분1', '여분2']))).toEqual(WORDS);
-    expect(wordsFromAnswer(answer([...WORDS.slice(0, 29), '단어1', '', '보충']))).toEqual([...WORDS.slice(0, 29), '보충']);
-    expect(wordsFromAnswer(answer(WORDS.slice(0, 29)))).toBeNull();
+    expect(wordsFromAnswer(answer([...WORDS.slice(0, 49), '단어1', '', '보충']))).toEqual([...WORDS.slice(0, 49), '보충']);
+    expect(wordsFromAnswer(answer(WORDS.slice(0, 49)))).toBeNull();
     expect(wordsFromAnswer('not json')).toBeNull();
     expect(wordsFromAnswer(answer('단어'))).toBeNull();
     expect(wordsFromAnswer(null)).toBeNull();

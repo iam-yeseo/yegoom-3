@@ -181,7 +181,7 @@ async function mutate(db: D1Database, user: Actor, action: BingoAction, input: R
       words = (input.words as string[]).map(cleanBingoWord); source = 'manual';
     } else {
       const made = await makeWords(topic);
-      if (!made || bingoWordsProblem(made)) throw new BingoError(503, 'AI_UNAVAILABLE', 'AI가 단어를 만들지 못했어요. 단어 30개를 직접 적어서 열 수 있어요.');
+      if (!made || bingoWordsProblem(made)) throw new BingoError(503, 'AI_UNAVAILABLE', `AI가 단어를 만들지 못했어요. 단어 ${BINGO_RULES.words}개를 직접 적어서 열 수 있어요.`);
       words = made; source = 'ai';
     }
     const id = crypto.randomUUID();
